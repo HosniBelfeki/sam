@@ -63,6 +63,7 @@ type Server struct {
 	httpServer *http.Server
 	listener   net.Listener
 	limiter    *rate.Limiter
+	mesh       MeshAdapter
 
 	providersMu sync.RWMutex
 	providers   map[string]*oidc.Provider
@@ -85,11 +86,19 @@ func NewServer(config Options, store storage.Store) (*Server, error) {
 	return &Server{
 		config:    config,
 		store:     store,
+		mesh:      NewNopMeshAdapter(),
 		limiter:   rate.NewLimiter(rate.Limit(EnrollRateLimit), EnrollBurst),
 		providers: make(map[string]*oidc.Provider),
 		ctx:       ctx,
 		cancel:    cancel,
 	}, nil
+}
+
+// SetMeshAdapter sets a custom MeshAdapter implementation for the control plane.
+func (s *Server) SetMeshAdapter(m MeshAdapter) {
+	if m != nil {
+		s.mesh = m
+	}
 }
 
 // Start boots up HTTP services, sets up OIDC providers, loads initial keys and policies, and schedules rotations.
@@ -222,6 +231,9 @@ func (s *Server) runKeyRotationLoop() {
 				logger.Errorf("Failed to rotate keyring: %v", err)
 			} else {
 				logger.Infof("Key rotation committed. New current public key: %s", hex.EncodeToString(newPub))
+				if err := s.mesh.PublishEvent(s.ctx, api.MeshEvent_KEY_ROTATION, "", newPub); err != nil {
+					logger.Warnf("Failed to publish KEY_ROTATION event to mesh: %v", err)
+				}
 			}
 		case <-s.ctx.Done():
 			return
@@ -857,6 +869,10 @@ func (s *Server) HandlePolicies(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		if err := s.mesh.PublishEvent(r.Context(), api.MeshEvent_POLICY_UPDATE, "", nil); err != nil {
+			logger.Warnf("Failed to publish POLICY_UPDATE event to mesh: %v", err)
+		}
+
 		resp := &api.PolicyConfigUpdateResponse{Success: true}
 		respData, _ := proto.Marshal(resp)
 		w.Header().Set("Content-Type", "application/x-protobuf")
@@ -1472,6 +1488,10 @@ func (s *Server) HandleAdminRevoke(w http.ResponseWriter, r *http.Request) {
 		logger.Errorf("Failed to ban/revoke node %s: %v", req.PeerId, err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
+	}
+
+	if err := s.mesh.PublishEvent(ctx, api.MeshEvent_BANNED, req.PeerId, nil); err != nil {
+		logger.Warnf("Failed to publish BANNED event for node %s to mesh: %v", req.PeerId, err)
 	}
 
 	resp := &api.TokenRevokeResponse{
