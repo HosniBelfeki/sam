@@ -128,14 +128,18 @@ func mintBiscuit(signingKey ed25519.PrivateKey, remotePeer peer.ID, roles []stri
 			if len(pr.AllowedServices) > 0 {
 				hasServices = true
 				for _, svc := range pr.AllowedServices {
-					_ = addFact(api.BuildServiceDatalogFact(svc))
+					if err := addFact(api.BuildServiceDatalogFact(svc)); err != nil {
+						errs = append(errs, fmt.Errorf("failed to add service fact %q for role %s: %w", svc, role, err))
+					}
 				}
 			}
 
 			if len(pr.AllowedTargets) > 0 {
 				hasTargets = true
 				for _, target := range pr.AllowedTargets {
-					_ = addFact(api.BuildTargetDatalogFact(target))
+					if err := addFact(api.BuildTargetDatalogFact(target)); err != nil {
+						errs = append(errs, fmt.Errorf("failed to add target fact %q for role %s: %w", target, role, err))
+					}
 				}
 			}
 
@@ -145,24 +149,30 @@ func mintBiscuit(signingKey ed25519.PrivateKey, remotePeer peer.ID, roles []stri
 					continue
 				}
 				fact, err := parser.FromStringFact(trimmed)
-				if err == nil {
-					_ = addFact(fact)
+				if err != nil {
+					errs = append(errs, fmt.Errorf("failed to parse custom Datalog fact %q for role %s: %w", customFact, role, err))
+				} else if err := addFact(fact); err != nil {
+					errs = append(errs, fmt.Errorf("failed to add custom Datalog fact %q for role %s: %w", customFact, role, err))
 				}
 			}
 		}
 	}
 
 	if !hasServices && len(policyRoles) == 0 {
-		_ = addFact(biscuit.Fact{Predicate: biscuit.Predicate{
+		if err := addFact(biscuit.Fact{Predicate: biscuit.Predicate{
 			Name: api.FactGrantedServiceAllTypes,
 			IDs:  []biscuit.Term{},
-		}})
+		}}); err != nil {
+			errs = append(errs, fmt.Errorf("failed to add fallback service fact: %w", err))
+		}
 	}
 	if !hasTargets && len(policyRoles) == 0 {
-		_ = addFact(biscuit.Fact{Predicate: biscuit.Predicate{
+		if err := addFact(biscuit.Fact{Predicate: biscuit.Predicate{
 			Name: api.FactTargetUnrestricted,
 			IDs:  []biscuit.Term{},
-		}})
+		}}); err != nil {
+			errs = append(errs, fmt.Errorf("failed to add fallback target fact: %w", err))
+		}
 	}
 
 	if len(errs) > 0 {
@@ -354,7 +364,9 @@ func VerifyAndExtractPeerID(trustedPublicKeys []ed25519.PublicKey, biscuitData [
 	}
 
 	// Trigger datalog engine evaluation to copy token facts to authorizer world
-	_ = authorizer.Authorize()
+	if err := authorizer.Authorize(); err != nil && !errors.Is(err, biscuit.ErrNoMatchingPolicy) {
+		return "", fmt.Errorf("authorizer evaluation error during peer extraction: %w", err)
+	}
 
 	facts, err := authorizer.Query(peerRule)
 	if err != nil {
