@@ -34,6 +34,7 @@ import (
 	"time"
 
 	"github.com/biscuit-auth/biscuit-go/v2"
+	"github.com/biscuit-auth/biscuit-go/v2/parser"
 	"github.com/coreos/go-oidc/v3/oidc"
 	jwt "github.com/golang-jwt/jwt/v5"
 	"github.com/google/sam/api"
@@ -335,14 +336,14 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, bindings, err := s.store.GetMeshPolicy(ctx)
+	policyRoles, bindings, err := s.store.GetMeshPolicy(ctx)
 	if err != nil && err != storage.ErrNotFound {
-		logger.Errorf("Failed to load policy for role resolution: %v", err)
+		logger.Errorf("Failed to load policy for registration: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
-	resolvedRoles := resolveRoles(claims, bindings)
+	resolvedRoles := resolveRoles(pID.String(), claims, bindings)
 	var hasCapabilityRoles bool
 	var customAccessRoles []string
 	resolvedMap := make(map[string]bool)
@@ -369,13 +370,6 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request) {
 
 	finalRoles := []string{req.RequestedRole}
 	finalRoles = append(finalRoles, customAccessRoles...)
-
-	policyRoles, _, err := s.store.GetMeshPolicy(ctx)
-	if err != nil && err != storage.ErrNotFound {
-		logger.Errorf("Failed to retrieve mesh policy: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
 
 	// Mint token
 	biscuitExpiry := time.Now().Add(api.BiscuitTokenTTL)
@@ -548,7 +542,12 @@ func (s *Server) HandleRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Mesh policy is distributed dynamically.
+	policyRoles, bindings, err := s.store.GetMeshPolicy(ctx)
+	if err != nil && err != storage.ErrNotFound {
+		logger.Errorf("Failed to load policy for node refresh: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 
 	var biscuitBytes []byte
 	biscuitExpiry := time.Now().Add(api.BiscuitTokenTTL)
@@ -560,13 +559,7 @@ func (s *Server) HandleRefresh(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
 		}
-		_, bindings, err := s.store.GetMeshPolicy(ctx)
-		if err != nil && err != storage.ErrNotFound {
-			logger.Errorf("Failed to load policy for role resolution: %v", err)
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
-			return
-		}
-		resolvedRoles := resolveRoles(claims, bindings)
+		resolvedRoles := resolveRoles(pID.String(), claims, bindings)
 		var hasCapabilityRoles bool
 		var customAccessRoles []string
 		resolvedMap := make(map[string]bool)
@@ -594,12 +587,6 @@ func (s *Server) HandleRefresh(w http.ResponseWriter, r *http.Request) {
 		finalRoles := []string{nodeRecord.Role}
 		finalRoles = append(finalRoles, customAccessRoles...)
 
-		policyRoles, _, err := s.store.GetMeshPolicy(ctx)
-		if err != nil && err != storage.ErrNotFound {
-			logger.Errorf("Failed to retrieve mesh policy for node %s: %v", nodeRecord.PeerID, err)
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
-			return
-		}
 		bBytes, _, err := identity.MintBiscuitToken(privKey, claims, nil, pID, biscuitExpiry, finalRoles, policyRoles)
 		if err != nil {
 			logger.Errorf("Failed to mint refreshed token for node %s: %v", nodeRecord.PeerID, err)
@@ -609,12 +596,6 @@ func (s *Server) HandleRefresh(w http.ResponseWriter, r *http.Request) {
 		biscuitBytes = bBytes
 	} else {
 		// Bootstrap node
-		policyRoles, _, err := s.store.GetMeshPolicy(ctx)
-		if err != nil && err != storage.ErrNotFound {
-			logger.Errorf("Failed to retrieve mesh policy for node %s: %v", nodeRecord.PeerID, err)
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
-			return
-		}
 		bBytes, err := identity.MintBootstrapBiscuitToken(privKey, pID, nodeRecord.Role, biscuitExpiry, policyRoles)
 		if err != nil {
 			logger.Errorf("Failed to mint refreshed token for node %s: %v", nodeRecord.PeerID, err)
@@ -1731,7 +1712,7 @@ func (s *Server) HandleUserRevoke(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte("Node revoked successfully"))
 }
 
-func resolveRoles(claims jwt.MapClaims, bindings []*api.PolicyBinding) []string {
+func resolveRoles(peerID string, claims jwt.MapClaims, bindings []*api.PolicyBinding) []string {
 	oidcRoles := toStringSlice(claims["roles"])
 	oidcGroups := toStringSlice(claims["groups"])
 	oidcSub, _ := claims["sub"].(string)
@@ -1753,6 +1734,10 @@ func resolveRoles(claims jwt.MapClaims, bindings []*api.PolicyBinding) []string 
 			}
 			prefix, value := parts[0], parts[1]
 			switch prefix {
+			case api.FactNode:
+				if peerID == value {
+					resolvedRoles[b.Role] = true
+				}
 			case api.FactGroup:
 				for _, g := range oidcGroups {
 					if g == value {
@@ -1834,6 +1819,25 @@ func validatePolicyConfig(req *api.PolicyConfigUpdateRequest) error {
 				return fmt.Errorf("invalid allowed_target %q in role %s: %w", target, r.Name, err)
 			}
 		}
+		for _, dl := range r.CustomDatalog {
+			trimmed := strings.TrimRight(strings.TrimSpace(dl), ";")
+			if trimmed == "" {
+				continue
+			}
+			if _, err := parser.FromStringRule(trimmed); err != nil {
+				if _, err := parser.FromStringFact(trimmed); err != nil {
+					return fmt.Errorf("invalid custom datalog %q in role %s: %w", dl, r.Name, err)
+				}
+			}
+		}
+	}
+
+	validPrefixes := map[string]bool{
+		api.FactNode:  true,
+		api.FactGroup: true,
+		api.FactUser:  true,
+		api.FactEmail: true,
+		api.FactRole:  true,
 	}
 
 	for _, b := range req.Bindings {
@@ -1845,6 +1849,22 @@ func validatePolicyConfig(req *api.PolicyConfigUpdateRequest) error {
 		}
 		if !roleNames[b.Role] {
 			return fmt.Errorf("binding references undefined role: %s", b.Role)
+		}
+		if len(b.Members) == 0 {
+			return fmt.Errorf("binding for role %q must specify at least one member", b.Role)
+		}
+		for _, member := range b.Members {
+			if member == api.SystemAuthenticated {
+				continue
+			}
+			parts := strings.SplitN(member, ":", 2)
+			if len(parts) != 2 || strings.TrimSpace(parts[1]) == "" {
+				return fmt.Errorf("member %q in binding for role %q is invalid, must be in format 'type:value' or %q", member, b.Role, api.SystemAuthenticated)
+			}
+			prefix := parts[0]
+			if !validPrefixes[prefix] {
+				return fmt.Errorf("member prefix %q in member %q is invalid", prefix, member)
+			}
 		}
 	}
 	return nil
