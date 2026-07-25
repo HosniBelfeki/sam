@@ -659,6 +659,9 @@ func (s *SQLStore) GetMeshPolicy(ctx context.Context) ([]*api.PolicyRole, []*api
 		rolesMap[name] = role
 		roles = append(roles, role)
 	}
+	if err := rolesRows.Err(); err != nil {
+		return nil, nil, err
+	}
 
 	permsRows, err := s.db.QueryContext(ctx, s.rebind("SELECT role_name, resource_type, resource_value FROM role_permissions"))
 	if err != nil {
@@ -682,6 +685,9 @@ func (s *SQLStore) GetMeshPolicy(ctx context.Context) ([]*api.PolicyRole, []*api
 			}
 		}
 	}
+	if err := permsRows.Err(); err != nil {
+		return nil, nil, err
+	}
 
 	bindingsRows, err := s.db.QueryContext(ctx, s.rebind("SELECT role_name, member FROM role_bindings"))
 	if err != nil {
@@ -701,6 +707,9 @@ func (s *SQLStore) GetMeshPolicy(ctx context.Context) ([]*api.PolicyRole, []*api
 			bindingsMap[roleName] = b
 		}
 		b.Members = append(b.Members, member)
+	}
+	if err := bindingsRows.Err(); err != nil {
+		return nil, nil, err
 	}
 
 	var bindings []*api.PolicyBinding

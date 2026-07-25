@@ -371,7 +371,7 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request) {
 	finalRoles = append(finalRoles, customAccessRoles...)
 
 	policyRoles, _, err := s.store.GetMeshPolicy(ctx)
-	if err != nil {
+	if err != nil && err != storage.ErrNotFound {
 		logger.Errorf("Failed to retrieve mesh policy: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
@@ -595,7 +595,7 @@ func (s *Server) HandleRefresh(w http.ResponseWriter, r *http.Request) {
 		finalRoles = append(finalRoles, customAccessRoles...)
 
 		policyRoles, _, err := s.store.GetMeshPolicy(ctx)
-		if err != nil {
+		if err != nil && err != storage.ErrNotFound {
 			logger.Errorf("Failed to retrieve mesh policy for node %s: %v", nodeRecord.PeerID, err)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
@@ -610,7 +610,7 @@ func (s *Server) HandleRefresh(w http.ResponseWriter, r *http.Request) {
 	} else {
 		// Bootstrap node
 		policyRoles, _, err := s.store.GetMeshPolicy(ctx)
-		if err != nil {
+		if err != nil && err != storage.ErrNotFound {
 			logger.Errorf("Failed to retrieve mesh policy for node %s: %v", nodeRecord.PeerID, err)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
@@ -865,6 +865,11 @@ func (s *Server) HandlePolicies(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		if err := validatePolicyConfig(&req); err != nil {
+			http.Error(w, "Invalid policy configuration: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+
 		if err := s.store.SaveMeshPolicy(r.Context(), req.Roles, req.Bindings); err != nil {
 			logger.Errorf("Failed to save policy: %v", err)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -1047,7 +1052,7 @@ func (s *Server) HandleEnroll(w http.ResponseWriter, r *http.Request) {
 	if s.config.AutoApproveEnrollment {
 		// Mode A: Auto-Approve
 		policyRoles, _, err := s.store.GetMeshPolicy(ctx)
-		if err != nil {
+		if err != nil && err != storage.ErrNotFound {
 			logger.Errorf("Failed to retrieve mesh policy: %v", err)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
@@ -1395,7 +1400,7 @@ func (s *Server) HandleAdminEnrollmentAction(w http.ResponseWriter, r *http.Requ
 		}
 
 		policyRoles, _, err := s.store.GetMeshPolicy(ctx)
-		if err != nil {
+		if err != nil && err != storage.ErrNotFound {
 			logger.Errorf("Failed to retrieve mesh policy: %v", err)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
@@ -1801,6 +1806,46 @@ func toStringSlice(val any) []string {
 			}
 		}
 		return res
+	}
+	return nil
+}
+
+func validatePolicyConfig(req *api.PolicyConfigUpdateRequest) error {
+	roleNames := make(map[string]bool)
+	for _, r := range req.Roles {
+		if r == nil {
+			continue
+		}
+		if strings.TrimSpace(r.Name) == "" {
+			return fmt.Errorf("role name cannot be empty")
+		}
+		if roleNames[r.Name] {
+			return fmt.Errorf("duplicate role name: %s", r.Name)
+		}
+		roleNames[r.Name] = true
+
+		for _, svc := range r.AllowedServices {
+			if err := api.ValidateServiceFormat(svc); err != nil {
+				return fmt.Errorf("invalid allowed_service %q in role %s: %w", svc, r.Name, err)
+			}
+		}
+		for _, target := range r.AllowedTargets {
+			if err := api.ValidateTargetFormat(target); err != nil {
+				return fmt.Errorf("invalid allowed_target %q in role %s: %w", target, r.Name, err)
+			}
+		}
+	}
+
+	for _, b := range req.Bindings {
+		if b == nil {
+			continue
+		}
+		if strings.TrimSpace(b.Role) == "" {
+			return fmt.Errorf("binding role cannot be empty")
+		}
+		if !roleNames[b.Role] {
+			return fmt.Errorf("binding references undefined role: %s", b.Role)
+		}
 	}
 	return nil
 }
