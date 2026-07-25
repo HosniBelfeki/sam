@@ -27,6 +27,8 @@ database:
     user: sam
     password: sam-secret-password
     database: sam_mesh
+    port: 5432
+    sslmode: disable
     storageSize: 1Gi
 
 router:
