@@ -35,6 +35,9 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: {{ include "sam-mesh.fullname" . }}-bootstrap
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation
   labels:
     {{- include "sam-mesh.labels" . | nindent 4 }}
 spec:

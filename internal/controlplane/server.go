@@ -363,7 +363,7 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request) {
 		resolvedMap[r] = true
 		if strings.HasPrefix(r, "sam:role:") {
 			hasCapabilityRoles = true
-		} else {
+		} else if r != req.RequestedRole {
 			customAccessRoles = append(customAccessRoles, r)
 		}
 	}
@@ -579,7 +579,7 @@ func (s *Server) HandleRefresh(w http.ResponseWriter, r *http.Request) {
 			resolvedMap[r] = true
 			if strings.HasPrefix(r, "sam:role:") {
 				hasCapabilityRoles = true
-			} else {
+			} else if r != nodeRecord.Role {
 				customAccessRoles = append(customAccessRoles, r)
 			}
 		}
@@ -804,9 +804,12 @@ func (s *Server) HandlePolicies(w http.ResponseWriter, r *http.Request) {
 						for _, k := range validKeys {
 							trustedKeys = append(trustedKeys, k.Public)
 						}
-						_, err := identity.VerifyAndExtractPeerID(trustedKeys, biscuitBytes)
+						peerID, err := identity.VerifyAndExtractPeerID(trustedKeys, biscuitBytes)
 						if err == nil {
-							isNode = true
+							nodeRecord, nodeErr := s.store.GetNode(r.Context(), peerID.String())
+							if nodeErr == nil && !nodeRecord.Banned {
+								isNode = true
+							}
 						}
 					}
 				}

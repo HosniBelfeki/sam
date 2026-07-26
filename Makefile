@@ -152,7 +152,20 @@ fmt:
 	go fmt ./...
 
 # code linters
-lint: fmt
+.PHONY: helm-lint
+helm-lint:
+	@HELM_BIN="helm"; \
+	if ! command -v helm >/dev/null 2>&1; then \
+		if [ -x "./bin/helm" ]; then \
+			HELM_BIN="./bin/helm"; \
+		else \
+			echo "helm not found; please install helm or place it in ./bin/helm" >&2; \
+			exit 1; \
+		fi; \
+	fi; \
+	$$HELM_BIN lint ./charts/sam-mesh
+
+lint: fmt helm-lint
 	hack/lint.sh
 
 .PHONY: verify
