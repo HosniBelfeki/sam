@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/biscuit-auth/biscuit-go/v2"
+	"github.com/biscuit-auth/biscuit-go/v2/datalog"
 )
 
 // helper to generate keypair for tests
@@ -130,7 +131,7 @@ func TestBaselinePolicies(t *testing.T) {
 				t.Fatalf("failed to build token: %v", err)
 			}
 
-			authorizer, err := tok.Authorizer(pub)
+			authorizer, err := tok.Authorizer(pub, biscuit.WithWorldOptions(datalog.WithMaxDuration(5*time.Second)))
 			if err != nil {
 				t.Fatalf("failed to create authorizer: %v", err)
 			}
@@ -192,7 +193,10 @@ func TestBaselineReplayCheck(t *testing.T) {
 			}})
 
 			tok, _ := builder.Build()
-			authorizer, _ := tok.Authorizer(pub)
+			authorizer, err := tok.Authorizer(pub, biscuit.WithWorldOptions(datalog.WithMaxDuration(5*time.Second)))
+			if err != nil {
+				t.Fatalf("failed to create authorizer: %v", err)
+			}
 
 			// connection_peer_id is injected as a runtime connection fact
 			authorizer.AddFact(biscuit.Fact{Predicate: biscuit.Predicate{
@@ -204,7 +208,7 @@ func TestBaselineReplayCheck(t *testing.T) {
 			authorizer.AddCheck(BaselineReplayCheck)
 			authorizer.AddPolicy(AllowIfTruePolicy)
 
-			err := authorizer.Authorize()
+			err = authorizer.Authorize()
 			if tt.expectAllow && err != nil {
 				t.Errorf("expected authorized, got error: %v", err)
 			} else if !tt.expectAllow && err == nil {
@@ -263,7 +267,10 @@ func TestBaselineTargetCheck(t *testing.T) {
 			}
 
 			tok, _ := builder.Build()
-			authorizer, _ := tok.Authorizer(pub)
+			authorizer, err := tok.Authorizer(pub, biscuit.WithWorldOptions(datalog.WithMaxDuration(5*time.Second)))
+			if err != nil {
+				t.Fatalf("failed to create authorizer: %v", err)
+			}
 
 			// target_fact is evaluated at runtime (e.g. node(...) or group(...))
 			authorizer.AddFact(biscuit.Fact{Predicate: biscuit.Predicate{
@@ -282,7 +289,7 @@ func TestBaselineTargetCheck(t *testing.T) {
 			}
 			authorizer.AddPolicy(AllowIfTruePolicy)
 
-			err := authorizer.Authorize()
+			err = authorizer.Authorize()
 			if tt.expectAllow && err != nil {
 				t.Errorf("expected authorized, got error: %v", err)
 			} else if !tt.expectAllow && err == nil {
