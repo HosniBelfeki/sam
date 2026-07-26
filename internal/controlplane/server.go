@@ -1731,6 +1731,10 @@ func (s *Server) HandleUserRevoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := s.mesh.PublishEvent(ctx, api.MeshEvent_BANNED, peerID, nil); err != nil {
+		logger.Warnf("Failed to publish BANNED event for node %s to mesh: %v", peerID, err)
+	}
+
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte("Node revoked successfully"))
 }

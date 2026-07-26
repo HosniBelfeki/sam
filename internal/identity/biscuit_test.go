@@ -483,3 +483,40 @@ func TestMintBiscuitToken_WithPolicyRoles(t *testing.T) {
 		}
 	})
 }
+
+func TestVerifyAndExtractPeerID_MultipleTrustedKeys(t *testing.T) {
+	pub1, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub2, priv2, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	privNode, _, err := crypto.GenerateKeyPair(crypto.Ed25519, -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dummyPeer, err := peer.IDFromPrivateKey(privNode)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	biscuitData, err := MintBootstrapBiscuitToken(priv2, dummyPeer, api.RoleNode, time.Now().Add(1*time.Hour), nil)
+	if err != nil {
+		t.Fatalf("MintBootstrapBiscuitToken failed: %v", err)
+	}
+
+	// trustedPublicKeys has pub1 first, pub2 second (pub2 is the signer)
+	trustedKeys := []ed25519.PublicKey{pub1, pub2}
+
+	extractedPeer, err := VerifyAndExtractPeerID(trustedKeys, biscuitData)
+	if err != nil {
+		t.Fatalf("VerifyAndExtractPeerID failed with multiple trusted keys: %v", err)
+	}
+
+	if extractedPeer != dummyPeer {
+		t.Errorf("expected peer ID %s, got %s", dummyPeer, extractedPeer)
+	}
+}

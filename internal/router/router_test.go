@@ -587,4 +587,97 @@ func TestRouterProactiveRefreshReEnrollOn401(t *testing.T) {
 	}
 }
 
+func TestRouterGossipSubBannedEvent(t *testing.T) {
+	issuer, mintToken := startCustomMockOIDC(t)
+	cp, cpStore, cpURL := setupControlPlane(t, issuer)
+	defer func() {
+		_ = cp.Close()
+		_ = cpStore.Close()
+	}()
 
+	tempDir := t.TempDir()
+	routerKeyPath := filepath.Join(tempDir, "router.key")
+
+	routerJWT := mintToken(map[string]interface{}{
+		"sub":    "router-banned-test",
+		"groups": []string{"routers"},
+		"roles":  []string{api.RoleRouter},
+	})
+
+	rOpts := Options{
+		ControlPlaneURL:    cpURL,
+		ListenAddrs:        []string{"/ip4/127.0.0.1/tcp/0"},
+		KeysSyncInterval:   20 * time.Second,
+		LeaseRenewInterval: 20 * time.Second,
+		OIDCToken:          routerJWT,
+		KeysDBPath:         routerKeyPath,
+		AllowLoopback:      true,
+		BiscuitTimeout:     1 * time.Second,
+	}
+
+	r, err := NewRouter(context.Background(), rOpts)
+	if err != nil {
+		t.Fatalf("failed to create router: %v", err)
+	}
+	if err := r.Start(); err != nil {
+		t.Fatalf("failed to start router: %v", err)
+	}
+	defer func() { _ = r.Close() }()
+
+	privNode, _, err := crypto.GenerateKeyPair(crypto.Ed25519, -1)
+	if err != nil {
+		t.Fatalf("failed to generate node keypair: %v", err)
+	}
+	bannedPeerID, err := peer.IDFromPrivateKey(privNode)
+	if err != nil {
+		t.Fatalf("failed to get peer ID from keypair: %v", err)
+	}
+	bannedPeerIDStr := bannedPeerID.String()
+
+	// Manually insert bannedPeer into router's authenticatedPeers
+	r.authenticatedPeers.Store(bannedPeerID, true)
+	if _, ok := r.authenticatedPeers.Load(bannedPeerID); !ok {
+		t.Fatalf("failed to seed authenticatedPeers map")
+	}
+
+	// Get CP's signing key from store to sign the MeshEvent
+	cpPrivKey, _, err := cpStore.GetCurrentKey(context.Background())
+	if err != nil {
+		t.Fatalf("failed to get CP key: %v", err)
+	}
+
+	event := &api.MeshEvent{
+		Type:      api.MeshEvent_BANNED,
+		PeerId:    bannedPeerIDStr,
+		Timestamp: time.Now().UnixMilli(),
+	}
+	eventData, err := proto.Marshal(event)
+	if err != nil {
+		t.Fatalf("failed to marshal event: %v", err)
+	}
+	event.Signature = ed25519.Sign(cpPrivKey, eventData)
+	signedData, err := proto.Marshal(event)
+	if err != nil {
+		t.Fatalf("failed to marshal signed event: %v", err)
+	}
+
+	// Publish MeshEvent_BANNED to GossipEvents topic
+	if err := r.EventTopic.Publish(context.Background(), signedData); err != nil {
+		t.Fatalf("failed to publish MeshEvent_BANNED: %v", err)
+	}
+
+	// Poll until authenticatedPeers no longer contains bannedPeerID
+	deadline := time.Now().Add(5 * time.Second)
+	evicted := false
+	for time.Now().Before(deadline) {
+		if _, ok := r.authenticatedPeers.Load(bannedPeerID); !ok {
+			evicted = true
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	if !evicted {
+		t.Errorf("expected peer %s to be evicted from authenticatedPeers upon receiving MeshEvent_BANNED", bannedPeerIDStr)
+	}
+}

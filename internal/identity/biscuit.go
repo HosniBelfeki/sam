@@ -348,9 +348,13 @@ func VerifyAndExtractPeerID(trustedPublicKeys []ed25519.PublicKey, biscuitData [
 			lastErr = err
 			continue
 		}
-		authorizer = auth
-		verified = true
-		break
+		if err := auth.Authorize(); err == nil || errors.Is(err, biscuit.ErrNoMatchingPolicy) {
+			authorizer = auth
+			verified = true
+			break
+		} else {
+			lastErr = err
+		}
 	}
 
 	if !verified {
@@ -361,11 +365,6 @@ func VerifyAndExtractPeerID(trustedPublicKeys []ed25519.PublicKey, biscuitData [
 	peerRule, err := parser.FromStringRule(`get_peer($p) <- node($p)`)
 	if err != nil {
 		return "", fmt.Errorf("failed to parse query rule: %w", err)
-	}
-
-	// Trigger datalog engine evaluation to copy token facts to authorizer world
-	if err := authorizer.Authorize(); err != nil && !errors.Is(err, biscuit.ErrNoMatchingPolicy) {
-		return "", fmt.Errorf("authorizer evaluation error during peer extraction: %w", err)
 	}
 
 	facts, err := authorizer.Query(peerRule)

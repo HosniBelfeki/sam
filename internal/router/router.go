@@ -270,11 +270,12 @@ func (r *Router) Start() error {
 	})
 
 	// 5. Start background routines
-	r.wg.Add(4)
+	r.wg.Add(5)
 	go r.runLeaseRenewalLoop()
 	go r.runKeysSyncLoop()
 	go r.runFederationLoop()
 	go r.runBiscuitRenewalLoop()
+	go r.listenForHubEvents(r.ctx)
 
 	r.isReady.Store(true)
 	logger.Infof("Router Online. PeerID: %s, ListenAddrs: %v", r.Host.ID(), r.Host.Addrs())
@@ -513,6 +514,80 @@ func (r *Router) getTrustedPublicKeys() []ed25519.PublicKey {
 	r.keysMu.RLock()
 	defer r.keysMu.RUnlock()
 	return append([]ed25519.PublicKey(nil), r.trustedPublicKeys...)
+}
+
+func (r *Router) verifyEvent(event *api.MeshEvent) bool {
+	sig := event.Signature
+	event.Signature = nil
+	data, err := proto.Marshal(event)
+	event.Signature = sig
+	if err != nil {
+		logger.Errorf("[Router Event] Failed to marshal event for verification: %v", err)
+		return false
+	}
+
+	keys := r.getTrustedPublicKeys()
+	for _, pubKey := range keys {
+		if len(pubKey) == ed25519.PublicKeySize && ed25519.Verify(pubKey, data, sig) {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *Router) listenForHubEvents(ctx context.Context) {
+	defer r.wg.Done()
+	if r.EventTopic == nil {
+		return
+	}
+	sub, err := r.EventTopic.Subscribe()
+	if err != nil {
+		logger.Errorf("[Router Event] Failed to subscribe to GossipEvents topic: %v", err)
+		return
+	}
+	defer sub.Cancel()
+
+	for {
+		msg, err := sub.Next(ctx)
+		if err != nil {
+			return
+		}
+
+		var event api.MeshEvent
+		if err := proto.Unmarshal(msg.Data, &event); err != nil {
+			logger.Errorf("[Router Event] Failed to unmarshal event from %s: %v", msg.ReceivedFrom, err)
+			continue
+		}
+
+		if !r.verifyEvent(&event) {
+			logger.Warnf("[Router Event] Potential spoofing attempt: invalid signature on event from %s", msg.ReceivedFrom)
+			continue
+		}
+
+		eventTime := time.UnixMilli(event.Timestamp)
+		if time.Since(eventTime) > 5*time.Minute || time.Until(eventTime) > 5*time.Minute {
+			logger.Warnf("[Router Event] Dropping stale or future event from %s", msg.ReceivedFrom)
+			continue
+		}
+
+		switch event.Type {
+		case api.MeshEvent_BANNED:
+			if event.PeerId != "" {
+				if bannedPeer, err := peer.Decode(event.PeerId); err == nil {
+					logger.Infof("[Router Event] Received BANNED event for peer %s, evicting from authenticated peers", bannedPeer)
+					r.authenticatedPeers.Delete(bannedPeer)
+					if r.Host != nil {
+						_ = r.Host.Network().ClosePeer(bannedPeer)
+					}
+				}
+			}
+		case api.MeshEvent_KEY_ROTATION:
+			logger.Infof("[Router Event] Received KEY_ROTATION event, triggering key sync")
+			if err := r.syncKeys(); err != nil {
+				logger.Warnf("[Router Event] Failed to sync keys after KEY_ROTATION event: %v", err)
+			}
+		}
+	}
 }
 
 func (r *Router) runKeysSyncLoop() {
