@@ -1122,3 +1122,79 @@ func TestUserStatusAndTenancy(t *testing.T) {
 		t.Error("expected node A to be banned/revoked in DB")
 	}
 }
+
+func TestResolveRolesAndRoleImpersonationProtection(t *testing.T) {
+	bindings := []*api.PolicyBinding{
+		{
+			Role:    api.RoleRouter,
+			Members: []string{"group:routers", "role:oidc-router-role"},
+		},
+		{
+			Role:    api.RoleSamBox,
+			Members: []string{"user:sambox-admin-sub"},
+		},
+	}
+
+	t.Run("OIDC claims role is not blindly trusted without explicit binding", func(t *testing.T) {
+		claims := jwt.MapClaims{
+			"sub":   "attacker-sub",
+			"roles": []string{api.RoleRouter, api.RoleSamBox, "unbound-role"},
+		}
+		roles := resolveRoles("peer-123", claims, bindings)
+		for _, r := range roles {
+			if r == api.RoleRouter || r == api.RoleSamBox {
+				t.Errorf("Security flaw: resolveRoles granted capability role %q from raw OIDC claims without explicit binding", r)
+			}
+		}
+	})
+
+	t.Run("Explicit role mapping in binding grants capability role", func(t *testing.T) {
+		claims := jwt.MapClaims{
+			"sub":   "router-sub",
+			"roles": []string{"oidc-router-role"},
+		}
+		roles := resolveRoles("peer-123", claims, bindings)
+		hasRouter := false
+		for _, r := range roles {
+			if r == api.RoleRouter {
+				hasRouter = true
+			}
+		}
+		if !hasRouter {
+			t.Errorf("Expected role %q to be granted via explicit role binding mapping", api.RoleRouter)
+		}
+	})
+
+	t.Run("Group membership grants bound capability role", func(t *testing.T) {
+		claims := jwt.MapClaims{
+			"sub":    "router-user",
+			"groups": []string{"routers"},
+		}
+		roles := resolveRoles("peer-456", claims, bindings)
+		hasRouter := false
+		for _, r := range roles {
+			if r == api.RoleRouter {
+				hasRouter = true
+			}
+		}
+		if !hasRouter {
+			t.Errorf("Expected role %q to be granted via group binding", api.RoleRouter)
+		}
+	})
+
+	t.Run("User sub grants bound capability role", func(t *testing.T) {
+		claims := jwt.MapClaims{
+			"sub": "sambox-admin-sub",
+		}
+		roles := resolveRoles("peer-789", claims, bindings)
+		hasSamBox := false
+		for _, r := range roles {
+			if r == api.RoleSamBox {
+				hasSamBox = true
+			}
+		}
+		if !hasSamBox {
+			t.Errorf("Expected role %q to be granted via user sub binding", api.RoleSamBox)
+		}
+	})
+}

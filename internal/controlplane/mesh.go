@@ -145,14 +145,14 @@ func (p *P2PMeshAdapter) PublishEvent(ctx context.Context, eventType api.MeshEve
 	}
 
 	if privKey != nil {
-		eventData, err := proto.Marshal(event)
+		eventData, err := proto.MarshalOptions{Deterministic: true}.Marshal(event)
 		if err != nil {
 			return fmt.Errorf("failed to marshal event for signing: %w", err)
 		}
 		event.Signature = ed25519.Sign(privKey, eventData)
 	}
 
-	data, err := proto.Marshal(event)
+	data, err := proto.MarshalOptions{Deterministic: true}.Marshal(event)
 	if err != nil {
 		return fmt.Errorf("failed to marshal signed mesh event: %w", err)
 	}

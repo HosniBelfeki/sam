@@ -368,6 +368,9 @@ func BuildServiceDatalogFact(serviceStr string) biscuit.Fact {
 // BuildTargetDatalogFact translates a target pattern string into a Datalog Fact.
 func BuildTargetDatalogFact(targetStr string) biscuit.Fact {
 	tFact, tVal := ParseServiceTarget(targetStr)
+	if tFact == "" {
+		tFact = "node"
+	}
 	if tFact == "*" && tVal == "*" {
 		return biscuit.Fact{Predicate: biscuit.Predicate{
 			Name: FactGrantedTargetAllFacts,

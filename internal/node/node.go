@@ -1221,7 +1221,7 @@ func (n *SamNode) startKeyPruning(ctx context.Context, gracePeriod time.Duration
 func (n *SamNode) verifyEvent(event *api.MeshEvent) bool {
 	sig := event.Signature
 	event.Signature = nil
-	data, err := proto.Marshal(event)
+	data, err := proto.MarshalOptions{Deterministic: true}.Marshal(event)
 	event.Signature = sig // Restore
 	if err != nil {
 		logger.Errorf("[Mesh Event] Failed to marshal event for verification: %v", err)

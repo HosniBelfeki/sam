@@ -50,61 +50,13 @@ func BuildPolicyRules(roles []*api.PolicyRole, bindings []*api.PolicyBinding) []
 		roleName := role.Name
 
 		for _, svc := range role.AllowedServices {
-			svcType, svcName := api.ParseServiceTarget(svc)
-
-			if svcType == "*" && svcName == "*" {
-				rules = append(rules, biscuit.Rule{
-					Head: biscuit.Predicate{
-						Name: api.FactGrantedServiceAllTypes,
-						IDs:  []biscuit.Term{},
-					},
-					Body: []biscuit.Predicate{
-						{Name: api.FactRole, IDs: []biscuit.Term{biscuit.String(roleName)}},
-					},
-				})
-			} else if svcName == "*" {
-				rules = append(rules, biscuit.Rule{
-					Head: biscuit.Predicate{
-						Name: api.FactGrantedServiceAll,
-						IDs:  []biscuit.Term{biscuit.String(svcType)},
-					},
-					Body: []biscuit.Predicate{
-						{Name: api.FactRole, IDs: []biscuit.Term{biscuit.String(roleName)}},
-					},
-				})
-			} else if strings.HasPrefix(svcName, "*.") {
-				suffix := svcName[1:]
-				rules = append(rules, biscuit.Rule{
-					Head: biscuit.Predicate{
-						Name: api.FactGrantedServiceSuffix,
-						IDs:  []biscuit.Term{biscuit.String(svcType), biscuit.String(suffix)},
-					},
-					Body: []biscuit.Predicate{
-						{Name: api.FactRole, IDs: []biscuit.Term{biscuit.String(roleName)}},
-					},
-				})
-			} else if strings.HasSuffix(svcName, ".*") {
-				prefix := svcName[:len(svcName)-1]
-				rules = append(rules, biscuit.Rule{
-					Head: biscuit.Predicate{
-						Name: api.FactGrantedServicePrefix,
-						IDs:  []biscuit.Term{biscuit.String(svcType), biscuit.String(prefix)},
-					},
-					Body: []biscuit.Predicate{
-						{Name: api.FactRole, IDs: []biscuit.Term{biscuit.String(roleName)}},
-					},
-				})
-			} else {
-				rules = append(rules, biscuit.Rule{
-					Head: biscuit.Predicate{
-						Name: api.FactGrantedServiceExact,
-						IDs:  []biscuit.Term{biscuit.String(svcType), biscuit.String(svcName)},
-					},
-					Body: []biscuit.Predicate{
-						{Name: api.FactRole, IDs: []biscuit.Term{biscuit.String(roleName)}},
-					},
-				})
-			}
+			fact := api.BuildServiceDatalogFact(svc)
+			rules = append(rules, biscuit.Rule{
+				Head: fact.Predicate,
+				Body: []biscuit.Predicate{
+					{Name: api.FactRole, IDs: []biscuit.Term{biscuit.String(roleName)}},
+				},
+			})
 		}
 
 		hasUnrestricted := false
@@ -145,36 +97,13 @@ func BuildPolicyRules(roles []*api.PolicyRole, bindings []*api.PolicyBinding) []
 			if t == "*" {
 				continue
 			}
-
-			// Try to parse as fact:value
-			parts := strings.SplitN(t, ":", 2)
-			if len(parts) == 2 {
-				factName := parts[0]
-				factVal := parts[1]
-				rules = append(rules, biscuit.Rule{
-					Head: biscuit.Predicate{
-						Name: api.FactGrantedTargetExact,
-						IDs:  []biscuit.Term{biscuit.String(factName), biscuit.String(factVal)},
-					},
-					Body: []biscuit.Predicate{
-						{Name: api.FactRole, IDs: []biscuit.Term{biscuit.String(roleName)}},
-					},
-				})
-			} else {
-				// Fallback, if it doesn't have a colon, we'll just treat it as an unrestricted node check?
-				// Wait, earlier tests might use "node:foo", or maybe just a peerID?
-				// For compatibility, if no colon, assume it's a domain/prefix check?
-				// Actually, Phase 2 tests mostly use FactGrantedTargetExact.
-				rules = append(rules, biscuit.Rule{
-					Head: biscuit.Predicate{
-						Name: api.FactGrantedTargetExact,
-						IDs:  []biscuit.Term{biscuit.String("node"), biscuit.String(t)},
-					},
-					Body: []biscuit.Predicate{
-						{Name: api.FactRole, IDs: []biscuit.Term{biscuit.String(roleName)}},
-					},
-				})
-			}
+			fact := api.BuildTargetDatalogFact(t)
+			rules = append(rules, biscuit.Rule{
+				Head: fact.Predicate,
+				Body: []biscuit.Predicate{
+					{Name: api.FactRole, IDs: []biscuit.Term{biscuit.String(roleName)}},
+				},
+			})
 		}
 
 		for _, dl := range role.CustomDatalog {

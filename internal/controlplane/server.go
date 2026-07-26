@@ -1791,9 +1791,6 @@ func resolveRoles(peerID string, claims jwt.MapClaims, bindings []*api.PolicyBin
 			}
 		}
 	}
-	for _, r := range oidcRoles {
-		resolvedRoles[r] = true
-	}
 
 	var res []string
 	for r := range resolvedRoles {

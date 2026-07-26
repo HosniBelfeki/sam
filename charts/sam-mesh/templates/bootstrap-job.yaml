@@ -72,7 +72,7 @@ spec:
           CP_URL="http://{{ include "sam-mesh.fullname" . }}-control-plane:8080"
 
           echo "Waiting for Control Plane to be ready..."
-          until curl -s "${CP_URL}/info" > /dev/null; do
+          until curl -sf "${CP_URL}/info" > /dev/null; do
             echo "Control plane not ready yet, sleeping..."
             sleep 2
           done

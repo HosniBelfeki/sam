@@ -519,7 +519,7 @@ func (r *Router) getTrustedPublicKeys() []ed25519.PublicKey {
 func (r *Router) verifyEvent(event *api.MeshEvent) bool {
 	sig := event.Signature
 	event.Signature = nil
-	data, err := proto.Marshal(event)
+	data, err := proto.MarshalOptions{Deterministic: true}.Marshal(event)
 	event.Signature = sig
 	if err != nil {
 		logger.Errorf("[Router Event] Failed to marshal event for verification: %v", err)
