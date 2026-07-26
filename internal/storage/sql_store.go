@@ -608,6 +608,9 @@ func (s *SQLStore) SaveMeshPolicy(ctx context.Context, roles []*api.PolicyRole, 
 	}
 
 	for _, r := range roles {
+		if r == nil {
+			continue
+		}
 		if _, err := tx.ExecContext(ctx, s.rebind("INSERT INTO roles (name, description, created_at) VALUES (?, '', ?)"), r.Name, time.Now().UnixMilli()); err != nil {
 			return err
 		}
@@ -629,6 +632,9 @@ func (s *SQLStore) SaveMeshPolicy(ctx context.Context, roles []*api.PolicyRole, 
 	}
 
 	for _, b := range bindings {
+		if b == nil {
+			continue
+		}
 		for _, member := range b.Members {
 			if _, err := tx.ExecContext(ctx, s.rebind("INSERT INTO role_bindings (role_name, member) VALUES (?, ?)"), b.Role, member); err != nil {
 				return err

@@ -96,8 +96,8 @@ type P2PMeshAdapter struct {
 }
 
 func NewP2PMeshAdapter(h host.Host, ps *pubsub.PubSub, store storage.Store) (*P2PMeshAdapter, error) {
-	if h == nil || ps == nil {
-		return nil, fmt.Errorf("host and pubsub cannot be nil")
+	if h == nil || ps == nil || store == nil {
+		return nil, fmt.Errorf("host, pubsub, and store cannot be nil")
 	}
 	topic, err := ps.Join(api.GossipEvents)
 	if err != nil {

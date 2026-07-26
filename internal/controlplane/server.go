@@ -807,7 +807,7 @@ func (s *Server) HandlePolicies(w http.ResponseWriter, r *http.Request) {
 						peerID, err := identity.VerifyAndExtractPeerID(trustedKeys, biscuitBytes)
 						if err == nil {
 							nodeRecord, nodeErr := s.store.GetNode(r.Context(), peerID.String())
-							if nodeErr == nil && !nodeRecord.Banned {
+							if nodeErr == nil && nodeRecord != nil && !nodeRecord.Banned {
 								isNode = true
 							}
 						}
@@ -1736,6 +1736,9 @@ func (s *Server) HandleUserRevoke(w http.ResponseWriter, r *http.Request) {
 }
 
 func resolveRoles(peerID string, claims jwt.MapClaims, bindings []*api.PolicyBinding) []string {
+	if claims == nil {
+		claims = make(jwt.MapClaims)
+	}
 	oidcRoles := toStringSlice(claims["roles"])
 	oidcGroups := toStringSlice(claims["groups"])
 	oidcSub, _ := claims["sub"].(string)
