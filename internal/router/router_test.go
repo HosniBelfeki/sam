@@ -476,6 +476,7 @@ func TestRouterLeaseRenewalReEnrollOn401(t *testing.T) {
 	routerJWT := mintToken(map[string]interface{}{
 		"sub":    "router-reenroll-test",
 		"groups": []string{"routers"},
+		"roles":  []string{api.RoleRouter},
 	})
 
 	rOpts := Options{
@@ -543,6 +544,7 @@ func TestRouterProactiveRefreshReEnrollOn401(t *testing.T) {
 	routerJWT := mintToken(map[string]interface{}{
 		"sub":    "router-refresh-401-test",
 		"groups": []string{"routers"},
+		"roles":  []string{api.RoleRouter},
 	})
 
 	rOpts := Options{
