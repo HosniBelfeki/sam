@@ -513,3 +513,74 @@ func TestRouterLeaseRenewalReEnrollOn401(t *testing.T) {
 	}
 }
 
+func TestRouterReEnrollUninitializedHostGuard(t *testing.T) {
+	r := &Router{}
+	err := r.reEnroll()
+	if err == nil {
+		t.Fatal("expected reEnroll to return error when r.Host is nil, got nil")
+	}
+	expectedMsg := "cannot re-enroll: router host is not initialized"
+	if err.Error() != expectedMsg {
+		t.Fatalf("expected error %q, got %q", expectedMsg, err.Error())
+	}
+}
+
+func TestRouterProactiveRefreshReEnrollOn401(t *testing.T) {
+	issuer, mintToken := startCustomMockOIDC(t)
+	cp, cpStore, cpURL := setupControlPlane(t, issuer)
+	defer func() {
+		_ = cp.Close()
+		_ = cpStore.Close()
+	}()
+
+	tempDir := t.TempDir()
+	routerKeyPath := filepath.Join(tempDir, "router.key")
+
+	routerJWT := mintToken(map[string]interface{}{
+		"sub":    "router-refresh-401-test",
+		"groups": []string{"routers"},
+	})
+
+	rOpts := Options{
+		ControlPlaneURL:    cpURL,
+		ListenAddrs:        []string{"/ip4/127.0.0.1/tcp/0"},
+		KeysSyncInterval:   20 * time.Second,
+		LeaseRenewInterval: 20 * time.Second,
+		OIDCToken:          routerJWT,
+		KeysDBPath:         routerKeyPath,
+		AllowLoopback:      true,
+		BiscuitTimeout:     1 * time.Second,
+	}
+
+	r, err := NewRouter(context.Background(), rOpts)
+	if err != nil {
+		t.Fatalf("failed to create router: %v", err)
+	}
+
+	if err := r.Start(); err != nil {
+		t.Fatalf("failed to start router: %v", err)
+	}
+	defer func() { _ = r.Close() }()
+
+	// Corrupt router's biscuit token to simulate key rotation
+	r.keysMu.Lock()
+	r.biscuitToken = []byte("stale-biscuit-signed-by-purged-key")
+	r.keysMu.Unlock()
+
+	// Trigger proactive refresh which should fail with 401, trigger reEnroll, and succeed
+	err = r.RefreshEnrollment(context.Background())
+	if err != nil {
+		t.Fatalf("expected RefreshEnrollment to recover via reEnroll, but got error: %v", err)
+	}
+
+	// Verify that biscuitToken was replaced with a valid fresh token
+	r.keysMu.RLock()
+	currentToken := r.biscuitToken
+	r.keysMu.RUnlock()
+
+	if bytes.Equal(currentToken, []byte("stale-biscuit-signed-by-purged-key")) {
+		t.Error("expected biscuitToken to be updated after 401 refresh fallback, but it remained stale")
+	}
+}
+
+
