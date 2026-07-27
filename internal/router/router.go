@@ -456,6 +456,15 @@ func (r *Router) enrollBootstrap(peerID peer.ID) error {
 	return nil
 }
 
+func (r *Router) reEnroll() error {
+	if r.config.BootstrapToken != "" {
+		return r.enrollBootstrap(r.Host.ID())
+	} else if r.config.OIDCToken != "" {
+		return r.enroll(r.Host.ID())
+	}
+	return fmt.Errorf("no enrollment token available for re-enrollment")
+}
+
 func (r *Router) syncKeys() error {
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Get(r.config.ControlPlaneURL + "/keys")
@@ -577,6 +586,17 @@ func (r *Router) renewLease() {
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		body, _ := io.ReadAll(resp.Body)
+		logger.Warnf("Control plane lease renewal rejected (401 Unauthorized: %s), attempting re-enrollment...", string(body))
+		if err := r.reEnroll(); err != nil {
+			logger.Errorf("Re-enrollment failed after 401 Unauthorized lease renewal: %v", err)
+		} else {
+			logger.Info("Successfully re-enrolled after 401 Unauthorized lease renewal")
+		}
+		return
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -900,6 +920,12 @@ func (r *Router) RefreshEnrollment(ctx context.Context) error {
 		return fmt.Errorf("http request failed: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		body, _ := io.ReadAll(resp.Body)
+		logger.Warnf("Proactive biscuit refresh rejected (401 Unauthorized: %s), attempting re-enrollment...", string(body))
+		return r.reEnroll()
+	}
 
 	if resp.StatusCode == http.StatusForbidden {
 		logger.Errorf("Refresh rejected: Router is banned (403 Forbidden). Hard-killing router.")

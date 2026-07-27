@@ -457,3 +457,59 @@ func TestRouterProactiveTokenRefresh(t *testing.T) {
 		t.Errorf("expected refreshed expiration %v to be after initial expiration %v", r.biscuitExpiration, initialExpiration)
 	}
 }
+
+func TestRouterLeaseRenewalReEnrollOn401(t *testing.T) {
+	issuer, mintToken := startCustomMockOIDC(t)
+	cp, cpStore, cpURL := setupControlPlane(t, issuer)
+	defer func() {
+		_ = cp.Close()
+		_ = cpStore.Close()
+	}()
+
+	tempDir := t.TempDir()
+	routerKeyPath := filepath.Join(tempDir, "router.key")
+
+	routerJWT := mintToken(map[string]interface{}{
+		"sub":    "router-reenroll-test",
+		"groups": []string{"routers"},
+	})
+
+	rOpts := Options{
+		ControlPlaneURL:    cpURL,
+		ListenAddrs:        []string{"/ip4/127.0.0.1/tcp/0"},
+		KeysSyncInterval:   20 * time.Second,
+		LeaseRenewInterval: 20 * time.Second,
+		OIDCToken:          routerJWT,
+		KeysDBPath:         routerKeyPath,
+		AllowLoopback:      true,
+		BiscuitTimeout:     1 * time.Second,
+	}
+
+	r, err := NewRouter(context.Background(), rOpts)
+	if err != nil {
+		t.Fatalf("failed to create router: %v", err)
+	}
+
+	if err := r.Start(); err != nil {
+		t.Fatalf("failed to start router: %v", err)
+	}
+	defer func() { _ = r.Close() }()
+
+	// Corrupt router's biscuit token to simulate key rotation/expiration
+	r.keysMu.Lock()
+	r.biscuitToken = []byte("invalid-corrupted-biscuit")
+	r.keysMu.Unlock()
+
+	// Call renewLease which should fail with 401, trigger reEnroll, and succeed
+	r.renewLease()
+
+	// Verify that biscuitToken was replaced with a valid non-corrupted token
+	r.keysMu.RLock()
+	currentToken := r.biscuitToken
+	r.keysMu.RUnlock()
+
+	if bytes.Equal(currentToken, []byte("invalid-corrupted-biscuit")) {
+		t.Error("expected biscuitToken to be updated after 401 re-enrollment, but it remained corrupted")
+	}
+}
+
