@@ -37,6 +37,8 @@ spec:
       labels:
         app: sam-console
     spec:
+      nodeSelector:
+        sam-role: hub
       containers:
       - name: sam-console
         image: sam-console:${IMAGE_TAG}
