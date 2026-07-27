@@ -94,6 +94,7 @@ type Router struct {
 	biscuitExpiration time.Time
 	trustedPublicKeys []ed25519.PublicKey
 	keysMu            sync.RWMutex
+	enrollMu          sync.Mutex
 	privKey           crypto.PrivKey
 
 	// Control contexts
@@ -320,9 +321,9 @@ func (r *Router) enroll(peerID peer.ID) error {
 		return err
 	}
 
+	r.keysMu.Lock()
 	r.biscuitToken = enrollResp.BiscuitToken
 	r.biscuitExpiration = time.Unix(enrollResp.Expiration, 0)
-	r.keysMu.Lock()
 	r.trustedPublicKeys = []ed25519.PublicKey{enrollResp.HubPublicKey}
 	r.keysMu.Unlock()
 
@@ -442,9 +443,9 @@ func (r *Router) enrollBootstrap(peerID peer.ID) error {
 		return fmt.Errorf("enrollment not approved (status: %v)", enrollResp.Status)
 	}
 
+	r.keysMu.Lock()
 	r.biscuitToken = enrollResp.BiscuitToken
 	r.biscuitExpiration = time.Unix(enrollResp.Expiration, 0)
-	r.keysMu.Lock()
 	r.trustedPublicKeys = []ed25519.PublicKey{enrollResp.HubPublicKey}
 	r.keysMu.Unlock()
 
@@ -454,6 +455,22 @@ func (r *Router) enrollBootstrap(peerID peer.ID) error {
 
 	logger.Infof("Router bootstrap enrollment approved! Biscuit received.")
 	return nil
+}
+
+func (r *Router) reEnroll() error {
+	r.enrollMu.Lock()
+	defer r.enrollMu.Unlock()
+
+	if r.Host == nil {
+		return fmt.Errorf("cannot re-enroll: router host is not initialized")
+	}
+
+	if r.config.BootstrapToken != "" {
+		return r.enrollBootstrap(r.Host.ID())
+	} else if r.config.OIDCToken != "" {
+		return r.enroll(r.Host.ID())
+	}
+	return fmt.Errorf("no enrollment token available for re-enrollment")
 }
 
 func (r *Router) syncKeys() error {
@@ -534,7 +551,11 @@ func (r *Router) runLeaseRenewalLoop() {
 }
 
 func (r *Router) renewLease() {
-	if len(r.biscuitToken) == 0 {
+	r.keysMu.RLock()
+	biscuit := r.biscuitToken
+	r.keysMu.RUnlock()
+
+	if len(biscuit) == 0 {
 		logger.Warn("Cannot renew lease: router is not enrolled (no biscuit)")
 		return
 	}
@@ -564,7 +585,7 @@ func (r *Router) renewLease() {
 	req := &api.RouterLeaseRequest{
 		PeerId:         r.Host.ID().String(),
 		Addresses:      addrs,
-		Biscuit:        r.biscuitToken,
+		Biscuit:        biscuit,
 		ConnectedPeers: connectedPeers,
 		DhtSize:        dhtSize,
 	}
@@ -577,6 +598,18 @@ func (r *Router) renewLease() {
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		body, _ := io.ReadAll(resp.Body)
+		logger.Warnf("Control plane lease renewal rejected (401 Unauthorized: %s), attempting re-enrollment...", string(body))
+		if err := r.reEnroll(); err != nil {
+			logger.Errorf("Re-enrollment failed after 401 Unauthorized lease renewal: %v", err)
+			return
+		}
+		logger.Info("Successfully re-enrolled after 401 Unauthorized lease renewal, retrying lease renewal...")
+		r.renewLease()
+		return
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -718,10 +751,14 @@ func (r *Router) HandleAuthHandshake(s network.Stream) {
 	logger.Infof("[AuthN] Successfully authenticated peer %s", remotePeer)
 
 	// Send mutual response (our biscuit)
+	r.keysMu.RLock()
+	ourBiscuit := r.biscuitToken
+	r.keysMu.RUnlock()
+
 	writer := msgio.NewVarintWriter(s)
 	resp := &api.AuthResponse{
 		Success: true,
-		Biscuit: r.biscuitToken,
+		Biscuit: ourBiscuit,
 	}
 	respBytes, _ := proto.Marshal(resp)
 	if err := writer.WriteMsg(respBytes); err != nil {
@@ -859,10 +896,11 @@ func isLoopbackOrLinkLocal(addr multiaddr.Multiaddr) bool {
 
 // RefreshEnrollment trades the expiring biscuit token for a new one using a cryptographic challenge.
 func (r *Router) RefreshEnrollment(ctx context.Context) error {
-	r.keysMu.Lock()
-	defer r.keysMu.Unlock()
+	r.keysMu.RLock()
+	currentBiscuit := r.biscuitToken
+	r.keysMu.RUnlock()
 
-	if len(r.biscuitToken) == 0 {
+	if len(currentBiscuit) == 0 {
 		return fmt.Errorf("router not enrolled (no biscuit)")
 	}
 
@@ -890,8 +928,7 @@ func (r *Router) RefreshEnrollment(ctx context.Context) error {
 		return fmt.Errorf("failed to create http request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/x-protobuf")
-	// Set current biscuit in authorization header
-	b64Biscuit := base64.StdEncoding.EncodeToString(r.biscuitToken)
+	b64Biscuit := base64.StdEncoding.EncodeToString(currentBiscuit)
 	httpReq.Header.Set("Authorization", "Bearer "+b64Biscuit)
 
 	client := &http.Client{Timeout: 10 * time.Second}
@@ -900,6 +937,12 @@ func (r *Router) RefreshEnrollment(ctx context.Context) error {
 		return fmt.Errorf("http request failed: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		body, _ := io.ReadAll(resp.Body)
+		logger.Warnf("Proactive biscuit refresh rejected (401 Unauthorized: %s), attempting re-enrollment...", string(body))
+		return r.reEnroll()
+	}
 
 	if resp.StatusCode == http.StatusForbidden {
 		logger.Errorf("Refresh rejected: Router is banned (403 Forbidden). Hard-killing router.")
@@ -928,9 +971,12 @@ func (r *Router) RefreshEnrollment(ctx context.Context) error {
 		return fmt.Errorf("refresh error: %s", refreshResp.ErrorMessage)
 	}
 
-	// Update local biscuit token and expiration
+	// Update local biscuit token and expiration under lock
+	r.keysMu.Lock()
 	r.biscuitToken = refreshResp.BiscuitToken
 	r.biscuitExpiration = time.Unix(refreshResp.ExpiresAt, 0)
+	r.keysMu.Unlock()
+
 	logger.Infof("Router biscuit token refreshed successfully.")
 	return nil
 }

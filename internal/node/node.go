@@ -638,13 +638,13 @@ func (n *SamNode) startConnectionMonitor(ctx context.Context, bootstrapDuration,
 }
 
 func (n *SamNode) RegisterStaticServices(ctx context.Context, services []api.ServiceConfig) error {
-	// Wait for DHT to be ready (size > 0)
+	// Wait for node to be connected to a hub or DHT to be ready
 	// This avoids failure if we try to register immediately after enrollment
-	// before the DHT has discovered peers.
+	// before the connection is established.
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 
-	timeout := time.After(10 * time.Second) // 10 seconds timeout for DHT readiness
+	timeout := time.After(10 * time.Second)
 
 dhtLoop:
 	for {
@@ -654,7 +654,7 @@ dhtLoop:
 		case <-timeout:
 			return fmt.Errorf("timeout waiting for DHT to be ready before registering static services")
 		case <-ticker.C:
-			if n.DHT.RoutingTable().Size() > 0 {
+			if n.IsConnected() || (n.DHT != nil && n.DHT.RoutingTable().Size() > 0) {
 				break dhtLoop
 			}
 		}

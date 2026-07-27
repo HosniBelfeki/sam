@@ -150,6 +150,10 @@ func (n *SamNode) Enroll(ctx context.Context, hubURL string, jwt string) error {
 	n.keysMu.Unlock()
 
 	// Connect and Auth to hub after enrollment to join the mesh
+	if len(enrollResp.HubAddresses) == 0 {
+		return fmt.Errorf("failed to connect and authenticate after HTTP enrollment: control plane returned no hub addresses")
+	}
+
 	var lastAuthErr error
 	var authed bool
 	for _, addrStr := range enrollResp.HubAddresses {
@@ -329,6 +333,10 @@ func (n *SamNode) EnrollBootstrap(ctx context.Context, hubURL string, bootstrapT
 	n.keysMu.Unlock()
 
 	// Connect and Auth to hub after enrollment to join the mesh
+	if len(enrollResp.HubAddresses) == 0 {
+		return fmt.Errorf("failed to connect and authenticate after bootstrap enrollment: control plane returned no hub addresses")
+	}
+
 	var lastAuthErr error
 	var authed bool
 	for _, addrStr := range enrollResp.HubAddresses {
