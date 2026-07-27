@@ -80,5 +80,7 @@ spec:
   - name: http
     port: 5556
     targetPort: 5556
-    nodePort: 30556
+    {{- if .Values.dex.nodePort }}
+    nodePort: {{ .Values.dex.nodePort }}
+    {{- end }}
 {{- end }}

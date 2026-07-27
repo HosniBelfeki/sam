@@ -680,4 +680,8 @@ func TestRouterGossipSubBannedEvent(t *testing.T) {
 	if !evicted {
 		t.Errorf("expected peer %s to be evicted from authenticatedPeers upon receiving MeshEvent_BANNED", bannedPeerIDStr)
 	}
+
+	if _, banned := r.bannedPeers.Load(bannedPeerID); !banned {
+		t.Errorf("expected peer %s to be stored in bannedPeers blocklist upon receiving MeshEvent_BANNED", bannedPeerIDStr)
+	}
 }

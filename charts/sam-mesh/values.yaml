@@ -55,6 +55,7 @@ console:
 
 dex:
   enabled: false
+  nodePort: 30556
   image:
     repository: dexidp/dex
     tag: v2.39.0

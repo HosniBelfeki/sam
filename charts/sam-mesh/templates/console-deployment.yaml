@@ -30,7 +30,7 @@ spec:
           name: http
           protocol: TCP
         args:
-        - "--hub=http://{{ include "sam-mesh.fullname" . }}-control-plane:8080"
+        - "--hub=http://{{ include "sam-mesh.fullname" . }}-control-plane:{{ .Values.controlPlane.service.port }}"
         - "--bind-addr=:8081"
         - "--static-dir=/app/public"
         - "--admin-token=$(ADMIN_TOKEN)"
