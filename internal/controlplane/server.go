@@ -63,7 +63,9 @@ type Server struct {
 	httpServer *http.Server
 	listener   net.Listener
 	limiter    *rate.Limiter
-	mesh       MeshAdapter
+
+	meshMu sync.RWMutex
+	mesh   MeshAdapter
 
 	providersMu sync.RWMutex
 	providers   map[string]*oidc.Provider
@@ -97,8 +99,16 @@ func NewServer(config Options, store storage.Store) (*Server, error) {
 // SetMeshAdapter sets a custom MeshAdapter implementation for the control plane.
 func (s *Server) SetMeshAdapter(m MeshAdapter) {
 	if m != nil {
+		s.meshMu.Lock()
 		s.mesh = m
+		s.meshMu.Unlock()
 	}
+}
+
+func (s *Server) getMeshAdapter() MeshAdapter {
+	s.meshMu.RLock()
+	defer s.meshMu.RUnlock()
+	return s.mesh
 }
 
 // Start boots up HTTP services, sets up OIDC providers, loads initial keys and policies, and schedules rotations.
@@ -231,7 +241,7 @@ func (s *Server) runKeyRotationLoop() {
 				logger.Errorf("Failed to rotate keyring: %v", err)
 			} else {
 				logger.Infof("Key rotation committed. New current public key: %s", hex.EncodeToString(newPub))
-				if err := s.mesh.PublishEvent(s.ctx, api.MeshEvent_KEY_ROTATION, "", newPub); err != nil {
+				if err := s.getMeshAdapter().PublishEvent(s.ctx, api.MeshEvent_KEY_ROTATION, "", newPub); err != nil {
 					logger.Warnf("Failed to publish KEY_ROTATION event to mesh: %v", err)
 				}
 			}
@@ -872,7 +882,7 @@ func (s *Server) HandlePolicies(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if err := s.mesh.PublishEvent(r.Context(), api.MeshEvent_POLICY_UPDATE, "", nil); err != nil {
+		if err := s.getMeshAdapter().PublishEvent(r.Context(), api.MeshEvent_POLICY_UPDATE, "", nil); err != nil {
 			logger.Warnf("Failed to publish POLICY_UPDATE event to mesh: %v", err)
 		}
 
@@ -1493,7 +1503,7 @@ func (s *Server) HandleAdminRevoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.mesh.PublishEvent(ctx, api.MeshEvent_BANNED, req.PeerId, nil); err != nil {
+	if err := s.getMeshAdapter().PublishEvent(ctx, api.MeshEvent_BANNED, req.PeerId, nil); err != nil {
 		logger.Warnf("Failed to publish BANNED event for node %s to mesh: %v", req.PeerId, err)
 	}
 
@@ -1731,7 +1741,7 @@ func (s *Server) HandleUserRevoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.mesh.PublishEvent(ctx, api.MeshEvent_BANNED, peerID, nil); err != nil {
+	if err := s.getMeshAdapter().PublishEvent(ctx, api.MeshEvent_BANNED, peerID, nil); err != nil {
 		logger.Warnf("Failed to publish BANNED event for node %s to mesh: %v", peerID, err)
 	}
 

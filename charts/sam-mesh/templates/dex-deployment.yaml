@@ -7,7 +7,7 @@ metadata:
     {{- include "sam-mesh.labels" . | nindent 4 }}
 data:
   config.yaml: |
-    issuer: http://dex:5556/dex
+    issuer: http://{{ include "sam-mesh.fullname" . }}-dex:5556/dex
     storage:
       type: memory
     web:
@@ -69,7 +69,7 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: dex
+  name: {{ include "sam-mesh.fullname" . }}-dex
   labels:
     {{- include "sam-mesh.labels" . | nindent 4 }}
 spec:
