@@ -88,7 +88,7 @@ spec:
               (dict "role" "sam:role:node" "members" (list "group:data-scientist" "group:users"))
             -}}
           {{- end }}
-          curl -s -X POST \
+          curl -sf -X POST \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${ADMIN_TOKEN}" \
             -d '{
@@ -104,7 +104,7 @@ spec:
 
 
           echo "Generating bootstrap token for sam-router..."
-          TOKEN_RESP=$(curl -s -X POST \
+          TOKEN_RESP=$(curl -sf -X POST \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${ADMIN_TOKEN}" \
             -d '{"role": "sam:role:router", "max_usages": 999999}' \

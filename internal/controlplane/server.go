@@ -860,7 +860,8 @@ func (s *Server) HandlePolicies(w http.ResponseWriter, r *http.Request) {
 
 		var req api.PolicyConfigUpdateRequest
 		if strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
-			if err := protojson.Unmarshal(body, &req); err != nil {
+			unmarshaler := protojson.UnmarshalOptions{DiscardUnknown: true}
+			if err := unmarshaler.Unmarshal(body, &req); err != nil {
 				http.Error(w, "Invalid JSON format: "+err.Error(), http.StatusBadRequest)
 				return
 			}

@@ -58,6 +58,22 @@ func NewSQLStore(driverName, dataSourceName string) (*SQLStore, error) {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
+	// For postgres, retry Ping() to allow DB container to finish booting
+	if actualDriver == "pgx" {
+		var pingErr error
+		for i := 0; i < 30; i++ {
+			pingErr = db.Ping()
+			if pingErr == nil {
+				break
+			}
+			time.Sleep(1 * time.Second)
+		}
+		if pingErr != nil {
+			_ = db.Close()
+			return nil, fmt.Errorf("failed to ping database: %w", pingErr)
+		}
+	}
+
 	store := &SQLStore{
 		db:         db,
 		driverName: driverName,
