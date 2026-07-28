@@ -22,16 +22,16 @@ jobs:
     
     steps:
     - name: Check out code
-      uses: actions/checkout@v7
+      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4
 
     - name: Set up QEMU
-      uses: docker/setup-qemu-action@v4
+      uses: docker/setup-qemu-action@49b01bf25dbe86754d6834998893f985b1cdd909 # v3
 
     - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v4
+      uses: docker/setup-buildx-action@c47758b77c9736f4b2ef4073d4d51994fabfe349 # v3
 
     - name: Log in to the Container registry
-      uses: docker/login-action@v4
+      uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3
       with:
         registry: ${{ env.REGISTRY }}
         username: ${{ github.actor }}
@@ -39,7 +39,7 @@ jobs:
 
     - name: Extract metadata for Control Plane
       id: meta-cp
-      uses: docker/metadata-action@v6
+      uses: docker/metadata-action@369eb7b3465779317d8f9947d6748247341201d1 # v5
       with:
         images: ${{ env.REGISTRY }}/google/sam-control-plane
         tags: |
@@ -50,7 +50,7 @@ jobs:
           type=raw,value=stable,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
 
     - name: Build and push Control Plane image
-      uses: docker/build-push-action@v7
+      uses: docker/build-push-action@48aba3b46d1b1fec4fedd7fb7256842ce0913ea8 # v6
       with:
         context: .
         file: Dockerfile.sam-control-plane
@@ -61,7 +61,7 @@ jobs:
 
     - name: Extract metadata for Router
       id: meta-router
-      uses: docker/metadata-action@v6
+      uses: docker/metadata-action@369eb7b3465779317d8f9947d6748247341201d1 # v5
       with:
         images: ${{ env.REGISTRY }}/google/sam-router
         tags: |
@@ -72,7 +72,7 @@ jobs:
           type=raw,value=stable,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
 
     - name: Build and push Router image
-      uses: docker/build-push-action@v7
+      uses: docker/build-push-action@48aba3b46d1b1fec4fedd7fb7256842ce0913ea8 # v6
       with:
         context: .
         file: Dockerfile.sam-router
@@ -83,7 +83,7 @@ jobs:
 
     - name: Extract metadata for Node
       id: meta-node
-      uses: docker/metadata-action@v6
+      uses: docker/metadata-action@369eb7b3465779317d8f9947d6748247341201d1 # v5
       with:
         images: ${{ env.REGISTRY }}/google/sam-node
         tags: |
@@ -94,7 +94,7 @@ jobs:
           type=raw,value=stable,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
 
     - name: Build and push Node image
-      uses: docker/build-push-action@v7
+      uses: docker/build-push-action@48aba3b46d1b1fec4fedd7fb7256842ce0913ea8 # v6
       with:
         context: .
         file: Dockerfile.sam-node
@@ -105,7 +105,7 @@ jobs:
 
     - name: Extract metadata for nano-init
       id: meta-nano-init
-      uses: docker/metadata-action@v6
+      uses: docker/metadata-action@369eb7b3465779317d8f9947d6748247341201d1 # v5
       with:
         images: ${{ env.REGISTRY }}/google/sam-nano-init
         tags: |
@@ -116,7 +116,7 @@ jobs:
           type=raw,value=stable,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
 
     - name: Build and push nano-init image
-      uses: docker/build-push-action@v7
+      uses: docker/build-push-action@48aba3b46d1b1fec4fedd7fb7256842ce0913ea8 # v6
       with:
         context: .
         file: Dockerfile.nano-init
@@ -127,7 +127,7 @@ jobs:
 
     - name: Extract metadata for sam-box
       id: meta-sambox
-      uses: docker/metadata-action@v6
+      uses: docker/metadata-action@369eb7b3465779317d8f9947d6748247341201d1 # v5
       with:
         images: ${{ env.REGISTRY }}/google/sam-box
         tags: |
@@ -138,7 +138,7 @@ jobs:
           type=raw,value=stable,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
 
     - name: Build and push sam-box image
-      uses: docker/build-push-action@v7
+      uses: docker/build-push-action@48aba3b46d1b1fec4fedd7fb7256842ce0913ea8 # v6
       with:
         context: .
         file: Dockerfile.sam-box
@@ -149,7 +149,7 @@ jobs:
 
     - name: Extract metadata for sam-console
       id: meta-console
-      uses: docker/metadata-action@v6
+      uses: docker/metadata-action@369eb7b3465779317d8f9947d6748247341201d1 # v5
       with:
         images: ${{ env.REGISTRY }}/google/sam-console
         tags: |
@@ -160,7 +160,7 @@ jobs:
           type=raw,value=stable,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
 
     - name: Build and push sam-console image
-      uses: docker/build-push-action@v7
+      uses: docker/build-push-action@48aba3b46d1b1fec4fedd7fb7256842ce0913ea8 # v6
       with:
         context: .
         file: Dockerfile.sam-console
@@ -181,31 +181,37 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4
 
       - name: Determine Image Tag
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          COMMIT_SHA: ${{ github.sha }}
         run: |
-          if [[ "${{ github.ref_type }}" == "tag" ]]; then
-            echo "IMAGE_TAG=${{ github.ref_name }}" >> $GITHUB_ENV
+          if [[ "${REF_TYPE}" == "tag" ]]; then
+            echo "IMAGE_TAG=${REF_NAME}" >> $GITHUB_ENV
           else
-            echo "IMAGE_TAG=${{ github.sha }}" >> $GITHUB_ENV
+            echo "IMAGE_TAG=${COMMIT_SHA}" >> $GITHUB_ENV
           fi
 
       - name: Google Auth
-        uses: google-github-actions/auth@v3
+        uses: google-github-actions/auth@6fc4af4b145ae7821d527454aa9bd537d1f2dc5f # v2
         with:
           workload_identity_provider: ${{ vars.WIF_PROVIDER_NAME }}
           service_account: ${{ vars.SERVICE_ACCOUNT_EMAIL }}
 
       - name: Set up GKE credentials
-        uses: google-github-actions/get-gke-credentials@v3
+        uses: google-github-actions/get-gke-credentials@6051730f96f35243335f608775ae785501f2f65a # v2
         with:
           cluster_name: ${{ vars.CLUSTER_NAME }}
           location: ${{ vars.CLUSTER_REGION }}
 
       - name: Prepare Namespaces
+        env:
+          VAR_ENV_NAME: ${{ vars.ENV_NAME }}
         run: |
-          export ENV_NAME="${{ vars.ENV_NAME }}"
+          export ENV_NAME="${VAR_ENV_NAME}"
           export NAMESPACE="sam-${ENV_NAME}"
           export CANARY_NAMESPACE="sam-canary-${ENV_NAME}"
           
@@ -272,8 +278,10 @@ jobs:
           }
 
       - name: Provision Hub Secrets
+        env:
+          VAR_ENV_NAME: ${{ vars.ENV_NAME }}
         run: |
-          export ENV_NAME="${{ vars.ENV_NAME }}"
+          export ENV_NAME="${VAR_ENV_NAME}"
           export NAMESPACE="sam-${ENV_NAME}"
           # Idempotently provision the sam-hub-secret if it doesn't already exist
           if ! kubectl get secret sam-hub-secret -n ${NAMESPACE} >/dev/null 2>&1; then
@@ -286,11 +294,11 @@ jobs:
             echo "sam-hub-secret already exists in namespace ${NAMESPACE}. Skipping generation."
           fi
 
-
-
       - name: Provision Control Plane Secrets
+        env:
+          VAR_ENV_NAME: ${{ vars.ENV_NAME }}
         run: |
-          export ENV_NAME="${{ vars.ENV_NAME }}"
+          export ENV_NAME="${VAR_ENV_NAME}"
           export NAMESPACE="sam-${ENV_NAME}"
           if ! kubectl get secret sam-control-plane-secret-${ENV_NAME} -n ${NAMESPACE} >/dev/null 2>&1; then
             echo "Generating a new random 32-byte hex key for admin-token..."
@@ -303,6 +311,12 @@ jobs:
           fi
 
       - name: Deploy Control Plane and Routers
+        env:
+          VAR_ENV_NAME: ${{ vars.ENV_NAME }}
+          VAR_IMAGE_TAG: ${{ env.IMAGE_TAG }}
+          VAR_GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          VAR_CLUSTER_REGION: ${{ vars.CLUSTER_REGION }}
+          VAR_CLUSTER_NAME: ${{ vars.CLUSTER_NAME }}
         run: |
           print_rollout_diagnostics() {
             local namespace="$1"
@@ -329,12 +343,12 @@ jobs:
 
           sudo apt-get install -y gettext-base
           
-          export ENV_NAME="${{ vars.ENV_NAME }}"
+          export ENV_NAME="${VAR_ENV_NAME}"
           export NAMESPACE="sam-${ENV_NAME}"
-          export IMAGE_TAG="${{ env.IMAGE_TAG }}"
-          export GCP_PROJECT_ID="${{ vars.GCP_PROJECT_ID }}"
-          export CLUSTER_REGION="${{ vars.CLUSTER_REGION }}"
-          export CLUSTER_NAME="${{ vars.CLUSTER_NAME }}"
+          export IMAGE_TAG="${VAR_IMAGE_TAG}"
+          export GCP_PROJECT_ID="${VAR_GCP_PROJECT_ID}"
+          export CLUSTER_REGION="${VAR_CLUSTER_REGION}"
+          export CLUSTER_NAME="${VAR_CLUSTER_NAME}"
 
           envsubst '${ENV_NAME} ${NAMESPACE} ${GCP_PROJECT_ID} ${CLUSTER_NAME} ${CLUSTER_REGION} ${IMAGE_TAG}' < .github/k8s/sam-control-plane-template.yaml | kubectl apply -f -
           envsubst '${ENV_NAME} ${NAMESPACE} ${GCP_PROJECT_ID} ${CLUSTER_NAME} ${CLUSTER_REGION} ${IMAGE_TAG}' < .github/k8s/sam-router-template.yaml | kubectl apply -f -
@@ -411,12 +425,17 @@ jobs:
 
 
       - name: Deploy GCE VM Router
+        env:
+          VAR_ENV_NAME: ${{ vars.ENV_NAME }}
+          VAR_IMAGE_TAG: ${{ env.IMAGE_TAG }}
+          VAR_GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          VAR_CLUSTER_REGION: ${{ vars.CLUSTER_REGION }}
         run: |
-          export ENV_NAME="${{ vars.ENV_NAME }}"
+          export ENV_NAME="${VAR_ENV_NAME}"
           export NAMESPACE="sam-${ENV_NAME}"
-          export IMAGE_TAG="${{ env.IMAGE_TAG }}"
-          export GCP_PROJECT_ID="${{ vars.GCP_PROJECT_ID }}"
-          export CLUSTER_REGION="${{ vars.CLUSTER_REGION }}"
+          export IMAGE_TAG="${VAR_IMAGE_TAG}"
+          export GCP_PROJECT_ID="${VAR_GCP_PROJECT_ID}"
+          export CLUSTER_REGION="${VAR_CLUSTER_REGION}"
           export ZONE="${CLUSTER_REGION}-a"
 
           echo "Retrieving Admin Token to generate Bootstrap Token..."
@@ -489,6 +508,11 @@ jobs:
 
 
       - name: Deploy Canaries
+        env:
+          VAR_ENV_NAME: ${{ vars.ENV_NAME }}
+          VAR_IMAGE_TAG: ${{ env.IMAGE_TAG }}
+          VAR_GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          VAR_HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           print_rollout_diagnostics() {
             local namespace="$1"
@@ -513,12 +537,12 @@ jobs:
             done
           }
 
-          export ENV_NAME="${{ vars.ENV_NAME }}"
+          export ENV_NAME="${VAR_ENV_NAME}"
           export CANARY_NAMESPACE="sam-canary-${ENV_NAME}"
           export NAMESPACE="sam-${ENV_NAME}"
-          export IMAGE_TAG="${{ env.IMAGE_TAG }}"
-          export GEMINI_API_KEY="${{ secrets.GEMINI_API_KEY }}"
-          export HF_TOKEN="${{ secrets.HF_TOKEN }}"
+          export IMAGE_TAG="${VAR_IMAGE_TAG}"
+          export GEMINI_API_KEY="${VAR_GEMINI_API_KEY}"
+          export HF_TOKEN="${VAR_HF_TOKEN}"
           
           # Read and indent banana bot playground script for the ConfigMap template
           export BANANA_BOT_SCRIPT=$(cat site/content/docs/snippets/banana_bot_playground.py | sed 's/^/    /')
@@ -598,6 +622,8 @@ jobs:
       - name: Deploy OpenRouter Node to Testnet
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          VAR_ENV_NAME: ${{ vars.ENV_NAME }}
+          VAR_IMAGE_TAG: ${{ env.IMAGE_TAG }}
         run: |
           print_rollout_diagnostics() {
             local namespace="$1"
@@ -622,10 +648,10 @@ jobs:
             done
           }
 
-          export ENV_NAME="${{ vars.ENV_NAME }}"
+          export ENV_NAME="${VAR_ENV_NAME}"
           export NAMESPACE="sam-${ENV_NAME}"
           export CANARY_NAMESPACE="sam-canary-${ENV_NAME}"
-          export IMAGE_TAG="${{ env.IMAGE_TAG }}"
+          export IMAGE_TAG="${VAR_IMAGE_TAG}"
           
           # Substitute the API key and other variables into the template and apply it to the cluster
           envsubst < .github/k8s/sam-node-openrouter-template.yaml | kubectl apply -f -
