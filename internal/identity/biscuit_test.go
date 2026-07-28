@@ -511,7 +511,7 @@ func TestVerifyAndExtractPeerID_MultipleTrustedKeys(t *testing.T) {
 	// trustedPublicKeys has pub1 first, pub2 second (pub2 is the signer)
 	trustedKeys := []ed25519.PublicKey{pub1, pub2}
 
-	extractedPeer, err := VerifyAndExtractPeerID(trustedKeys, biscuitData)
+	extractedPeer, err := VerifyAndExtractPeerID(trustedKeys, biscuitData, 5*time.Second)
 	if err != nil {
 		t.Fatalf("VerifyAndExtractPeerID failed with multiple trusted keys: %v", err)
 	}

@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"github.com/biscuit-auth/biscuit-go/v2"
+	"github.com/biscuit-auth/biscuit-go/v2/datalog"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/sam/api"
 	"github.com/google/sam/internal/node"
@@ -631,7 +632,7 @@ func TestEnrollmentWorkflow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to unmarshal biscuit: %v", err)
 	}
-	authorizer, err := b.Authorizer(cpPub)
+	authorizer, err := b.Authorizer(cpPub, biscuit.WithWorldOptions(datalog.WithMaxDuration(srv.config.BiscuitTimeout)))
 	if err != nil {
 		t.Fatal(err)
 	}

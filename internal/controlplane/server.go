@@ -508,7 +508,7 @@ func (s *Server) HandleRefresh(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Verify current biscuit signature and extract peer ID
-	pID, err := identity.VerifyAndExtractPeerID(trustedKeys, currentBiscuitBytes)
+	pID, err := identity.VerifyAndExtractPeerID(trustedKeys, currentBiscuitBytes, s.config.BiscuitTimeout)
 	if err != nil {
 		logger.Warnw("Invalid biscuit presented for refresh", "error", err)
 		http.Error(w, "Invalid biscuit: "+err.Error(), http.StatusUnauthorized)
@@ -814,7 +814,7 @@ func (s *Server) HandlePolicies(w http.ResponseWriter, r *http.Request) {
 						for _, k := range validKeys {
 							trustedKeys = append(trustedKeys, k.Public)
 						}
-						peerID, err := identity.VerifyAndExtractPeerID(trustedKeys, biscuitBytes)
+						peerID, err := identity.VerifyAndExtractPeerID(trustedKeys, biscuitBytes, s.config.BiscuitTimeout)
 						if err == nil {
 							nodeRecord, nodeErr := s.store.GetNode(r.Context(), peerID.String())
 							if nodeErr == nil && nodeRecord != nil && !nodeRecord.Banned {

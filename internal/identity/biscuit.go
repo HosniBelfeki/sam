@@ -332,10 +332,15 @@ func MintBootstrapBiscuitToken(signingKey ed25519.PrivateKey, remotePeer peer.ID
 
 // VerifyAndExtractPeerID checks that the biscuit is signed by one of the trusted keys and returns the peer ID.
 // This function does NOT perform time checks, making it suitable for token refresh flows.
-func VerifyAndExtractPeerID(trustedPublicKeys []ed25519.PublicKey, biscuitData []byte) (peer.ID, error) {
+func VerifyAndExtractPeerID(trustedPublicKeys []ed25519.PublicKey, biscuitData []byte, timeout time.Duration) (peer.ID, error) {
 	b, err := biscuit.Unmarshal(biscuitData)
 	if err != nil {
 		return "", fmt.Errorf("malformed biscuit: %w", err)
+	}
+
+	var authOpts []biscuit.AuthorizerOption
+	if timeout > 0 {
+		authOpts = append(authOpts, biscuit.WithWorldOptions(datalog.WithMaxDuration(timeout)))
 	}
 
 	var authorizer biscuit.Authorizer
@@ -343,7 +348,7 @@ func VerifyAndExtractPeerID(trustedPublicKeys []ed25519.PublicKey, biscuitData [
 	var lastErr error
 
 	for _, pubKey := range trustedPublicKeys {
-		auth, err := b.Authorizer(pubKey)
+		auth, err := b.Authorizer(pubKey, authOpts...)
 		if err != nil {
 			lastErr = err
 			continue

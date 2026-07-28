@@ -41,7 +41,7 @@ metadata:
   labels:
     {{- include "sam-mesh.labels" . | nindent 4 }}
 spec:
-  activeDeadlineSeconds: 120
+  activeDeadlineSeconds: 300
   template:
     metadata:
       labels:
