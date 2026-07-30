@@ -42,6 +42,8 @@ jobs:
 
       - name: Install kind and kubectl
         run: |
+          sudo sysctl fs.inotify.max_user_watches=524288 || true
+          sudo sysctl fs.inotify.max_user_instances=512 || true
           go install sigs.k8s.io/kind@latest
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
           curl -sSLo /tmp/kubectl "https://dl.k8s.io/release/$(curl -sL https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
