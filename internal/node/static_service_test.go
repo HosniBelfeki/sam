@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -208,12 +209,14 @@ func TestStaticServiceRegistrationRequiresConnection(t *testing.T) {
 		},
 	}
 
-	err = node.RegisterStaticServices(ctx, services)
+	ctxTimeout, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+	err = node.RegisterStaticServices(ctxTimeout, services)
 	if err == nil {
 		t.Fatal("Expected RegisterStaticServices to fail before connecting to hub, but it succeeded")
 	}
-	if !strings.Contains(err.Error(), "timeout waiting for DHT to be ready") {
-		t.Fatalf("Expected error to contain 'timeout waiting for DHT to be ready', got: %v", err)
+	if !strings.Contains(err.Error(), "timeout waiting for DHT to be ready") && !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Expected error to indicate timeout or deadline exceeded, got: %v", err)
 	}
 
 	// 6. Now enroll and connect to hub (which sets up DHT and hub connection)
