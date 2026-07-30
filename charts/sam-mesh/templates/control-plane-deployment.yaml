@@ -14,13 +14,6 @@ spec:
       labels:
         app: {{ include "sam-mesh.fullname" . }}-control-plane
     spec:
-      {{- if .Values.database.postgres.deployInternal }}
-      initContainers:
-      - name: wait-for-db
-        image: busybox:1.36.1
-        imagePullPolicy: {{ .Values.global.imagePullPolicy }}
-        command: ['sh', '-c', 'until nc -w3 {{ include "sam-mesh.fullname" . }}-db {{ .Values.database.postgres.port | default 5432 }} </dev/null; do echo waiting for db; sleep 1; done']
-      {{- end }}
       containers:
       - name: sam-control-plane
         image: "{{ .Values.controlPlane.image.repository }}:{{ .Values.global.imageTag }}"

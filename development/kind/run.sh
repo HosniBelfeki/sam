@@ -155,7 +155,7 @@ echo "== Applying namespace and RBAC cluster rules =="
 envsubst '${NAMESPACE}' < "${SCRIPT_DIR}/00-namespace-rbac.yaml" | kubectl --context "${KCTX}" apply -f -
 
 echo "== Deploying SAM Mesh via Helm =="
-"${HELM}" --kube-context "${KCTX}" upgrade --install sam-mesh "${PROJECT_ROOT}/charts/sam-mesh" \
+"${HELM}" --kube-context "${KCTX}" upgrade --install sam-mesh "${PROJECT_ROOT}/charts/sam-mesh" --timeout 10m \
   --namespace "${NAMESPACE}" \
   --set global.imageTag="${IMAGE_TAG}" \
   --set controlPlane.oidcIssuer="${CONTROL_PLANE_ISSUERS//,/\\,}" \
