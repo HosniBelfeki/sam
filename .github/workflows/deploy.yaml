@@ -23,9 +23,11 @@ jobs:
     steps:
     - name: Check out code
       uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4
+      with:
+        persist-credentials: false
 
     - name: Set up QEMU
-      uses: docker/setup-qemu-action@49b01bf25dbe86754d6834998893f985b1cdd909 # v3
+      uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
 
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@c47758b77c9736f4b2ef4073d4d51994fabfe349 # v3
@@ -39,7 +41,7 @@ jobs:
 
     - name: Extract metadata for Control Plane
       id: meta-cp
-      uses: docker/metadata-action@369eb7b3465779317d8f9947d6748247341201d1 # v5
+      uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
       with:
         images: ${{ env.REGISTRY }}/google/sam-control-plane
         tags: |
@@ -50,7 +52,7 @@ jobs:
           type=raw,value=stable,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
 
     - name: Build and push Control Plane image
-      uses: docker/build-push-action@48aba3b46d1b1fec4fedd7fb7256842ce0913ea8 # v6
+      uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
       with:
         context: .
         file: Dockerfile.sam-control-plane
@@ -61,7 +63,7 @@ jobs:
 
     - name: Extract metadata for Router
       id: meta-router
-      uses: docker/metadata-action@369eb7b3465779317d8f9947d6748247341201d1 # v5
+      uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
       with:
         images: ${{ env.REGISTRY }}/google/sam-router
         tags: |
@@ -72,7 +74,7 @@ jobs:
           type=raw,value=stable,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
 
     - name: Build and push Router image
-      uses: docker/build-push-action@48aba3b46d1b1fec4fedd7fb7256842ce0913ea8 # v6
+      uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
       with:
         context: .
         file: Dockerfile.sam-router
@@ -83,7 +85,7 @@ jobs:
 
     - name: Extract metadata for Node
       id: meta-node
-      uses: docker/metadata-action@369eb7b3465779317d8f9947d6748247341201d1 # v5
+      uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
       with:
         images: ${{ env.REGISTRY }}/google/sam-node
         tags: |
@@ -94,7 +96,7 @@ jobs:
           type=raw,value=stable,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
 
     - name: Build and push Node image
-      uses: docker/build-push-action@48aba3b46d1b1fec4fedd7fb7256842ce0913ea8 # v6
+      uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
       with:
         context: .
         file: Dockerfile.sam-node
@@ -105,7 +107,7 @@ jobs:
 
     - name: Extract metadata for nano-init
       id: meta-nano-init
-      uses: docker/metadata-action@369eb7b3465779317d8f9947d6748247341201d1 # v5
+      uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
       with:
         images: ${{ env.REGISTRY }}/google/sam-nano-init
         tags: |
@@ -116,7 +118,7 @@ jobs:
           type=raw,value=stable,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
 
     - name: Build and push nano-init image
-      uses: docker/build-push-action@48aba3b46d1b1fec4fedd7fb7256842ce0913ea8 # v6
+      uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
       with:
         context: .
         file: Dockerfile.nano-init
@@ -127,7 +129,7 @@ jobs:
 
     - name: Extract metadata for sam-box
       id: meta-sambox
-      uses: docker/metadata-action@369eb7b3465779317d8f9947d6748247341201d1 # v5
+      uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
       with:
         images: ${{ env.REGISTRY }}/google/sam-box
         tags: |
@@ -138,7 +140,7 @@ jobs:
           type=raw,value=stable,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
 
     - name: Build and push sam-box image
-      uses: docker/build-push-action@48aba3b46d1b1fec4fedd7fb7256842ce0913ea8 # v6
+      uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
       with:
         context: .
         file: Dockerfile.sam-box
@@ -149,7 +151,7 @@ jobs:
 
     - name: Extract metadata for sam-console
       id: meta-console
-      uses: docker/metadata-action@369eb7b3465779317d8f9947d6748247341201d1 # v5
+      uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
       with:
         images: ${{ env.REGISTRY }}/google/sam-console
         tags: |
@@ -160,7 +162,7 @@ jobs:
           type=raw,value=stable,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
 
     - name: Build and push sam-console image
-      uses: docker/build-push-action@48aba3b46d1b1fec4fedd7fb7256842ce0913ea8 # v6
+      uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
       with:
         context: .
         file: Dockerfile.sam-console
@@ -182,6 +184,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4
+        with:
+          persist-credentials: false
 
       - name: Determine Image Tag
         env:
@@ -202,7 +206,7 @@ jobs:
           service_account: ${{ vars.SERVICE_ACCOUNT_EMAIL }}
 
       - name: Set up GKE credentials
-        uses: google-github-actions/get-gke-credentials@6051730f96f35243335f608775ae785501f2f65a # v2
+        uses: google-github-actions/get-gke-credentials@64bc7249bbcf78056bb92f14d3cedc2da193946c # v2
         with:
           cluster_name: ${{ vars.CLUSTER_NAME }}
           location: ${{ vars.CLUSTER_REGION }}

@@ -29,28 +29,37 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+    - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5
       with:
         go-version: ${{ env.GO_VERSION }}
-    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+        cache: false
+    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4
+      with:
+        persist-credentials: false
     - run: sudo make test
 
   lint:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+    - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5
       with:
         go-version: ${{ env.GO_VERSION }}
-    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+        cache: false
+    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4
+      with:
+        persist-credentials: false
     - run: make lint
 
   verify:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+    - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5
       with:
         go-version: ${{ env.GO_VERSION }}
-    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+        cache: false
+    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4
+      with:
+        persist-credentials: false
     - name: Install protoc
       run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
     - run: make verify
@@ -58,6 +67,8 @@ jobs:
   helm-lint:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4
+      with:
+        persist-credentials: false
     - uses: azure/setup-helm@b9e51907a09c216f16ebe8536097933489208112 # v4.3.0
     - run: make helm-lint
