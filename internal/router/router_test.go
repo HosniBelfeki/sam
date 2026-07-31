@@ -653,25 +653,22 @@ func TestRouterGossipSubBannedEvent(t *testing.T) {
 		PeerId:    bannedPeerIDStr,
 		Timestamp: time.Now().UnixMilli(),
 	}
-	eventData, err := proto.Marshal(event)
+	eventData, err := proto.MarshalOptions{Deterministic: true}.Marshal(event)
 	if err != nil {
 		t.Fatalf("failed to marshal event: %v", err)
 	}
 	event.Signature = ed25519.Sign(cpPrivKey, eventData)
-	signedData, err := proto.Marshal(event)
+	signedData, err := proto.MarshalOptions{Deterministic: true}.Marshal(event)
 	if err != nil {
 		t.Fatalf("failed to marshal signed event: %v", err)
 	}
 
-	// Publish MeshEvent_BANNED to GossipEvents topic
-	if err := r.EventTopic.Publish(context.Background(), signedData); err != nil {
-		t.Fatalf("failed to publish MeshEvent_BANNED: %v", err)
-	}
-
-	// Poll until authenticatedPeers no longer contains bannedPeerID
+	// Poll until authenticatedPeers no longer contains bannedPeerID,
+	// periodically publishing in case GossipSub subscription goroutine was still starting.
 	deadline := time.Now().Add(5 * time.Second)
 	evicted := false
 	for time.Now().Before(deadline) {
+		_ = r.EventTopic.Publish(context.Background(), signedData)
 		if _, ok := r.authenticatedPeers.Load(bannedPeerID); !ok {
 			evicted = true
 			break
