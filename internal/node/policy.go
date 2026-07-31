@@ -115,12 +115,14 @@ func BuildPolicyRules(roles []*api.PolicyRole, bindings []*api.PolicyBinding) []
 			if err == nil {
 				rules = append(rules, r)
 			} else {
-				f, err := parser.FromStringFact(trimmed)
-				if err == nil {
+				f, err2 := parser.FromStringFact(trimmed)
+				if err2 == nil {
 					rules = append(rules, biscuit.Rule{
 						Head: f.Predicate,
 						Body: []biscuit.Predicate{},
 					})
+				} else {
+					logger.Warnf("Failed to parse custom Datalog rule/fact %q for role %s: rule_err=%v, fact_err=%v", dl, roleName, err, err2)
 				}
 			}
 		}
