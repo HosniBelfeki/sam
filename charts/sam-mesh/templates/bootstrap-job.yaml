@@ -117,7 +117,7 @@ spec:
           fi
 
           echo "Writing bootstrap token to Kubernetes secret ${SECRET_NAME}..."
-          curl -s --cacert $CACERT -X PATCH \
+          curl -sf --cacert $CACERT -X PATCH \
             -H "Authorization: Bearer $K8S_TOKEN" \
             -H "Content-Type: application/apply-patch+yaml" \
             -d '{
