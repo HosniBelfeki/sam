@@ -86,9 +86,7 @@ func (n *SamNode) Enroll(ctx context.Context, hubURL string, jwt string) error {
 	}
 	httpReq.Header.Set("Content-Type", "application/x-protobuf")
 
-	client := &http.Client{
-		Timeout: 30 * time.Second,
-	}
+	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(httpReq)
 	if err != nil {
 		return fmt.Errorf("HTTP request failed: %v", err)
@@ -99,64 +97,72 @@ func (n *SamNode) Enroll(ctx context.Context, hubURL string, jwt string) error {
 		}
 	}()
 
+	enrollResp, err := n.processEnrollResponse(resp)
+	if err != nil {
+		return err
+	}
+
+	return n.connectToHubAddresses(ctx, enrollResp.HubAddresses)
+}
+
+func (n *SamNode) processEnrollResponse(resp *http.Response) (*api.EnrollResponse, error) {
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("enrollment failed with status %s: %s", resp.Status, string(body))
+		return nil, fmt.Errorf("enrollment failed with status %s: %s", resp.Status, string(body))
 	}
 
 	respData, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return fmt.Errorf("failed to read response body: %v", err)
+		return nil, fmt.Errorf("failed to read response body: %v", err)
 	}
 
 	var enrollResp api.EnrollResponse
 	if err := proto.Unmarshal(respData, &enrollResp); err != nil {
-		return fmt.Errorf("failed to unmarshal response: %v", err)
+		return nil, fmt.Errorf("failed to unmarshal response: %v", err)
 	}
 
 	if enrollResp.ErrorMessage != "" {
-		return fmt.Errorf("enrollment failed: %s", enrollResp.ErrorMessage)
+		return nil, fmt.Errorf("enrollment failed: %s", enrollResp.ErrorMessage)
 	}
-
 	if len(enrollResp.BiscuitToken) == 0 {
-		return fmt.Errorf("received empty biscuit token")
+		return nil, fmt.Errorf("received empty biscuit token")
 	}
-
 	if len(enrollResp.HubPublicKey) != ed25519.PublicKeySize {
-		return fmt.Errorf("received invalid hub public key size: %d bytes (expected %d)", len(enrollResp.HubPublicKey), ed25519.PublicKeySize)
+		return nil, fmt.Errorf("received invalid hub public key size: %d bytes (expected %d)", len(enrollResp.HubPublicKey), ed25519.PublicKeySize)
 	}
 
 	if n.config.RequiredRole != "" {
 		if err := identity.VerifyBiscuitRole(enrollResp.BiscuitToken, ed25519.PublicKey(enrollResp.HubPublicKey), n.config.RequiredRole); err != nil {
-			return fmt.Errorf("enrolled biscuit token lacks required role %q: %w", n.config.RequiredRole, err)
+			return nil, fmt.Errorf("enrolled biscuit token lacks required role %q: %w", n.config.RequiredRole, err)
 		}
 	}
 
 	if err := n.Store.SaveIdentity(enrollResp.BiscuitToken); err != nil {
-		return fmt.Errorf("failed to save identity: %v", err)
+		return nil, fmt.Errorf("failed to save identity: %v", err)
 	}
 	n.SetIdentityCache(enrollResp.BiscuitToken)
 
 	if err := n.Store.SaveIdentityExpiration(enrollResp.Expiration); err != nil {
-		return fmt.Errorf("failed to save identity expiration: %v", err)
+		return nil, fmt.Errorf("failed to save identity expiration: %v", err)
 	}
-
 	if err := n.Store.SaveHubConfig(enrollResp.HubPublicKey, enrollResp.HubAddresses); err != nil {
-		return fmt.Errorf("failed to save hub config: %v", err)
+		return nil, fmt.Errorf("failed to save hub config: %v", err)
 	}
 
 	n.keysMu.Lock()
 	n.trustedKeys = append(n.trustedKeys, TrustedKey{Key: ed25519.PublicKey(enrollResp.HubPublicKey), ReceivedAt: time.Now()})
 	n.keysMu.Unlock()
 
-	// Connect and Auth to hub after enrollment to join the mesh
-	if len(enrollResp.HubAddresses) == 0 {
+	return &enrollResp, nil
+}
+
+func (n *SamNode) connectToHubAddresses(ctx context.Context, addrs []string) error {
+	if len(addrs) == 0 {
 		return fmt.Errorf("failed to connect and authenticate after HTTP enrollment: control plane returned no hub addresses")
 	}
 
 	var lastAuthErr error
-	var authed bool
-	for _, addrStr := range enrollResp.HubAddresses {
+	for _, addrStr := range addrs {
 		addr, err := multiaddr.NewMultiaddr(addrStr)
 		if err != nil {
 			logger.Warnf("Failed to parse hub address from response: %v", err)
@@ -166,17 +172,12 @@ func (n *SamNode) Enroll(ctx context.Context, hubURL string, jwt string) error {
 			logger.Warnf("Failed to connect and auth with hub after enrollment: %v", err)
 			lastAuthErr = err
 		} else {
-			authed = true
-			break
+			logger.Info("Successfully enrolled via HTTP and stored identity and hub config.")
+			return nil
 		}
 	}
 
-	if !authed {
-		return fmt.Errorf("failed to connect and authenticate with any hub after HTTP enrollment (last error: %v)", lastAuthErr)
-	}
-
-	logger.Info("Successfully enrolled via HTTP and stored identity and hub config.")
-	return nil
+	return fmt.Errorf("failed to connect and authenticate with any hub after HTTP enrollment (last error: %v)", lastAuthErr)
 }
 
 // EnrollBootstrap enrolls the node with the control plane using a pre-shared bootstrap token.
