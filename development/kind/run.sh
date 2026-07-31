@@ -134,7 +134,7 @@ read_mesh_nodes
 ISSUER="$(kubectl --context "${KCTX}" get --raw /.well-known/openid-configuration | jq -r .issuer)"
 [[ -n "$ISSUER" ]] || { echo "could not determine cluster OIDC issuer" >&2; exit 1; }
 
-OIDC_ISSUER="${OIDC_ISSUER:-http://dex:5556/dex}"
+OIDC_ISSUER="${OIDC_ISSUER:-http://sam-mesh-dex:5556/dex}"
 OIDC_CLIENT_ID="${OIDC_CLIENT_ID:-sam-console}"
 OIDC_CLIENT_SECRET="${OIDC_CLIENT_SECRET:-}"
 OIDC_REDIRECT_URL="${OIDC_REDIRECT_URL:-}"
