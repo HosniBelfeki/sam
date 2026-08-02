@@ -283,6 +283,14 @@ var migrations = []migration{
 }
 
 func (s *SQLStore) initSchema() error {
+	if s.isPostgres() {
+		return s.initSchemaPostgres()
+	}
+
+	return s.initSchemaDefault()
+}
+
+func (s *SQLStore) initSchemaDefault() error {
 	// Create schema_migrations table
 	createMigrationsTable := `CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY)`
 	if _, err := s.db.Exec(createMigrationsTable); err != nil {
@@ -307,17 +315,7 @@ func (s *SQLStore) initSchema() error {
 			}
 			defer func() { _ = tx.Rollback() }()
 
-			if s.isPostgres() {
-				if _, err := tx.Exec("SELECT pg_advisory_xact_lock(7345892)"); err != nil {
-					return fmt.Errorf("failed to acquire migration advisory lock: %w", err)
-				}
-			}
-
 			queries := m.sqlite
-			if s.isPostgres() {
-				queries = m.postgres
-			}
-
 			for _, query := range queries {
 				if _, err := tx.Exec(query); err != nil {
 					errStr := strings.ToLower(err.Error())
@@ -343,6 +341,58 @@ func (s *SQLStore) initSchema() error {
 			return err
 		}
 	}
+	return nil
+}
+
+func (s *SQLStore) initSchemaPostgres() error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.Exec("SELECT pg_advisory_xact_lock(7345892)"); err != nil {
+		return fmt.Errorf("failed to acquire migration advisory lock: %w", err)
+	}
+
+	createMigrationsTable := `CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY)`
+	if _, err := tx.Exec(createMigrationsTable); err != nil {
+		return fmt.Errorf("failed to create schema_migrations table: %w", err)
+	}
+
+	var currentVersion int
+	err = tx.QueryRow("SELECT COALESCE(MAX(version), 0) FROM schema_migrations").Scan(&currentVersion)
+	if err != nil {
+		return fmt.Errorf("failed to check current schema version: %w", err)
+	}
+
+	for _, m := range migrations {
+		if m.version <= currentVersion {
+			continue
+		}
+
+		for _, query := range m.postgres {
+			if _, err := tx.Exec(query); err != nil {
+				errStr := strings.ToLower(err.Error())
+				if strings.Contains(errStr, "duplicate column") || strings.Contains(errStr, "already exists") {
+					continue
+				}
+				return fmt.Errorf("migration version %d failed: query %q failed: %w", m.version, query, err)
+			}
+		}
+
+		insertQuery := s.rebind("INSERT INTO schema_migrations (version) VALUES (?)")
+		if _, err := tx.Exec(insertQuery, m.version); err != nil {
+			return fmt.Errorf("failed to update schema_migrations version: %w", err)
+		}
+
+		logger.Infof("Applied schema migration version %d successfully", m.version)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
 	return nil
 }
 
