@@ -65,6 +65,10 @@ type relayACL struct {
 }
 
 func (a *relayACL) AllowReserve(p peer.ID, addr multiaddr.Multiaddr) bool {
+	if _, banned := a.r.bannedPeers.Load(p); banned {
+		logger.Debugf("[Relay] Rejecting reservation for %s: peer is banned", p)
+		return false
+	}
 	_, ok := a.r.authenticatedPeers.Load(p)
 	if !ok {
 		logger.Debugf("[Relay] Rejecting reservation for %s: not authenticated", p)
@@ -73,6 +77,14 @@ func (a *relayACL) AllowReserve(p peer.ID, addr multiaddr.Multiaddr) bool {
 }
 
 func (a *relayACL) AllowConnect(src peer.ID, srcAddr multiaddr.Multiaddr, dest peer.ID) bool {
+	if _, banned := a.r.bannedPeers.Load(src); banned {
+		logger.Debugf("[Relay] Rejecting connect from %s to %s: src is banned", src, dest)
+		return false
+	}
+	if _, banned := a.r.bannedPeers.Load(dest); banned {
+		logger.Debugf("[Relay] Rejecting connect from %s to %s: dest is banned", src, dest)
+		return false
+	}
 	_, ok := a.r.authenticatedPeers.Load(dest)
 	if !ok {
 		logger.Debugf("[Relay] Rejecting connect from %s to %s: dest not authenticated", src, dest)
@@ -88,6 +100,7 @@ type Router struct {
 	PubSub             *pubsub.PubSub
 	EventTopic         *pubsub.Topic
 	authenticatedPeers sync.Map
+	bannedPeers        sync.Map
 
 	// Keys & Identity
 	biscuitToken      []byte
@@ -270,11 +283,12 @@ func (r *Router) Start() error {
 	})
 
 	// 5. Start background routines
-	r.wg.Add(4)
+	r.wg.Add(5)
 	go r.runLeaseRenewalLoop()
 	go r.runKeysSyncLoop()
 	go r.runFederationLoop()
 	go r.runBiscuitRenewalLoop()
+	go r.listenForHubEvents(r.ctx)
 
 	r.isReady.Store(true)
 	logger.Infof("Router Online. PeerID: %s, ListenAddrs: %v", r.Host.ID(), r.Host.Addrs())
@@ -515,6 +529,81 @@ func (r *Router) getTrustedPublicKeys() []ed25519.PublicKey {
 	return append([]ed25519.PublicKey(nil), r.trustedPublicKeys...)
 }
 
+func (r *Router) verifyEvent(event *api.MeshEvent) bool {
+	sig := event.Signature
+	event.Signature = nil
+	data, err := proto.MarshalOptions{Deterministic: true}.Marshal(event)
+	event.Signature = sig
+	if err != nil {
+		logger.Errorf("[Router Event] Failed to marshal event for verification: %v", err)
+		return false
+	}
+
+	keys := r.getTrustedPublicKeys()
+	for _, pubKey := range keys {
+		if len(pubKey) == ed25519.PublicKeySize && ed25519.Verify(pubKey, data, sig) {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *Router) listenForHubEvents(ctx context.Context) {
+	defer r.wg.Done()
+	if r.EventTopic == nil {
+		return
+	}
+	sub, err := r.EventTopic.Subscribe()
+	if err != nil {
+		logger.Errorf("[Router Event] Failed to subscribe to GossipEvents topic: %v", err)
+		return
+	}
+	defer sub.Cancel()
+
+	for {
+		msg, err := sub.Next(ctx)
+		if err != nil {
+			return
+		}
+
+		var event api.MeshEvent
+		if err := proto.Unmarshal(msg.Data, &event); err != nil {
+			logger.Errorf("[Router Event] Failed to unmarshal event from %s: %v", msg.ReceivedFrom, err)
+			continue
+		}
+
+		if !r.verifyEvent(&event) {
+			logger.Warnf("[Router Event] Potential spoofing attempt: invalid signature on event from %s", msg.ReceivedFrom)
+			continue
+		}
+
+		eventTime := time.UnixMilli(event.Timestamp)
+		if time.Since(eventTime) > 5*time.Minute || time.Until(eventTime) > 5*time.Minute {
+			logger.Warnf("[Router Event] Dropping stale or future event from %s", msg.ReceivedFrom)
+			continue
+		}
+
+		switch event.Type {
+		case api.MeshEvent_BANNED:
+			if event.PeerId != "" {
+				if bannedPeer, err := peer.Decode(event.PeerId); err == nil {
+					logger.Infof("[Router Event] Received BANNED event for peer %s, evicting from authenticated peers and adding to blocklist", bannedPeer)
+					r.authenticatedPeers.Delete(bannedPeer)
+					r.bannedPeers.Store(bannedPeer, true)
+					if r.Host != nil {
+						_ = r.Host.Network().ClosePeer(bannedPeer)
+					}
+				}
+			}
+		case api.MeshEvent_KEY_ROTATION:
+			logger.Infof("[Router Event] Received KEY_ROTATION event, triggering key sync")
+			if err := r.syncKeys(); err != nil {
+				logger.Warnf("[Router Event] Failed to sync keys after KEY_ROTATION event: %v", err)
+			}
+		}
+	}
+}
+
 func (r *Router) runKeysSyncLoop() {
 	defer r.wg.Done()
 	ticker := time.NewTicker(r.config.KeysSyncInterval)
@@ -725,6 +814,12 @@ func (r *Router) HandleAuthHandshake(s network.Stream) {
 	defer func() { _ = s.Close() }()
 	remotePeer := s.Conn().RemotePeer()
 
+	if _, banned := r.bannedPeers.Load(remotePeer); banned {
+		logger.Warnf("[AuthN] Rejecting authentication for banned peer %s", remotePeer)
+		_ = s.Reset()
+		return
+	}
+
 	reader := msgio.NewVarintReaderSize(s, 1024*64)
 	msg, err := reader.ReadMsg()
 	if err != nil {
@@ -769,6 +864,9 @@ func (r *Router) HandleAuthHandshake(s network.Stream) {
 // performMutualAuth initiates client-side mutual authentication handshake.
 func (r *Router) performMutualAuth(s network.Stream) error {
 	remotePeer := s.Conn().RemotePeer()
+	if _, banned := r.bannedPeers.Load(remotePeer); banned {
+		return fmt.Errorf("peer %s is banned", remotePeer)
+	}
 	_ = s.SetDeadline(time.Now().Add(5 * time.Second))
 
 	// Send our biscuit

@@ -27,7 +27,8 @@ class SamClient:
         self._http_client = httpx.AsyncClient(headers=headers)
         try:
             self._sh_cm = streamable_http_client(self.server_url, http_client=self._http_client)
-            read_stream, write_stream, _get_session_id = await self._sh_cm.__aenter__()
+            res = await self._sh_cm.__aenter__()
+            read_stream, write_stream = res[0], res[1]
             self.session = ClientSession(read_stream, write_stream)
             await self.session.__aenter__()
             await self.session.initialize()

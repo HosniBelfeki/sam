@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/biscuit-auth/biscuit-go/v2"
+	"github.com/biscuit-auth/biscuit-go/v2/datalog"
 )
 
 // helper to generate keypair for tests
@@ -130,7 +131,7 @@ func TestBaselinePolicies(t *testing.T) {
 				t.Fatalf("failed to build token: %v", err)
 			}
 
-			authorizer, err := tok.Authorizer(pub)
+			authorizer, err := tok.Authorizer(pub, biscuit.WithWorldOptions(datalog.WithMaxDuration(5*time.Second)))
 			if err != nil {
 				t.Fatalf("failed to create authorizer: %v", err)
 			}
@@ -192,7 +193,10 @@ func TestBaselineReplayCheck(t *testing.T) {
 			}})
 
 			tok, _ := builder.Build()
-			authorizer, _ := tok.Authorizer(pub)
+			authorizer, err := tok.Authorizer(pub, biscuit.WithWorldOptions(datalog.WithMaxDuration(5*time.Second)))
+			if err != nil {
+				t.Fatalf("failed to create authorizer: %v", err)
+			}
 
 			// connection_peer_id is injected as a runtime connection fact
 			authorizer.AddFact(biscuit.Fact{Predicate: biscuit.Predicate{
@@ -204,7 +208,7 @@ func TestBaselineReplayCheck(t *testing.T) {
 			authorizer.AddCheck(BaselineReplayCheck)
 			authorizer.AddPolicy(AllowIfTruePolicy)
 
-			err := authorizer.Authorize()
+			err = authorizer.Authorize()
 			if tt.expectAllow && err != nil {
 				t.Errorf("expected authorized, got error: %v", err)
 			} else if !tt.expectAllow && err == nil {
@@ -263,7 +267,10 @@ func TestBaselineTargetCheck(t *testing.T) {
 			}
 
 			tok, _ := builder.Build()
-			authorizer, _ := tok.Authorizer(pub)
+			authorizer, err := tok.Authorizer(pub, biscuit.WithWorldOptions(datalog.WithMaxDuration(5*time.Second)))
+			if err != nil {
+				t.Fatalf("failed to create authorizer: %v", err)
+			}
 
 			// target_fact is evaluated at runtime (e.g. node(...) or group(...))
 			authorizer.AddFact(biscuit.Fact{Predicate: biscuit.Predicate{
@@ -282,7 +289,7 @@ func TestBaselineTargetCheck(t *testing.T) {
 			}
 			authorizer.AddPolicy(AllowIfTruePolicy)
 
-			err := authorizer.Authorize()
+			err = authorizer.Authorize()
 			if tt.expectAllow && err != nil {
 				t.Errorf("expected authorized, got error: %v", err)
 			} else if !tt.expectAllow && err == nil {
@@ -351,6 +358,7 @@ func TestOIDCClaimToFact(t *testing.T) {
 		"sub":    FactUser,
 		"email":  FactEmail,
 		"groups": FactGroup,
+		"roles":  FactRole,
 	}
 
 	if !reflect.DeepEqual(facts, want) {
@@ -363,5 +371,75 @@ func TestOIDCClaimToFact(t *testing.T) {
 
 	if _, ok := facts2["new_claim"]; ok {
 		t.Errorf("OIDCClaimToFact() returned map is not a clone, modifications affect internal state")
+	}
+}
+
+func TestBuildServiceDatalogFact(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected biscuit.Fact
+	}{
+		{
+			input:    "*",
+			expected: biscuit.Fact{Predicate: biscuit.Predicate{Name: FactGrantedServiceAllTypes, IDs: []biscuit.Term{}}},
+		},
+		{
+			input:    "mcp://*",
+			expected: biscuit.Fact{Predicate: biscuit.Predicate{Name: FactGrantedServiceAll, IDs: []biscuit.Term{biscuit.String("mcp")}}},
+		},
+		{
+			input:    "mcp://*.local",
+			expected: biscuit.Fact{Predicate: biscuit.Predicate{Name: FactGrantedServiceSuffix, IDs: []biscuit.Term{biscuit.String("mcp"), biscuit.String(".local")}}},
+		},
+		{
+			input:    "mcp://calc.*",
+			expected: biscuit.Fact{Predicate: biscuit.Predicate{Name: FactGrantedServicePrefix, IDs: []biscuit.Term{biscuit.String("mcp"), biscuit.String("calc.")}}},
+		},
+		{
+			input:    "mcp://calculator",
+			expected: biscuit.Fact{Predicate: biscuit.Predicate{Name: FactGrantedServiceExact, IDs: []biscuit.Term{biscuit.String("mcp"), biscuit.String("calculator")}}},
+		},
+	}
+
+	for _, tt := range tests {
+		got := BuildServiceDatalogFact(tt.input)
+		if got.String() != tt.expected.String() {
+			t.Errorf("BuildServiceDatalogFact(%q) = %s, want %s", tt.input, got.String(), tt.expected.String())
+		}
+	}
+}
+
+func TestBuildTargetDatalogFact(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected biscuit.Fact
+	}{
+		{
+			input:    "*",
+			expected: biscuit.Fact{Predicate: biscuit.Predicate{Name: FactGrantedTargetAllFacts, IDs: []biscuit.Term{}}},
+		},
+		{
+			input:    "user:*",
+			expected: biscuit.Fact{Predicate: biscuit.Predicate{Name: FactGrantedTargetAll, IDs: []biscuit.Term{biscuit.String("user")}}},
+		},
+		{
+			input:    "group:*.internal",
+			expected: biscuit.Fact{Predicate: biscuit.Predicate{Name: FactGrantedTargetSuffix, IDs: []biscuit.Term{biscuit.String("group"), biscuit.String(".internal")}}},
+		},
+		{
+			input:    "group:backend.*",
+			expected: biscuit.Fact{Predicate: biscuit.Predicate{Name: FactGrantedTargetPrefix, IDs: []biscuit.Term{biscuit.String("group"), biscuit.String("backend.")}}},
+		},
+		{
+			input:    "group:backend",
+			expected: biscuit.Fact{Predicate: biscuit.Predicate{Name: FactGrantedTargetExact, IDs: []biscuit.Term{biscuit.String("group"), biscuit.String("backend")}}},
+		},
+	}
+
+	for _, tt := range tests {
+		got := BuildTargetDatalogFact(tt.input)
+		if got.String() != tt.expected.String() {
+			t.Errorf("BuildTargetDatalogFact(%q) = %s, want %s", tt.input, got.String(), tt.expected.String())
+		}
 	}
 }

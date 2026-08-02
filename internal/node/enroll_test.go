@@ -17,6 +17,7 @@ package node
 import (
 	"bytes"
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -106,5 +107,89 @@ func TestEnroll_InvalidHubPublicKeySize(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "received invalid hub public key size") {
 		t.Fatalf("Expected invalid public key size error, got: %v", err)
+	}
+}
+
+func TestProcessEnrollResponse_Errors(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	priv, _, _ := crypto.GenerateKeyPair(crypto.Ed25519, -1)
+	node, err := NewSamNode(Options{
+		PrivKey:     priv,
+		Store:       store,
+		ListenAddrs: []string{"/ip4/127.0.0.1/tcp/0"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("Non200Status", func(t *testing.T) {
+		resp := &http.Response{
+			StatusCode: http.StatusBadRequest,
+			Status:     "400 Bad Request",
+			Body:       io.NopCloser(strings.NewReader("bad request details")),
+		}
+		_, err := node.processEnrollResponse(resp)
+		if err == nil || !strings.Contains(err.Error(), "enrollment failed with status 400") {
+			t.Fatalf("Expected status 400 error, got: %v", err)
+		}
+	})
+
+	t.Run("ErrorMessageInResponse", func(t *testing.T) {
+		enrollResp := &api.EnrollResponse{ErrorMessage: "unauthorized user"}
+		data, _ := proto.Marshal(enrollResp)
+		resp := &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(bytes.NewReader(data)),
+		}
+		_, err := node.processEnrollResponse(resp)
+		if err == nil || !strings.Contains(err.Error(), "enrollment failed: unauthorized user") {
+			t.Fatalf("Expected enrollment failed error message, got: %v", err)
+		}
+	})
+
+	t.Run("EmptyBiscuitToken", func(t *testing.T) {
+		enrollResp := &api.EnrollResponse{
+			BiscuitToken: nil,
+			HubPublicKey: make([]byte, 32),
+		}
+		data, _ := proto.Marshal(enrollResp)
+		resp := &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(bytes.NewReader(data)),
+		}
+		_, err := node.processEnrollResponse(resp)
+		if err == nil || !strings.Contains(err.Error(), "received empty biscuit token") {
+			t.Fatalf("Expected empty biscuit token error, got: %v", err)
+		}
+	})
+}
+
+func TestConnectToHubAddresses_EmptyAddrs(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	priv, _, _ := crypto.GenerateKeyPair(crypto.Ed25519, -1)
+	node, err := NewSamNode(Options{
+		PrivKey:     priv,
+		Store:       store,
+		ListenAddrs: []string{"/ip4/127.0.0.1/tcp/0"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = node.connectToHubAddresses(context.Background(), nil)
+	if err == nil || !strings.Contains(err.Error(), "returned no hub addresses") {
+		t.Fatalf("Expected no hub addresses error, got: %v", err)
 	}
 }

@@ -125,23 +125,23 @@ func setupControlPlane(t *testing.T, oidcIssuer string) (*controlplane.Server, s
 	}
 
 	// Bootstrap Policy granting 'router' role to group 'routers'
-	policy := &api.PolicyConfig{
-		Version: "v1alpha1",
-		Bindings: []api.Binding{
-			{Role: api.RoleRouter, Members: []string{"group:routers"}},
-			{Role: "user-role", Members: []string{"group:users"}},
+	roles := []*api.PolicyRole{
+		{
+			Name:            api.RoleRouter,
+			AllowedServices: []string{"*"},
+			AllowedTargets:  []string{"*"},
 		},
-		Roles: map[string]api.RolePolicy{
-			api.RoleRouter: {
-				AllowedServices: []string{"*"},
-				AllowedTargets:  []string{"*"},
-			},
-			"user-role": {
-				AllowedServices: []string{"mcp://read"},
-			},
+		{
+			Name:            "user-role",
+			AllowedServices: []string{"mcp://read"},
 		},
 	}
-	if err := store.SavePolicy(context.Background(), policy); err != nil {
+	bindings := []*api.PolicyBinding{
+		{Role: api.RoleRouter, Members: []string{"group:routers"}},
+		{Role: "user-role", Members: []string{"group:users"}},
+	}
+
+	if err := store.SaveMeshPolicy(context.Background(), roles, bindings); err != nil {
 		t.Fatalf("failed to save policy: %v", err)
 	}
 
@@ -171,6 +171,7 @@ func TestRouterIntegration(t *testing.T) {
 	routerJWT := mintToken(map[string]interface{}{
 		"sub":    "router-1",
 		"groups": []string{"routers"},
+		"roles":  []string{api.RoleRouter},
 	})
 
 	// 1. Create and Start Router
@@ -327,11 +328,13 @@ func TestRouterFederation(t *testing.T) {
 	router1JWT := mintToken(map[string]interface{}{
 		"sub":    "router-1",
 		"groups": []string{"routers"},
+		"roles":  []string{api.RoleRouter},
 	})
 	// Mint token for Router 2
 	router2JWT := mintToken(map[string]interface{}{
 		"sub":    "router-2",
 		"groups": []string{"routers"},
+		"roles":  []string{api.RoleRouter},
 	})
 
 	r1KeyPath := filepath.Join(tempDir, "router1.key")
@@ -412,6 +415,7 @@ func TestRouterProactiveTokenRefresh(t *testing.T) {
 	routerJWT := mintToken(map[string]interface{}{
 		"sub":    "router-refresh-test",
 		"groups": []string{"routers"},
+		"roles":  []string{api.RoleRouter},
 	})
 
 	rOpts := Options{
@@ -472,6 +476,7 @@ func TestRouterLeaseRenewalReEnrollOn401(t *testing.T) {
 	routerJWT := mintToken(map[string]interface{}{
 		"sub":    "router-reenroll-test",
 		"groups": []string{"routers"},
+		"roles":  []string{api.RoleRouter},
 	})
 
 	rOpts := Options{
@@ -539,6 +544,7 @@ func TestRouterProactiveRefreshReEnrollOn401(t *testing.T) {
 	routerJWT := mintToken(map[string]interface{}{
 		"sub":    "router-refresh-401-test",
 		"groups": []string{"routers"},
+		"roles":  []string{api.RoleRouter},
 	})
 
 	rOpts := Options{
@@ -583,4 +589,98 @@ func TestRouterProactiveRefreshReEnrollOn401(t *testing.T) {
 	}
 }
 
+func TestRouterGossipSubBannedEvent(t *testing.T) {
+	issuer, mintToken := startCustomMockOIDC(t)
+	cp, cpStore, cpURL := setupControlPlane(t, issuer)
+	defer func() {
+		_ = cp.Close()
+		_ = cpStore.Close()
+	}()
 
+	tempDir := t.TempDir()
+	routerKeyPath := filepath.Join(tempDir, "router.key")
+
+	routerJWT := mintToken(map[string]interface{}{
+		"sub":    "router-banned-test",
+		"groups": []string{"routers"},
+		"roles":  []string{api.RoleRouter},
+	})
+
+	rOpts := Options{
+		ControlPlaneURL:    cpURL,
+		ListenAddrs:        []string{"/ip4/127.0.0.1/tcp/0"},
+		KeysSyncInterval:   20 * time.Second,
+		LeaseRenewInterval: 20 * time.Second,
+		OIDCToken:          routerJWT,
+		KeysDBPath:         routerKeyPath,
+		AllowLoopback:      true,
+		BiscuitTimeout:     1 * time.Second,
+	}
+
+	r, err := NewRouter(context.Background(), rOpts)
+	if err != nil {
+		t.Fatalf("failed to create router: %v", err)
+	}
+	if err := r.Start(); err != nil {
+		t.Fatalf("failed to start router: %v", err)
+	}
+	defer func() { _ = r.Close() }()
+
+	privNode, _, err := crypto.GenerateKeyPair(crypto.Ed25519, -1)
+	if err != nil {
+		t.Fatalf("failed to generate node keypair: %v", err)
+	}
+	bannedPeerID, err := peer.IDFromPrivateKey(privNode)
+	if err != nil {
+		t.Fatalf("failed to get peer ID from keypair: %v", err)
+	}
+	bannedPeerIDStr := bannedPeerID.String()
+
+	// Manually insert bannedPeer into router's authenticatedPeers
+	r.authenticatedPeers.Store(bannedPeerID, true)
+	if _, ok := r.authenticatedPeers.Load(bannedPeerID); !ok {
+		t.Fatalf("failed to seed authenticatedPeers map")
+	}
+
+	// Get CP's signing key from store to sign the MeshEvent
+	cpPrivKey, _, err := cpStore.GetCurrentKey(context.Background())
+	if err != nil {
+		t.Fatalf("failed to get CP key: %v", err)
+	}
+
+	event := &api.MeshEvent{
+		Type:      api.MeshEvent_BANNED,
+		PeerId:    bannedPeerIDStr,
+		Timestamp: time.Now().UnixMilli(),
+	}
+	eventData, err := proto.MarshalOptions{Deterministic: true}.Marshal(event)
+	if err != nil {
+		t.Fatalf("failed to marshal event: %v", err)
+	}
+	event.Signature = ed25519.Sign(cpPrivKey, eventData)
+	signedData, err := proto.MarshalOptions{Deterministic: true}.Marshal(event)
+	if err != nil {
+		t.Fatalf("failed to marshal signed event: %v", err)
+	}
+
+	// Poll until authenticatedPeers no longer contains bannedPeerID,
+	// periodically publishing in case GossipSub subscription goroutine was still starting.
+	deadline := time.Now().Add(5 * time.Second)
+	evicted := false
+	for time.Now().Before(deadline) {
+		_ = r.EventTopic.Publish(context.Background(), signedData)
+		if _, ok := r.authenticatedPeers.Load(bannedPeerID); !ok {
+			evicted = true
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	if !evicted {
+		t.Errorf("expected peer %s to be evicted from authenticatedPeers upon receiving MeshEvent_BANNED", bannedPeerIDStr)
+	}
+
+	if _, banned := r.bannedPeers.Load(bannedPeerID); !banned {
+		t.Errorf("expected peer %s to be stored in bannedPeers blocklist upon receiving MeshEvent_BANNED", bannedPeerIDStr)
+	}
+}
