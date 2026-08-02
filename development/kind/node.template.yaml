@@ -20,7 +20,7 @@ spec:
         app: ${NODE}
     spec:
       nodeSelector:
-        sam-role-${NODE}: "true"
+        sam-role: ${NODE}
       serviceAccountName: ${NODE}-sa
       containers:
       - name: sam-node
