@@ -69,7 +69,7 @@ spec:
           set -e
           CACERT=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt
           K8S_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
-          CP_URL="http://{{ include "sam-mesh.fullname" . }}-control-plane:8080"
+          CP_URL="http://{{ include "sam-mesh.fullname" . }}-control-plane:{{ .Values.controlPlane.service.port }}"
 
           echo "Waiting for Control Plane to be ready..."
           until curl -sf "${CP_URL}/info" > /dev/null; do
@@ -110,7 +110,7 @@ spec:
             -d '{"role": "sam:role:router", "max_usages": 999999}' \
             "${CP_URL}/admin/bootstrap-tokens")
 
-          ROUTER_TOKEN=$(echo "${TOKEN_RESP}" | grep -o '"token":"[^"]*' | cut -d'"' -f4)
+          ROUTER_TOKEN=$(echo "${TOKEN_RESP}" | sed -n 's/.*"token"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
           if [ -z "${ROUTER_TOKEN}" ]; then
             echo "Failed to extract router token from response: ${TOKEN_RESP}"
             exit 1

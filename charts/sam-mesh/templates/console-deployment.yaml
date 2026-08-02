@@ -15,6 +15,19 @@ spec:
       labels:
         app: {{ include "sam-mesh.fullname" . }}-console
     spec:
+      initContainers:
+      - name: wait-control-plane
+        image: curlimages/curl:8.6.0
+        imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          set -e
+          CP_URL="http://{{ include "sam-mesh.fullname" . }}-control-plane:{{ .Values.controlPlane.service.port }}"
+          until curl -sf "${CP_URL}/info" > /dev/null; do
+            echo "Control plane not ready yet, sleeping..."
+            sleep 2
+          done
       containers:
       - name: sam-console
         image: "{{ .Values.console.image.repository }}:{{ .Values.global.imageTag }}"

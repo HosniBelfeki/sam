@@ -24,6 +24,19 @@ spec:
         app: {{ include "sam-mesh.fullname" . }}-router
     spec:
       serviceAccountName: {{ include "sam-mesh.fullname" . }}-router-sa
+      initContainers:
+      - name: wait-control-plane
+        image: curlimages/curl:8.6.0
+        imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          set -e
+          CP_URL="http://{{ include "sam-mesh.fullname" . }}-control-plane:{{ .Values.controlPlane.service.port }}"
+          until curl -sf "${CP_URL}/info" > /dev/null; do
+            echo "Control plane not ready yet, sleeping..."
+            sleep 2
+          done
       containers:
       - name: sam-router
         image: "{{ .Values.router.image.repository }}:{{ .Values.global.imageTag }}"
@@ -50,7 +63,7 @@ spec:
               key: token
         {{- end }}
         args:
-        - "--control-plane=http://{{ include "sam-mesh.fullname" . }}-control-plane:8080"
+        - "--control-plane=http://{{ include "sam-mesh.fullname" . }}-control-plane:{{ .Values.controlPlane.service.port }}"
         - "--listen=/ip4/0.0.0.0/tcp/4501"
         - "--listen=/ip4/0.0.0.0/udp/4501/quic-v1"
         {{- if .Values.router.externalAddrs }}
