@@ -323,10 +323,15 @@ func (n *SamNode) injectIdentityFacts(authorizer biscuit.Authorizer, pubKey ed25
 	copy(keys, n.trustedKeys)
 	n.keysMu.RUnlock()
 
+	var authOpts []biscuit.AuthorizerOption
+	if n.BiscuitTimeout > 0 {
+		authOpts = append(authOpts, biscuit.WithWorldOptions(datalog.WithMaxDuration(n.BiscuitTimeout)))
+	}
+
 	var auth biscuit.Authorizer
 	var authErr error
 	for _, tk := range keys {
-		if a, err := ourB.Authorizer(tk.Key); err == nil {
+		if a, err := ourB.Authorizer(tk.Key, authOpts...); err == nil {
 			auth = a
 			break
 		} else {

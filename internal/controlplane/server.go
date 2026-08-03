@@ -198,13 +198,47 @@ func (s *Server) discoverProviders() error {
 			Transport: tr,
 		}
 		providerCtx := oidc.ClientContext(s.ctx, client)
-		provider, err := oidc.NewProvider(providerCtx, iss)
+		provider, err := discoverProviderWithRetry(providerCtx, iss, oidcDiscoveryMaxAttempts, oidcDiscoveryBaseDelay, oidcDiscoveryMaxDelay)
 		if err != nil {
 			return fmt.Errorf("failed to create provider for %s: %w", iss, err)
 		}
 		s.providers[iss] = provider
 	}
 	return nil
+}
+
+// Defaults for discoverProviderWithRetry; kept small enough that a real outage still
+// surfaces quickly (worst case ~15s) while riding out a transient hiccup during rollouts.
+const (
+	oidcDiscoveryMaxAttempts = 5
+	oidcDiscoveryBaseDelay   = 1 * time.Second
+	oidcDiscoveryMaxDelay    = 8 * time.Second
+)
+
+// discoverProviderWithRetry retries OIDC discovery with exponential backoff so a transient
+// upstream hiccup (e.g. the identity provider mid-rollout) doesn't crash the control plane.
+func discoverProviderWithRetry(ctx context.Context, issuer string, maxAttempts int, baseDelay, maxDelay time.Duration) (*oidc.Provider, error) {
+	var lastErr error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if attempt > 0 {
+			delay := baseDelay * time.Duration(1<<uint(attempt-1))
+			if delay > maxDelay {
+				delay = maxDelay
+			}
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(delay):
+			}
+		}
+		provider, err := oidc.NewProvider(ctx, issuer)
+		if err == nil {
+			return provider, nil
+		}
+		lastErr = err
+		logger.Warnf("OIDC discovery attempt %d/%d for %s failed: %v", attempt+1, maxAttempts, issuer, err)
+	}
+	return nil, lastErr
 }
 
 func (s *Server) getProviders() map[string]*oidc.Provider {

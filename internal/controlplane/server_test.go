@@ -29,6 +29,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1196,6 +1197,49 @@ func TestResolveRolesAndRoleImpersonationProtection(t *testing.T) {
 		}
 		if !hasSamBox {
 			t.Errorf("Expected role %q to be granted via user sub binding", api.RoleSamBox)
+		}
+	})
+}
+
+func TestDiscoverProviderWithRetry(t *testing.T) {
+	t.Run("succeeds after transient failures", func(t *testing.T) {
+		var attempts int32
+		mux := http.NewServeMux()
+		srv := httptest.NewServer(mux)
+		defer srv.Close()
+		issuer := srv.URL
+
+		mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
+			if atomic.AddInt32(&attempts, 1) < 3 {
+				http.Error(w, "upstream connect error", http.StatusServiceUnavailable)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"issuer":   issuer,
+				"jwks_uri": issuer + "/keys",
+			})
+		})
+
+		if _, err := discoverProviderWithRetry(context.Background(), issuer, 5, time.Millisecond, 5*time.Millisecond); err != nil {
+			t.Fatalf("expected discovery to eventually succeed, got: %v", err)
+		}
+		if got := atomic.LoadInt32(&attempts); got != 3 {
+			t.Errorf("expected 3 attempts, got %d", got)
+		}
+	})
+
+	t.Run("gives up after max attempts", func(t *testing.T) {
+		mux := http.NewServeMux()
+		srv := httptest.NewServer(mux)
+		defer srv.Close()
+
+		mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "always down", http.StatusServiceUnavailable)
+		})
+
+		if _, err := discoverProviderWithRetry(context.Background(), srv.URL, 3, time.Millisecond, 5*time.Millisecond); err == nil {
+			t.Fatal("expected discovery to fail after exhausting retries")
 		}
 	})
 }
