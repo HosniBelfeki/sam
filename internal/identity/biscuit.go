@@ -127,18 +127,20 @@ func mintBiscuit(signingKey ed25519.PrivateKey, remotePeer peer.ID, roles []stri
 		if pr, ok := rolesMap[role]; ok {
 			if len(pr.AllowedServices) > 0 {
 				hasServices = true
-				for _, svc := range pr.AllowedServices {
-					if err := addFact(api.BuildServiceDatalogFact(svc)); err != nil {
-						errs = append(errs, fmt.Errorf("failed to add service fact %q for role %s: %w", svc, role, err))
+				// Exact-match entries are grouped into a single Set fact per service type so token/world
+				// fact counts stay flat regardless of how many exact services a role grants.
+				for _, fact := range api.BuildServiceDatalogFacts(pr.AllowedServices) {
+					if err := addFact(fact); err != nil {
+						errs = append(errs, fmt.Errorf("failed to add service fact for role %s: %w", role, err))
 					}
 				}
 			}
 
 			if len(pr.AllowedTargets) > 0 {
 				hasTargets = true
-				for _, target := range pr.AllowedTargets {
-					if err := addFact(api.BuildTargetDatalogFact(target)); err != nil {
-						errs = append(errs, fmt.Errorf("failed to add target fact %q for role %s: %w", target, role, err))
+				for _, fact := range api.BuildTargetDatalogFacts(pr.AllowedTargets) {
+					if err := addFact(fact); err != nil {
+						errs = append(errs, fmt.Errorf("failed to add target fact for role %s: %w", role, err))
 					}
 				}
 			}

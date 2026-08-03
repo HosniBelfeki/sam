@@ -18,6 +18,8 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	reflect "reflect"
+	"slices"
+	"sort"
 	"testing"
 	"time"
 
@@ -441,5 +443,116 @@ func TestBuildTargetDatalogFact(t *testing.T) {
 		if got.String() != tt.expected.String() {
 			t.Errorf("BuildTargetDatalogFact(%q) = %s, want %s", tt.input, got.String(), tt.expected.String())
 		}
+	}
+}
+
+func factStrings(facts []biscuit.Fact) []string {
+	strs := make([]string, len(facts))
+	for i, f := range facts {
+		strs[i] = f.String()
+	}
+	sort.Strings(strs)
+	return strs
+}
+
+func TestBuildServiceDatalogFacts(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    []string
+		expected []string
+	}{
+		{
+			name:     "single exact entry aggregates into one Set fact",
+			input:    []string{"mcp://calculator"},
+			expected: []string{`granted_service_set("mcp", ["calculator"])`},
+		},
+		{
+			name:  "multiple exact entries of the same type aggregate into one Set fact",
+			input: []string{"mcp://calculator", "mcp://jupyter"},
+			expected: []string{
+				`granted_service_set("mcp", ["calculator", "jupyter"])`,
+			},
+		},
+		{
+			name:  "exact entries of different types produce one Set fact per type",
+			input: []string{"mcp://calculator", "inference://model-a"},
+			expected: []string{
+				`granted_service_set("inference", ["model-a"])`,
+				`granted_service_set("mcp", ["calculator"])`,
+			},
+		},
+		{
+			name:  "wildcard, prefix and suffix entries keep the existing single-fact representation",
+			input: []string{"*", "mcp://*", "mcp://*.local", "mcp://calc.*", "mcp://calculator"},
+			expected: []string{
+				BuildServiceDatalogFact("*").String(),
+				BuildServiceDatalogFact("mcp://*").String(),
+				BuildServiceDatalogFact("mcp://*.local").String(),
+				BuildServiceDatalogFact("mcp://calc.*").String(),
+				`granted_service_set("mcp", ["calculator"])`,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := factStrings(BuildServiceDatalogFacts(tt.input))
+			want := append([]string(nil), tt.expected...)
+			sort.Strings(want)
+			if !slices.Equal(got, want) {
+				t.Errorf("BuildServiceDatalogFacts(%v) = %v, want %v", tt.input, got, want)
+			}
+		})
+	}
+}
+
+func TestBuildTargetDatalogFacts(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    []string
+		expected []string
+	}{
+		{
+			name:     "single exact entry aggregates into one Set fact",
+			input:    []string{"group:backend"},
+			expected: []string{`granted_target_set("group", ["backend"])`},
+		},
+		{
+			name:  "multiple exact entries of the same fact name aggregate into one Set fact",
+			input: []string{"node:peer-abc", "legacy-peer"},
+			expected: []string{
+				`granted_target_set("node", ["legacy-peer", "peer-abc"])`,
+			},
+		},
+		{
+			name:  "exact entries of different fact names produce one Set fact each",
+			input: []string{"node:peer-abc", "group:backend"},
+			expected: []string{
+				`granted_target_set("group", ["backend"])`,
+				`granted_target_set("node", ["peer-abc"])`,
+			},
+		},
+		{
+			name:  "wildcard, prefix and suffix entries keep the existing single-fact representation",
+			input: []string{"*", "user:*", "group:*.internal", "group:backend.*", "group:backend"},
+			expected: []string{
+				BuildTargetDatalogFact("*").String(),
+				BuildTargetDatalogFact("user:*").String(),
+				BuildTargetDatalogFact("group:*.internal").String(),
+				BuildTargetDatalogFact("group:backend.*").String(),
+				`granted_target_set("group", ["backend"])`,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := factStrings(BuildTargetDatalogFacts(tt.input))
+			want := append([]string(nil), tt.expected...)
+			sort.Strings(want)
+			if !slices.Equal(got, want) {
+				t.Errorf("BuildTargetDatalogFacts(%v) = %v, want %v", tt.input, got, want)
+			}
+		})
 	}
 }

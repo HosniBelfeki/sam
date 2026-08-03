@@ -132,3 +132,73 @@ func TestPolicyScale(t *testing.T) {
 			n, validateDur, resolveDur, mintDur, len(biscuitBytes), authorizeDur, total)
 	}
 }
+
+// TestPolicyScaleSetEncoding demonstrates that aggregating a role's exact
+// AllowedServices/AllowedTargets grants into Set-valued Datalog facts (one
+// fact per service type / target fact name, instead of one fact per entry)
+// keeps minting and authorization working far beyond what previously was a
+// hard ceiling for a single role granting many exact entries.
+//
+// Before the Set-based encoding, a single role with a few hundred exact
+// service/target entries could, by itself, exhaust the biscuit-go
+// authorizer's default 1000-fact world limit (see TestPolicyScale). With
+// Set-based encoding the same role contributes a small, constant number of
+// facts (one granted_service_set + one granted_target_set) regardless of how
+// many exact entries it grants. Probe further with e.g.:
+//
+//	SAM_POLICY_SCALE_SET_MAX=20000 go test ./internal/controlplane -run TestPolicyScaleSetEncoding -v
+func TestPolicyScaleSetEncoding(t *testing.T) {
+	entryTiers := []int{10, 100, 2000}
+	if extra := os.Getenv("SAM_POLICY_SCALE_SET_MAX"); extra != "" {
+		n, err := strconv.Atoi(extra)
+		if err != nil {
+			t.Fatalf("invalid SAM_POLICY_SCALE_SET_MAX=%q: %v", extra, err)
+		}
+		entryTiers = append(entryTiers, n)
+	}
+
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	nodeKey, _, err := crypto.GenerateKeyPair(crypto.Ed25519, -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodePeer, err := peer.IDFromPrivateKey(nodeKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, n := range entryTiers {
+		services := make([]string, 0, n)
+		targets := make([]string, 0, n)
+		for i := 0; i < n; i++ {
+			services = append(services, fmt.Sprintf("mcp://svc-%d.example", i))
+			targets = append(targets, fmt.Sprintf("group:team-%d", i))
+		}
+		roles := []*api.PolicyRole{{
+			Name:            "bulk-role",
+			AllowedServices: services,
+			AllowedTargets:  targets,
+		}}
+
+		claims := jwt.MapClaims{}
+		start := time.Now()
+		biscuitBytes, _, err := identity.MintBiscuitToken(priv, claims, nil, nodePeer, time.Now().Add(time.Hour), []string{"bulk-role"}, roles)
+		mintDur := time.Since(start)
+		if err != nil {
+			t.Fatalf("mint failed at n=%d exact entries: %v", n, err)
+		}
+
+		start = time.Now()
+		_, authErr := identity.VerifyBiscuit(biscuitBytes, nodePeer, []ed25519.PublicKey{pub}, 5*time.Second)
+		authorizeDur := time.Since(start)
+		if authErr != nil {
+			t.Fatalf("authorize failed at n=%d exact entries granted by a single role (Set-based encoding should keep this well below the fact limit): %v", n, authErr)
+		}
+
+		t.Logf("exact_entries_per_role=%-6d mint=%-12s biscuit_size=%-10dB authorize=%-12s", n, mintDur, len(biscuitBytes), authorizeDur)
+	}
+}
