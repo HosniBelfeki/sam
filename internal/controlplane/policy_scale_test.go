@@ -37,12 +37,14 @@ import (
 // increasing numbers of roles/bindings and logs sizes and timings, so we have
 // a record of where the current implementation starts to strain.
 //
-// The default tiers are kept under the biscuit-go authorizer's default world
-// fact-count limit (1000 facts, see datalog.WithMaxFacts) so this test stays
-// green in CI. Hitting that limit is an expected, informative outcome of
-// pushing the scale further rather than a bug: once reached, the test logs it
-// and stops escalating instead of failing. Any other error (validation, role
-// resolution, or minting) still fails the test. Probe further with e.g.:
+// validatePolicyConfig now rejects configs whose worst-case fact budget
+// (summed across all roles, see maxIdentityFactBudget) approaches biscuit-go's
+// default 1000-fact authorizer world limit, so scaling further is expected to
+// be caught there rather than at mint/authorize time. Hitting either limit is
+// an expected, informative outcome of pushing the scale further rather than a
+// bug: once reached, the test logs it and stops escalating instead of failing.
+// Any other error (validation, role resolution, or minting) still fails the
+// test. Probe further with e.g.:
 //
 //	SAM_POLICY_SCALE_MAX=5000 go test ./internal/controlplane -run TestPolicyScale -v
 func TestPolicyScale(t *testing.T) {
@@ -95,7 +97,11 @@ func TestPolicyScale(t *testing.T) {
 
 		start := time.Now()
 		if err := validatePolicyConfig(req); err != nil {
-			t.Fatalf("validatePolicyConfig failed at n=%d: %v", n, err)
+			if !strings.Contains(err.Error(), "exceeding the safe budget") {
+				t.Fatalf("validatePolicyConfig failed at n=%d for an unexpected reason: %v", n, err)
+			}
+			t.Logf("roles=%-6d validate: hit admin-time fact budget guard (%v) - stopping", n, err)
+			break
 		}
 		validateDur := time.Since(start)
 
@@ -184,6 +190,14 @@ func TestPolicyScaleSetEncoding(t *testing.T) {
 			AllowedTargets:  targets,
 		}}
 
+		// A single role with many exact entries should stay well under the
+		// admin-time fact budget guard, since Set-based encoding collapses it
+		// to a couple of facts regardless of entry count.
+		bindings := []*api.PolicyBinding{{Role: "bulk-role", Members: []string{"node:" + nodePeer.String()}}}
+		if err := validatePolicyConfig(&api.PolicyConfigUpdateRequest{Roles: roles, Bindings: bindings}); err != nil {
+			t.Fatalf("validatePolicyConfig unexpectedly rejected a single bulk role with n=%d exact entries: %v", n, err)
+		}
+
 		claims := jwt.MapClaims{}
 		start := time.Now()
 		biscuitBytes, _, err := identity.MintBiscuitToken(priv, claims, nil, nodePeer, time.Now().Add(time.Hour), []string{"bulk-role"}, roles)
@@ -201,4 +215,46 @@ func TestPolicyScaleSetEncoding(t *testing.T) {
 
 		t.Logf("exact_entries_per_role=%-6d mint=%-12s biscuit_size=%-10dB authorize=%-12s", n, mintDur, len(biscuitBytes), authorizeDur)
 	}
+}
+
+// TestValidatePolicyConfigFactBudget verifies that validatePolicyConfig itself
+// rejects configs whose worst-case per-identity fact budget would approach
+// biscuit-go's default authorizer fact limit, instead of letting the problem
+// surface later as an authorization failure for real users.
+func TestValidatePolicyConfigFactBudget(t *testing.T) {
+	newRoles := func(n int) ([]*api.PolicyRole, []*api.PolicyBinding) {
+		roles := make([]*api.PolicyRole, 0, n)
+		bindings := make([]*api.PolicyBinding, 0, n)
+		for i := 0; i < n; i++ {
+			name := fmt.Sprintf("role-%d", i)
+			roles = append(roles, &api.PolicyRole{
+				Name:            name,
+				AllowedServices: []string{fmt.Sprintf("mcp://svc-%d.example", i)},
+				AllowedTargets:  []string{fmt.Sprintf("group:team-%d", i)},
+			})
+			bindings = append(bindings, &api.PolicyBinding{
+				Role:    name,
+				Members: []string{"group:everyone"},
+			})
+		}
+		return roles, bindings
+	}
+
+	t.Run("rejects a config that could push a single identity over the fact budget", func(t *testing.T) {
+		roles, bindings := newRoles(500)
+		err := validatePolicyConfig(&api.PolicyConfigUpdateRequest{Roles: roles, Bindings: bindings})
+		if err == nil {
+			t.Fatal("expected validatePolicyConfig to reject an over-budget config, got nil error")
+		}
+		if !strings.Contains(err.Error(), "exceeding the safe budget") {
+			t.Errorf("expected a fact budget error, got: %v", err)
+		}
+	})
+
+	t.Run("accepts a config comfortably under the fact budget", func(t *testing.T) {
+		roles, bindings := newRoles(50)
+		if err := validatePolicyConfig(&api.PolicyConfigUpdateRequest{Roles: roles, Bindings: bindings}); err != nil {
+			t.Errorf("expected a small config to pass validation, got: %v", err)
+		}
+	})
 }
