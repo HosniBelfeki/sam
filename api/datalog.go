@@ -456,7 +456,7 @@ func isExactTarget(targetStr string) (tFact, tVal string, exact bool) {
 // BuildServiceDatalogFact, since those already collapse to a single fact per entry.
 func BuildServiceDatalogFacts(services []string) []biscuit.Fact {
 	facts := make([]biscuit.Fact, 0, len(services))
-	exactByType := make(map[string]biscuit.Set)
+	exactByType := make(map[string]map[string]bool)
 	var types []string
 	for _, svc := range services {
 		svcType, svcName, exact := isExactService(svc)
@@ -465,15 +465,25 @@ func BuildServiceDatalogFacts(services []string) []biscuit.Fact {
 			continue
 		}
 		if _, ok := exactByType[svcType]; !ok {
+			exactByType[svcType] = make(map[string]bool)
 			types = append(types, svcType)
 		}
-		exactByType[svcType] = append(exactByType[svcType], biscuit.String(svcName))
+		exactByType[svcType][svcName] = true
 	}
 	sort.Strings(types)
 	for _, svcType := range types {
+		names := make([]string, 0, len(exactByType[svcType]))
+		for name := range exactByType[svcType] {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		bset := make(biscuit.Set, 0, len(names))
+		for _, name := range names {
+			bset = append(bset, biscuit.String(name))
+		}
 		facts = append(facts, biscuit.Fact{Predicate: biscuit.Predicate{
 			Name: FactGrantedServiceSet,
-			IDs:  []biscuit.Term{biscuit.String(svcType), exactByType[svcType]},
+			IDs:  []biscuit.Term{biscuit.String(svcType), bset},
 		}})
 	}
 	return facts
@@ -486,7 +496,7 @@ func BuildServiceDatalogFacts(services []string) []biscuit.Fact {
 // BuildTargetDatalogFact, since those already collapse to a single fact per entry.
 func BuildTargetDatalogFacts(targets []string) []biscuit.Fact {
 	facts := make([]biscuit.Fact, 0, len(targets))
-	exactByFact := make(map[string]biscuit.Set)
+	exactByFact := make(map[string]map[string]bool)
 	var factNames []string
 	for _, t := range targets {
 		tFact, tVal, exact := isExactTarget(t)
@@ -495,15 +505,25 @@ func BuildTargetDatalogFacts(targets []string) []biscuit.Fact {
 			continue
 		}
 		if _, ok := exactByFact[tFact]; !ok {
+			exactByFact[tFact] = make(map[string]bool)
 			factNames = append(factNames, tFact)
 		}
-		exactByFact[tFact] = append(exactByFact[tFact], biscuit.String(tVal))
+		exactByFact[tFact][tVal] = true
 	}
 	sort.Strings(factNames)
 	for _, tFact := range factNames {
+		vals := make([]string, 0, len(exactByFact[tFact]))
+		for val := range exactByFact[tFact] {
+			vals = append(vals, val)
+		}
+		sort.Strings(vals)
+		bset := make(biscuit.Set, 0, len(vals))
+		for _, val := range vals {
+			bset = append(bset, biscuit.String(val))
+		}
 		facts = append(facts, biscuit.Fact{Predicate: biscuit.Predicate{
 			Name: FactGrantedTargetSet,
-			IDs:  []biscuit.Term{biscuit.String(tFact), exactByFact[tFact]},
+			IDs:  []biscuit.Term{biscuit.String(tFact), bset},
 		}})
 	}
 	return facts
