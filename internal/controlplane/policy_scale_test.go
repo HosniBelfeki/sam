@@ -258,3 +258,80 @@ func TestValidatePolicyConfigFactBudget(t *testing.T) {
 		}
 	})
 }
+
+// TestPolicyScaleManyRoles demonstrates that mintBiscuit now merges exact
+// grants across ALL of an identity's matched roles (not just within a single
+// role, see TestPolicyScaleSetEncoding) into one Set fact per service type /
+// target fact name for the whole token, instead of one Set fact per role.
+// That removes what used to be the dominant per-role cost (~2-3 facts/role),
+// leaving only the one role(X) fact biscuit-go still has to add per matched
+// role - a much cheaper, but still O(matched roles), residual cost. So the
+// ceiling for "many roles matching one identity" grows roughly 3-4x (from
+// ~300 to ~900 roles) rather than becoming flat; going meaningfully higher
+// would require not embedding one role(X) fact per matched role at all.
+//
+// This deliberately bypasses validatePolicyConfig: that guard stays
+// conservative (see maxIdentityFactBudget) because it must also bound
+// internal/node/policy.go's mesh policy rules, which resolve roles
+// dynamically from live claims at request time and so cannot pre-merge
+// grants across roles the way mint time can. Probe further with e.g.:
+//
+//	SAM_POLICY_SCALE_ROLES_MAX=900 go test ./internal/controlplane -run TestPolicyScaleManyRoles -v
+func TestPolicyScaleManyRoles(t *testing.T) {
+	roleTiers := []int{10, 100, 800}
+	if extra := os.Getenv("SAM_POLICY_SCALE_ROLES_MAX"); extra != "" {
+		n, err := strconv.Atoi(extra)
+		if err != nil {
+			t.Fatalf("invalid SAM_POLICY_SCALE_ROLES_MAX=%q: %v", extra, err)
+		}
+		roleTiers = append(roleTiers, n)
+	}
+
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	nodeKey, _, err := crypto.GenerateKeyPair(crypto.Ed25519, -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodePeer, err := peer.IDFromPrivateKey(nodeKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, n := range roleTiers {
+		roles := make([]*api.PolicyRole, 0, n)
+		roleNames := make([]string, 0, n)
+		for i := 0; i < n; i++ {
+			name := fmt.Sprintf("role-%d", i)
+			roleNames = append(roleNames, name)
+			roles = append(roles, &api.PolicyRole{
+				Name: name,
+				AllowedServices: []string{
+					fmt.Sprintf("mcp://svc-%d-a.example", i),
+					fmt.Sprintf("mcp://svc-%d-b.example", i),
+				},
+				AllowedTargets: []string{fmt.Sprintf("group:team-%d", i)},
+			})
+		}
+
+		claims := jwt.MapClaims{}
+		start := time.Now()
+		biscuitBytes, _, err := identity.MintBiscuitToken(priv, claims, nil, nodePeer, time.Now().Add(time.Hour), roleNames, roles)
+		mintDur := time.Since(start)
+		if err != nil {
+			t.Fatalf("mint failed at n=%d matched roles: %v", n, err)
+		}
+
+		start = time.Now()
+		_, authErr := identity.VerifyBiscuit(biscuitBytes, nodePeer, []ed25519.PublicKey{pub}, 5*time.Second)
+		authorizeDur := time.Since(start)
+		if authErr != nil {
+			t.Fatalf("authorize failed at n=%d matched roles (cross-role Set merging should keep this well below the fact limit): %v", n, authErr)
+		}
+
+		t.Logf("matched_roles=%-6d mint=%-12s biscuit_size=%-10dB authorize=%-12s", n, mintDur, len(biscuitBytes), authorizeDur)
+	}
+}

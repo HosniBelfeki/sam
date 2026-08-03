@@ -97,6 +97,11 @@ func mintBiscuit(signingKey ed25519.PrivateKey, remotePeer peer.ID, roles []stri
 	hasServices := false
 	sort.Strings(roles)
 	var errs []error
+	// Collected across every matched role and merged into Set facts once below: a token's
+	// authorization is the union of its resolved roles' grants, so exact entries don't need to
+	// stay siloed per role, and merging keeps fact counts flat regardless of how many roles match.
+	var allServices []string
+	var allTargets []string
 	for _, role := range roles {
 		if err := addFact(biscuit.Fact{Predicate: biscuit.Predicate{
 			Name: api.FactRole,
@@ -127,22 +132,12 @@ func mintBiscuit(signingKey ed25519.PrivateKey, remotePeer peer.ID, roles []stri
 		if pr, ok := rolesMap[role]; ok {
 			if len(pr.AllowedServices) > 0 {
 				hasServices = true
-				// Exact-match entries are grouped into a single Set fact per service type so token/world
-				// fact counts stay flat regardless of how many exact services a role grants.
-				for _, fact := range api.BuildServiceDatalogFacts(pr.AllowedServices) {
-					if err := addFact(fact); err != nil {
-						errs = append(errs, fmt.Errorf("failed to add service fact for role %s: %w", role, err))
-					}
-				}
+				allServices = append(allServices, pr.AllowedServices...)
 			}
 
 			if len(pr.AllowedTargets) > 0 {
 				hasTargets = true
-				for _, fact := range api.BuildTargetDatalogFacts(pr.AllowedTargets) {
-					if err := addFact(fact); err != nil {
-						errs = append(errs, fmt.Errorf("failed to add target fact for role %s: %w", role, err))
-					}
-				}
+				allTargets = append(allTargets, pr.AllowedTargets...)
 			}
 
 			for _, customFact := range pr.CustomDatalog {
@@ -157,6 +152,17 @@ func mintBiscuit(signingKey ed25519.PrivateKey, remotePeer peer.ID, roles []stri
 					errs = append(errs, fmt.Errorf("failed to add custom Datalog fact %q for role %s: %w", customFact, role, err))
 				}
 			}
+		}
+	}
+
+	for _, fact := range api.BuildServiceDatalogFacts(allServices) {
+		if err := addFact(fact); err != nil {
+			errs = append(errs, fmt.Errorf("failed to add service fact: %w", err))
+		}
+	}
+	for _, fact := range api.BuildTargetDatalogFacts(allTargets) {
+		if err := addFact(fact); err != nil {
+			errs = append(errs, fmt.Errorf("failed to add target fact: %w", err))
 		}
 	}
 
