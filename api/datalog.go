@@ -17,6 +17,7 @@ package api
 import (
 	"fmt"
 	"maps"
+	"sort"
 	"strings"
 
 	"github.com/biscuit-auth/biscuit-go/v2"
@@ -130,6 +131,13 @@ const (
 	// Example Datalog: allow if service("mcp", "calculator"), granted_service_exact("mcp", "calculator")
 	FactGrantedServiceExact = "granted_service_exact"
 
+	// FactGrantedServiceSet allows access to a Set of exact service names under a specific service
+	// type. This lets many exact grants for the same type be carried as a single Datalog fact instead
+	// of one fact per entry, which keeps token/world fact counts flat regardless of list length.
+	// Contains: biscuit.String(serviceType), biscuit.Set of biscuit.String(serviceName)
+	// Example Datalog: allow if service("mcp", "calculator"), granted_service_set("mcp", $set), $set.contains("calculator")
+	FactGrantedServiceSet = "granted_service_set"
+
 	// FactGrantedTargetAllTypes allows target access to all network targets (unrestricted).
 	// Contains: (no terms)
 	FactGrantedTargetAllTypes = "granted_target_all_types"
@@ -154,6 +162,12 @@ const (
 	// FactGrantedTargetAllFacts allows target access to any fact name and value combination.
 	// Contains: (no terms)
 	FactGrantedTargetAllFacts = "granted_target_all_facts"
+
+	// FactGrantedTargetSet allows target access to a Set of exact values for a specific fact name.
+	// This lets many exact target grants for the same fact name be carried as a single Datalog fact
+	// instead of one fact per entry, which keeps token/world fact counts flat regardless of list length.
+	// Contains: biscuit.String(factName), biscuit.Set of biscuit.String(factValue)
+	FactGrantedTargetSet = "granted_target_set"
 
 	// FactConnectionPeerID defines the actual PeerID of the remote peer making the connection.
 	// Contains: biscuit.String(connectionPeerID)
@@ -233,6 +247,10 @@ func init() {
 		// that perfectly matches both the protocol type (e.g. "mcp") and the service name (e.g. "calculator").
 		fmt.Sprintf(`allow if %s($type, $name), %s($type, $name)`, FactService, FactGrantedServiceExact),
 
+		// Exact Set Match: Allows access if the token possesses a granted_service_set fact for the given
+		// protocol type whose Set of names contains the requested service name.
+		fmt.Sprintf(`allow if %s($type, $name), %s($type, $set), $set.contains($name)`, FactService, FactGrantedServiceSet),
+
 		// Prefix Match: Allows access if the token possesses a granted_service_prefix fact
 		// for the given protocol type, and the requested service name starts with that prefix.
 		fmt.Sprintf(`allow if %s($type, $name), %s($type, $prefix), $name.starts_with($prefix)`, FactService, FactGrantedServicePrefix),
@@ -263,6 +281,10 @@ func init() {
 	ruleStrs := []string{
 		// Exact Match: Derives allow_network_target if the token has a granted_target_exact fact matching a target_fact exactly.
 		fmt.Sprintf(`%s($fact, $val) <- %s($fact, $val), %s($fact, $val)`, FactAllowNetworkTarget, FactTargetFact, FactGrantedTargetExact),
+
+		// Exact Set Match: Derives allow_network_target if the token has a granted_target_set fact for the
+		// given fact name whose Set of values contains the target_fact value.
+		fmt.Sprintf(`%s($fact, $val) <- %s($fact, $val), %s($fact, $set), $set.contains($val)`, FactAllowNetworkTarget, FactTargetFact, FactGrantedTargetSet),
 
 		// Prefix Match: Derives allow_network_target if the token has a granted_target_prefix fact and the target_fact value starts with that prefix.
 		fmt.Sprintf(`%s($fact, $val) <- %s($fact, $val), %s($fact, $prefix), $val.starts_with($prefix)`, FactAllowNetworkTarget, FactTargetFact, FactGrantedTargetPrefix),
@@ -396,4 +418,113 @@ func BuildTargetDatalogFact(targetStr string) biscuit.Fact {
 		Name: FactGrantedTargetExact,
 		IDs:  []biscuit.Term{biscuit.String(tFact), biscuit.String(tVal)},
 	}}
+}
+
+// isExactService reports whether serviceStr resolves to a plain exact-match grant, as opposed to a
+// wildcard/prefix/suffix pattern which already collapses to a single, cheap fact via BuildServiceDatalogFact.
+func isExactService(serviceStr string) (svcType, svcName string, exact bool) {
+	svcType, svcName = ParseServiceTarget(serviceStr)
+	if svcType == "*" && svcName == "*" {
+		return svcType, svcName, false
+	}
+	if svcName == "*" || strings.HasPrefix(svcName, "*.") || strings.HasSuffix(svcName, ".*") {
+		return svcType, svcName, false
+	}
+	return svcType, svcName, true
+}
+
+// isExactTarget reports whether targetStr resolves to a plain exact-match grant, as opposed to a
+// wildcard/prefix/suffix pattern which already collapses to a single, cheap fact via BuildTargetDatalogFact.
+func isExactTarget(targetStr string) (tFact, tVal string, exact bool) {
+	tFact, tVal = ParseServiceTarget(targetStr)
+	if tFact == "" {
+		tFact = "node"
+	}
+	if tFact == "*" && tVal == "*" {
+		return tFact, tVal, false
+	}
+	if tVal == "*" || strings.HasPrefix(tVal, "*.") || strings.HasSuffix(tVal, ".*") {
+		return tFact, tVal, false
+	}
+	return tFact, tVal, true
+}
+
+// BuildServiceDatalogFacts translates a list of service patterns into a minimal set of Datalog facts.
+// Exact-match entries are grouped by service type into a single granted_service_set fact each, so
+// token/world fact counts stay flat regardless of how many exact services a role grants. Wildcard,
+// prefix and suffix entries keep their existing one-fact-per-entry representation via
+// BuildServiceDatalogFact, since those already collapse to a single fact per entry.
+func BuildServiceDatalogFacts(services []string) []biscuit.Fact {
+	facts := make([]biscuit.Fact, 0, len(services))
+	exactByType := make(map[string]map[string]bool)
+	var types []string
+	for _, svc := range services {
+		svcType, svcName, exact := isExactService(svc)
+		if !exact {
+			facts = append(facts, BuildServiceDatalogFact(svc))
+			continue
+		}
+		if _, ok := exactByType[svcType]; !ok {
+			exactByType[svcType] = make(map[string]bool)
+			types = append(types, svcType)
+		}
+		exactByType[svcType][svcName] = true
+	}
+	sort.Strings(types)
+	for _, svcType := range types {
+		names := make([]string, 0, len(exactByType[svcType]))
+		for name := range exactByType[svcType] {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		bset := make(biscuit.Set, 0, len(names))
+		for _, name := range names {
+			bset = append(bset, biscuit.String(name))
+		}
+		facts = append(facts, biscuit.Fact{Predicate: biscuit.Predicate{
+			Name: FactGrantedServiceSet,
+			IDs:  []biscuit.Term{biscuit.String(svcType), bset},
+		}})
+	}
+	return facts
+}
+
+// BuildTargetDatalogFacts translates a list of target patterns into a minimal set of Datalog facts.
+// Exact-match entries are grouped by fact name into a single granted_target_set fact each, so
+// token/world fact counts stay flat regardless of how many exact targets a role grants. Wildcard,
+// prefix and suffix entries keep their existing one-fact-per-entry representation via
+// BuildTargetDatalogFact, since those already collapse to a single fact per entry.
+func BuildTargetDatalogFacts(targets []string) []biscuit.Fact {
+	facts := make([]biscuit.Fact, 0, len(targets))
+	exactByFact := make(map[string]map[string]bool)
+	var factNames []string
+	for _, t := range targets {
+		tFact, tVal, exact := isExactTarget(t)
+		if !exact {
+			facts = append(facts, BuildTargetDatalogFact(t))
+			continue
+		}
+		if _, ok := exactByFact[tFact]; !ok {
+			exactByFact[tFact] = make(map[string]bool)
+			factNames = append(factNames, tFact)
+		}
+		exactByFact[tFact][tVal] = true
+	}
+	sort.Strings(factNames)
+	for _, tFact := range factNames {
+		vals := make([]string, 0, len(exactByFact[tFact]))
+		for val := range exactByFact[tFact] {
+			vals = append(vals, val)
+		}
+		sort.Strings(vals)
+		bset := make(biscuit.Set, 0, len(vals))
+		for _, val := range vals {
+			bset = append(bset, biscuit.String(val))
+		}
+		facts = append(facts, biscuit.Fact{Predicate: biscuit.Predicate{
+			Name: FactGrantedTargetSet,
+			IDs:  []biscuit.Term{biscuit.String(tFact), bset},
+		}})
+	}
+	return facts
 }

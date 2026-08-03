@@ -1833,8 +1833,17 @@ func toStringSlice(val any) []string {
 	return nil
 }
 
+// maxIdentityFactBudget bounds the worst-case number of Datalog facts a policy
+// config could let a single identity accumulate across all of its resolved
+// roles. biscuit-go's authorizer defaults to rejecting worlds beyond ~1000
+// facts (datalog.ErrWorldRunLimitMaxFacts); this stays safely under that limit
+// so an admin gets a clear validation error instead of users hitting
+// unexplained authorization failures later.
+const maxIdentityFactBudget = 900
+
 func validatePolicyConfig(req *api.PolicyConfigUpdateRequest) error {
 	roleNames := make(map[string]bool)
+	factBudget := 0
 	for _, r := range req.Roles {
 		if r == nil {
 			continue
@@ -1868,6 +1877,18 @@ func validatePolicyConfig(req *api.PolicyConfigUpdateRequest) error {
 				}
 			}
 		}
+
+		// Worst case for fact-count purposes assumes a single identity could be
+		// granted every role (e.g. via overlapping group/claim bindings), so we
+		// sum each role's contribution rather than relying on assumptions about
+		// which roles are mutually exclusive for a given identity.
+		factBudget += len(api.BuildServiceDatalogFacts(r.AllowedServices))
+		factBudget += len(api.BuildTargetDatalogFacts(r.AllowedTargets))
+		factBudget += len(r.CustomDatalog)
+	}
+
+	if factBudget > maxIdentityFactBudget {
+		return fmt.Errorf("policy config would allow a single identity (via overlapping bindings) to accumulate up to %d Datalog facts across all roles, exceeding the safe budget of %d; biscuit-go's authorizer rejects tokens/checks beyond ~1000 world facts, so requests would start failing at authorization time instead of at config validation. Reduce the number of roles, grants, or custom_datalog entries", factBudget, maxIdentityFactBudget)
 	}
 
 	validPrefixes := map[string]bool{

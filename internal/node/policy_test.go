@@ -42,20 +42,19 @@ func TestBuildPolicyRules(t *testing.T) {
 	rules := BuildPolicyRules(roles, bindings)
 
 	expectedStrings := map[string]bool{
-		"role(\"test-role\")":                                                          false,
-		"role(\"test-role\") <- user(\"alice\")":                                       false,
-		"granted_service_all_types() <- role(\"test-role\")":                           false,
-		"granted_service_all(\"mcp\") <- role(\"test-role\")":                          false,
-		"granted_service_suffix(\"mcp\", \".suffix\") <- role(\"test-role\")":          false,
-		"granted_service_prefix(\"mcp\", \"prefix.\") <- role(\"test-role\")":          false,
-		"granted_service_exact(\"mcp\", \"exact\") <- role(\"test-role\")":             false,
-		"target_unrestricted() <- role(\"test-role\")":                                 false,
-		"target_restricted() <- role(\"test-role\")":                                   false,
-		"granted_target_exact(\"node\", \"peer-abc\") <- role(\"test-role\")":          false,
-		"granted_target_exact(\"custom-fact\", \"custom-val\") <- role(\"test-role\")": false,
-		"granted_target_exact(\"node\", \"legacy-peer\") <- role(\"test-role\")":       false,
-		"custom_rule($x) <- fact($x)":                                                  false,
-		"custom_fact(\"hello\")":                                                       false,
+		"role(\"test-role\")":                                                                  false,
+		"role(\"test-role\") <- user(\"alice\")":                                               false,
+		"granted_service_all_types() <- role(\"test-role\")":                                   false,
+		"granted_service_all(\"mcp\") <- role(\"test-role\")":                                  false,
+		"granted_service_suffix(\"mcp\", \".suffix\") <- role(\"test-role\")":                  false,
+		"granted_service_prefix(\"mcp\", \"prefix.\") <- role(\"test-role\")":                  false,
+		"granted_service_set(\"mcp\", [\"exact\"]) <- role(\"test-role\")":                     false,
+		"target_unrestricted() <- role(\"test-role\")":                                         false,
+		"target_restricted() <- role(\"test-role\")":                                           false,
+		"granted_target_set(\"node\", [\"legacy-peer\", \"peer-abc\"]) <- role(\"test-role\")": false,
+		"granted_target_set(\"custom-fact\", [\"custom-val\"]) <- role(\"test-role\")":         false,
+		"custom_rule($x) <- fact($x)":                                                          false,
+		"custom_fact(\"hello\")":                                                               false,
 	}
 
 	for _, rule := range rules {

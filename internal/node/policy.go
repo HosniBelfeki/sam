@@ -49,8 +49,7 @@ func BuildPolicyRules(roles []*api.PolicyRole, bindings []*api.PolicyBinding) []
 		}
 		roleName := role.Name
 
-		for _, svc := range role.AllowedServices {
-			fact := api.BuildServiceDatalogFact(svc)
+		for _, fact := range api.BuildServiceDatalogFacts(role.AllowedServices) {
 			rules = append(rules, biscuit.Rule{
 				Head: fact.Predicate,
 				Body: []biscuit.Predicate{
@@ -93,11 +92,13 @@ func BuildPolicyRules(roles []*api.PolicyRole, bindings []*api.PolicyBinding) []
 			})
 		}
 
+		nonWildcardTargets := make([]string, 0, len(role.AllowedTargets))
 		for _, t := range role.AllowedTargets {
-			if t == "*" {
-				continue
+			if t != "*" {
+				nonWildcardTargets = append(nonWildcardTargets, t)
 			}
-			fact := api.BuildTargetDatalogFact(t)
+		}
+		for _, fact := range api.BuildTargetDatalogFacts(nonWildcardTargets) {
 			rules = append(rules, biscuit.Rule{
 				Head: fact.Predicate,
 				Body: []biscuit.Predicate{

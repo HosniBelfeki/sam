@@ -192,6 +192,28 @@ func TestBaselineRules(t *testing.T) {
 			expectSuccess: true,
 		},
 		{
+			name: "Baseline Rule 1b: Exact Set Match",
+			mintToken: func(t *testing.T, builder biscuit.Builder) {
+				factStr := fmt.Sprintf(`%s("mcp", ["other_tool", "test_tool"])`, api.FactGrantedServiceSet)
+				fact, _ := parser.FromStringFact(factStr)
+				_ = builder.AddAuthorityFact(fact)
+			},
+			protocol:      "test_tool",
+			target:        "mcp://test_tool",
+			expectSuccess: true,
+		},
+		{
+			name: "Baseline Rule 1c: Exact Set Rejection for non-member",
+			mintToken: func(t *testing.T, builder biscuit.Builder) {
+				factStr := fmt.Sprintf(`%s("mcp", ["other_tool"])`, api.FactGrantedServiceSet)
+				fact, _ := parser.FromStringFact(factStr)
+				_ = builder.AddAuthorityFact(fact)
+			},
+			protocol:      "test_tool",
+			target:        "mcp://test_tool",
+			expectSuccess: false,
+		},
+		{
 			name: "Baseline Rule 2: Global Wildcard",
 			mintToken: func(t *testing.T, builder biscuit.Builder) {
 				factStr := fmt.Sprintf(`%s()`, api.FactGrantedServiceAllTypes)
@@ -636,6 +658,38 @@ func TestMiddlewareTargetChecks(t *testing.T) {
 				Group:    "eng",
 			},
 			expectSuccess: true,
+		},
+		{
+			name: "Target Check: Allowed by Group Set Fact",
+			mintToken: func(t *testing.T, builder biscuit.Builder) {
+				_ = builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{
+					Name: api.FactGrantedTargetSet,
+					IDs:  []biscuit.Term{biscuit.String("group"), biscuit.Set{biscuit.String("eng"), biscuit.String("sales")}},
+				}})
+			},
+			req: RequestContext{
+				PeerID:   dummyPeer,
+				Protocol: "test_tool",
+				Target:   "mcp://test_tool",
+				Group:    "eng",
+			},
+			expectSuccess: true,
+		},
+		{
+			name: "Target Check: Rejected by Group Set Fact for non-member",
+			mintToken: func(t *testing.T, builder biscuit.Builder) {
+				_ = builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{
+					Name: api.FactGrantedTargetSet,
+					IDs:  []biscuit.Term{biscuit.String("group"), biscuit.Set{biscuit.String("sales")}},
+				}})
+			},
+			req: RequestContext{
+				PeerID:   dummyPeer,
+				Protocol: "test_tool",
+				Target:   "mcp://test_tool",
+				Group:    "eng",
+			},
+			expectSuccess: false,
 		},
 	}
 
