@@ -39,7 +39,7 @@ func TestPubSubTools(t *testing.T) {
 	}
 	t.Logf("Node 2 logs at: %s/node2.log", tmpHome2)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	// Start Node 1
