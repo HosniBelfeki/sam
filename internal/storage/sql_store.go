@@ -72,6 +72,20 @@ func NewSQLStore(driverName, dataSourceName string) (*SQLStore, error) {
 			_ = db.Close()
 			return nil, fmt.Errorf("failed to ping database: %w", pingErr)
 		}
+
+		// Bound the pool so a busy control-plane can't exhaust the postgres
+		// server's max_connections; recycle connections periodically so
+		// long-lived ones don't accumulate stale server-side state.
+		db.SetMaxOpenConns(25)
+		db.SetMaxIdleConns(5)
+		db.SetConnMaxLifetime(5 * time.Minute)
+	} else {
+		// SQLite only supports a single writer at a time, and a lone
+		// connection keeps ":memory:" DSNs (used by tests) consistent,
+		// since each sql.DB connection to ":memory:" is otherwise its
+		// own independent, empty database.
+		db.SetMaxOpenConns(1)
+		db.SetMaxIdleConns(1)
 	}
 
 	store := &SQLStore{
