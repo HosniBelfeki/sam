@@ -80,12 +80,19 @@ func NewSQLStore(driverName, dataSourceName string) (*SQLStore, error) {
 		db.SetMaxIdleConns(5)
 		db.SetConnMaxLifetime(5 * time.Minute)
 	} else {
-		// SQLite only supports a single writer at a time, and a lone
-		// connection keeps ":memory:" DSNs (used by tests) consistent,
-		// since each sql.DB connection to ":memory:" is otherwise its
-		// own independent, empty database.
-		db.SetMaxOpenConns(1)
-		db.SetMaxIdleConns(1)
+		if strings.Contains(dataSourceName, ":memory:") {
+			// A lone connection keeps ":memory:" DSNs (used by tests)
+			// consistent, since each additional sql.DB connection to
+			// ":memory:" is otherwise its own independent, empty database.
+			db.SetMaxOpenConns(1)
+			db.SetMaxIdleConns(1)
+		} else {
+			// File-backed SQLite in WAL mode supports concurrent readers
+			// with a single writer, so allow a small pool instead of
+			// serializing every access through one connection.
+			db.SetMaxOpenConns(10)
+			db.SetMaxIdleConns(2)
+		}
 	}
 
 	store := &SQLStore{
