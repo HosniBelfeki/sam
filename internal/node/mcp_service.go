@@ -19,6 +19,7 @@ import (
 
 	"github.com/google/sam/api"
 	"github.com/libp2p/go-libp2p/core/network"
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -94,10 +95,28 @@ func (m *MCPService) HandleStreamPassThrough(s network.Stream) {
 		for {
 			msg, err := clientConn.Read(ctx)
 			if err != nil {
+				logger.Debugf("[MCPService] %s: client read error: %v", m.info.Name, err)
 				errc <- err
 				return
 			}
 			if err := backendConn.Write(ctx, msg); err != nil {
+				logger.Debugf("[MCPService] %s: backend write error: %v", m.info.Name, err)
+				// The backend transport (or the backend itself) may reject a
+				// specific request it doesn't understand - e.g. a newer SDK's
+				// preflight "server/discover" call against an older backend
+				// that only understands the legacy "initialize" handshake.
+				// Reply with a JSON-RPC error for that call instead of
+				// tearing down the whole connection, so the client can fall
+				// back and keep using the same session.
+				if req, ok := msg.(*jsonrpc.Request); ok && req.IsCall() {
+					resp := &jsonrpc.Response{ID: req.ID, Error: &jsonrpc.Error{Code: jsonrpc.CodeMethodNotFound, Message: err.Error()}}
+					if werr := clientConn.Write(ctx, resp); werr != nil {
+						logger.Debugf("[MCPService] %s: failed to write error response to client: %v", m.info.Name, werr)
+						errc <- werr
+						return
+					}
+					continue
+				}
 				errc <- err
 				return
 			}
@@ -108,10 +127,12 @@ func (m *MCPService) HandleStreamPassThrough(s network.Stream) {
 		for {
 			msg, err := backendConn.Read(ctx)
 			if err != nil {
+				logger.Debugf("[MCPService] %s: backend read error: %v", m.info.Name, err)
 				errc <- err
 				return
 			}
 			if err := clientConn.Write(ctx, msg); err != nil {
+				logger.Debugf("[MCPService] %s: client write error: %v", m.info.Name, err)
 				errc <- err
 				return
 			}
