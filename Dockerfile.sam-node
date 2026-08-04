@@ -12,6 +12,7 @@ RUN mkdir -p /data-seed && chown 65532:65532 /data-seed
 
 # Stage 2: Final
 FROM gcr.io/distroless/static:nonroot
+WORKDIR /tmp
 COPY --from=builder --chown=nonroot:nonroot /app/sam-node /
 COPY --from=builder --chown=nonroot:nonroot /data-seed /data
 USER nonroot:nonroot
