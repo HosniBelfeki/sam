@@ -1243,3 +1243,125 @@ func TestDiscoverProviderWithRetry(t *testing.T) {
 		}
 	})
 }
+
+// TestAuthDenialPaths exercises the negative/rejection paths of the
+// zero-trust boundary: malformed input, wrong audience, oversized bodies,
+// and bad admin credentials must never reach business logic.
+func TestAuthDenialPaths(t *testing.T) {
+	issuer, mintToken := startCustomMockOIDC(t)
+	srv, store, baseURL := setupTestServer(t, issuer)
+	defer func() {
+		_ = srv.Close()
+		_ = store.Close()
+	}()
+	srv.config.AdminToken = "super-secret-admin-token"
+
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	newEnrollBody := func(jwtStr string) []byte {
+		privNode, pubNode, err := crypto.GenerateKeyPair(crypto.Ed25519, -1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pID, err := peer.IDFromPrivateKey(privNode)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pubBytes, _ := crypto.MarshalPublicKey(pubNode)
+		reqData, _ := proto.Marshal(&api.EnrollRequest{
+			Jwt:           jwtStr,
+			PeerId:        pID.String(),
+			PublicKey:     pubBytes,
+			RequestedRole: api.RoleNode,
+		})
+		return reqData
+	}
+
+	t.Run("malformed protobuf body is rejected", func(t *testing.T) {
+		resp, err := client.Post(baseURL+"/register", "application/x-protobuf", bytes.NewReader([]byte("not-a-protobuf-message")))
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("expected 400 for malformed protobuf body, got %d", resp.StatusCode)
+		}
+	})
+
+	t.Run("malformed JWT is rejected", func(t *testing.T) {
+		resp, err := client.Post(baseURL+"/register", "application/x-protobuf", bytes.NewReader(newEnrollBody("not-a-valid-jwt")))
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Errorf("expected 401 for malformed JWT, got %d", resp.StatusCode)
+		}
+	})
+
+	t.Run("wrong audience JWT is rejected", func(t *testing.T) {
+		badAudJWT := mintToken(map[string]interface{}{
+			"sub": "node-mallory",
+			"aud": "some-other-audience",
+		})
+		resp, err := client.Post(baseURL+"/register", "application/x-protobuf", bytes.NewReader(newEnrollBody(badAudJWT)))
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Errorf("expected 401 for wrong-audience JWT, got %d", resp.StatusCode)
+		}
+	})
+
+	t.Run("oversized body is rejected", func(t *testing.T) {
+		oversized := bytes.Repeat([]byte("a"), maxRequestBodyBytes+1)
+		resp, err := client.Post(baseURL+"/register", "application/x-protobuf", bytes.NewReader(oversized))
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		if resp.StatusCode == http.StatusOK {
+			t.Errorf("expected oversized body to be rejected, got %d", resp.StatusCode)
+		}
+	})
+
+	t.Run("admin endpoint rejects wrong token", func(t *testing.T) {
+		req, _ := http.NewRequest("GET", baseURL+"/admin/status", nil)
+		req.Header.Set("Authorization", "Bearer this-is-not-the-admin-token")
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Errorf("expected 401 for wrong admin token, got %d", resp.StatusCode)
+		}
+	})
+
+	t.Run("register rejects role not granted by policy", func(t *testing.T) {
+		if err := store.SaveMeshPolicy(context.Background(), nil, []*api.PolicyBinding{
+			{Role: api.RoleNode, Members: []string{"group:users"}},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		unauthorizedJWT := mintToken(map[string]interface{}{
+			"sub":    "node-outsider",
+			"groups": []string{"outsiders"},
+		})
+		reqData := newEnrollBody(unauthorizedJWT)
+		var req api.EnrollRequest
+		_ = proto.Unmarshal(reqData, &req)
+		req.RequestedRole = api.RoleSamBox // not granted to "group:outsiders"
+		reqData, _ = proto.Marshal(&req)
+
+		resp, err := client.Post(baseURL+"/register", "application/x-protobuf", bytes.NewReader(reqData))
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Errorf("expected 403 for unauthorized role request, got %d", resp.StatusCode)
+		}
+	})
+}
