@@ -170,10 +170,9 @@ roles:
 	defer func() { _ = cmdRouterB.Process.Kill(); _ = cmdRouterB.Wait() }()
 
 	// Wait for routers to lease
-	time.Sleep(3 * time.Second)
+	peerInfoList := waitForActiveRouters(t, cpPort, 2, 5*time.Second)
 
 	// Verify both routers registered on the control plane
-	peerInfoList := fetchActiveRouters(t, cpPort)
 	if len(peerInfoList) != 2 {
 		t.Fatalf("expected 2 active routers registered on control plane, got %d\nRouter A Stderr:\n%s\nRouter B Stderr:\n%s",
 			len(peerInfoList), stderrRouterA.String(), stderrRouterB.String())

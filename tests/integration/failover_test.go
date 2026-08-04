@@ -156,7 +156,7 @@ roles: {}
 	defer func() { _ = cmdRouterA.Process.Kill(); _ = cmdRouterA.Wait() }()
 
 	// Wait for Router A to renew lease and register in CP A
-	time.Sleep(3 * time.Second)
+	waitForActiveRouters(t, httpPortCP_A, 1, 5*time.Second)
 
 	// 5. Start CP B
 	cmdCP_B := exec.Command(cpBin,
@@ -188,10 +188,7 @@ roles: {}
 	defer func() { _ = cmdRouterB.Process.Kill(); _ = cmdRouterB.Wait() }()
 
 	// Wait for Router B to renew lease and register in CP B
-	time.Sleep(3 * time.Second)
-
-	// Fetch Router B PeerID
-	peerInfoList := fetchActiveRouters(t, httpPortCP_B)
+	peerInfoList := waitForActiveRouters(t, httpPortCP_B, 1, 5*time.Second)
 	if len(peerInfoList) != 1 {
 		t.Fatalf("expected 1 router registered on CP B, got %d", len(peerInfoList))
 	}
@@ -302,6 +299,24 @@ roles: {}
 		t.Fatalf("Failed to connect to Node B via Hub B relay: %v\nOutput: %s", connectErr, stdoutNode.String()+stderrNode.String())
 	}
 	t.Log("Successfully connected to Node B via Hub B relay circuit!")
+}
+
+// waitForActiveRouters polls the control plane's /info endpoint until at
+// least minCount routers are registered, instead of sleeping a fixed
+// worst-case duration.
+func waitForActiveRouters(t *testing.T, httpPort, minCount int, timeout time.Duration) []string {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		routers := fetchActiveRouters(t, httpPort)
+		if len(routers) >= minCount {
+			return routers
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %d active router(s) on port %d, got %d", minCount, httpPort, len(routers))
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
 }
 
 func fetchActiveRouters(t *testing.T, httpPort int) []string {

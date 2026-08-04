@@ -70,6 +70,7 @@ mkdir -p /tmp/control-plane-data /tmp/router-data
 docker run --name sam-control-plane \
   --network sam-net \
   -p 37001:37001 \
+  --user "$(id -u):$(id -g)" \
   -v /tmp/control-plane-data:/data \
   -d --rm \
   sam-control-plane:local \
@@ -87,6 +88,7 @@ ROUTER_JWT=$(curl -s -X POST -d "grant_type=client_credentials&client_id=router-
 docker run --name sam-router \
   --network sam-net \
   -p 37002:37002 \
+  --user "$(id -u):$(id -g)" \
   -v /tmp/router-data:/data \
   -d --rm \
   sam-router:local \
@@ -134,6 +136,7 @@ HOST_JWT=$(curl -s -X POST -d "grant_type=client_credentials&client_id=test-clie
 docker run --name host-node \
   --network sam-net \
   -p 8081:8081 \
+  --user "$(id -u):$(id -g)" \
   -v /tmp/host-node-data:/data \
   --add-host=host.docker.internal:host-gateway \
   -d --rm \

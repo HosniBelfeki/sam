@@ -9,7 +9,8 @@ RUN gcc -shared -fPIC -ldl -o libinterceptor.so cmd/nano-init/interceptor/interc
 RUN CGO_ENABLED=0 GOOS=linux go build -buildvcs=false -o nano-init ./cmd/nano-init
 
 # Stage 2: Final
-FROM gcr.io/distroless/base:latest
-COPY --from=builder /app/nano-init /
-COPY --from=builder /app/libinterceptor.so /opt/sam/libinterceptor.so
+FROM gcr.io/distroless/base:nonroot
+COPY --from=builder --chown=nonroot:nonroot /app/nano-init /
+COPY --from=builder --chown=nonroot:nonroot /app/libinterceptor.so /opt/sam/libinterceptor.so
+USER nonroot:nonroot
 ENTRYPOINT ["/nano-init"]

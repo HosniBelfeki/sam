@@ -8,6 +8,15 @@ on:
       - 'v*.*.*'
   workflow_dispatch:
 
+# Serialize deploys per-environment so a burst of pushes (e.g. several
+# dependabot PRs merging back-to-back) can't run concurrently against the
+# same GKE namespace and race on shared resources (e.g. the dns-sync-rollout
+# job name). Keeps only the latest queued run per environment; never cancels
+# one already in progress.
+concurrency:
+  group: deploy-${{ github.ref_type == 'tag' && 'hub' || 'bananas' }}
+  cancel-in-progress: false
+
 env:
   REGISTRY: ghcr.io
 

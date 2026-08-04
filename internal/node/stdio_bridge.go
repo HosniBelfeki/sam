@@ -128,12 +128,13 @@ func (b *StdioBridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	case http.MethodPost:
+		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
+		defer func() { _ = r.Body.Close() }()
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			http.Error(w, "Failed to read body", http.StatusInternalServerError)
 			return
 		}
-		_ = r.Body.Close()
 
 		var msg map[string]any
 		isCall := false

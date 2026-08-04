@@ -12,6 +12,13 @@ controlPlane:
   insecureSkipTlsVerify: true
   oidcIssuer: "http://sam-mesh-dex:5556/dex"
   allowedAudiences: "sam-mesh-audience,sam-hub-audience"
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
   service:
     type: ClusterIP
     port: 8080
@@ -30,6 +37,13 @@ database:
     port: 5432
     sslmode: disable
     storageSize: 1Gi
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 1000m
+        memory: 1Gi
 
 router:
   enabled: true
@@ -38,6 +52,13 @@ router:
     repository: sam-router
   useOidcToken: false
   logLevel: info
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
   service:
     type: ClusterIP
     port: 4501
@@ -48,6 +69,13 @@ console:
   replicaCount: 1
   image:
     repository: sam-console
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
   service:
     type: ClusterIP
     port: 8081

@@ -46,6 +46,8 @@ spec:
             path: /info
             port: http
           periodSeconds: 15
+        resources:
+          {{- toYaml .Values.controlPlane.resources | nindent 10 }}
         args:
         - "--bind-address=0.0.0.0:8080"
         {{- if eq .Values.database.type "postgres" }}
