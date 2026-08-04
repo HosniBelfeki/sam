@@ -228,12 +228,17 @@ type ServiceRequest struct {
 	ServiceName string `json:"service_name"`
 }
 
+// maxRequestBodyBytes caps request bodies read into memory to guard
+// against memory-exhaustion from oversized payloads.
+const maxRequestBodyBytes = 1 << 20 // 1 MiB
+
 func handleRegisterService(node *SamNode, w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "Failed to read request body", http.StatusInternalServerError)
@@ -281,6 +286,7 @@ func handleUnregisterService(node *SamNode, w http.ResponseWriter, r *http.Reque
 	}
 
 	var req api.ServiceInfo
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
