@@ -7,6 +7,7 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -buildvcs=false -o sam-node ./cmd/sam-node
 
 # Stage 2: Final
-FROM gcr.io/distroless/static:latest
-COPY --from=builder /app/sam-node /
+FROM gcr.io/distroless/static:nonroot
+COPY --from=builder --chown=nonroot:nonroot /app/sam-node /
+USER nonroot:nonroot
 ENTRYPOINT ["/sam-node"]

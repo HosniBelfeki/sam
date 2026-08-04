@@ -7,6 +7,7 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -buildvcs=false -o sam-box ./cmd/sam-box
 
 # Stage 2: Final
-FROM gcr.io/distroless/static:latest
-COPY --from=builder /app/sam-box /
+FROM gcr.io/distroless/static:nonroot
+COPY --from=builder --chown=nonroot:nonroot /app/sam-box /
+USER nonroot:nonroot
 ENTRYPOINT ["/sam-box"]
