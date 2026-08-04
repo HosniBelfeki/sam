@@ -49,9 +49,9 @@ teardown() {
   docker run --name "${node_name}-join" \
     --network "${MESH_NETWORK}" \
     $(mesh_get_add_hosts) \
-    -v "${data_vol}:/root/.config/sam-mesh" \
+    -v "${data_vol}:/data" \
     "sam-node:local" \
-    join "http://sam-control-plane:8080" > "/tmp/${node_name}-join.out" 2>&1 &
+    join --data-dir /data "http://sam-control-plane:8080" > "/tmp/${node_name}-join.out" 2>&1 &
   local join_pid=$!
   MESH_CONTAINERS+=("${node_name}-join")
 
@@ -93,9 +93,10 @@ teardown() {
     --name "${node_name}" \
     --network "${MESH_NETWORK}" \
     $(mesh_get_add_hosts) \
-    -v "${data_vol}:/root/.config/sam-mesh" \
+    -v "${data_vol}:/data" \
     "sam-node:local" \
     run \
+    --data-dir /data \
     --hub "http://sam-hub:9090"
   MESH_CONTAINERS+=("${node_name}")
 
@@ -190,18 +191,19 @@ teardown() {
   docker run --name "${node_name}-join" \
     --network "${MESH_NETWORK}" \
     $(mesh_get_add_hosts) \
-    -v "${data_vol}:/root/.config/sam-mesh" \
+    -v "${data_vol}:/data" \
     "sam-node:local" \
-    join --bootstrap-token "${node_token}" "http://sam-control-plane:8080"
+    join --data-dir /data --bootstrap-token "${node_token}" "http://sam-control-plane:8080"
 
   # 3. Start the node container with stored identity
   docker run -d \
     --name "${node_name}" \
     --network "${MESH_NETWORK}" \
     $(mesh_get_add_hosts) \
-    -v "${data_vol}:/root/.config/sam-mesh" \
+    -v "${data_vol}:/data" \
     "sam-node:local" \
     run \
+    --data-dir /data \
     --hub "http://sam-control-plane:8080"
   MESH_CONTAINERS+=("${node_name}")
 

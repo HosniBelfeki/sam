@@ -20,6 +20,7 @@ Before starting, ensure you have:
    ```
    And run via:
    ```bash
+   chmod 777 ~/.config/sam-mesh
    docker run --name sam-node \
      -v ~/.config/sam-mesh:/data \
      -p 5001:5001/udp -p 5002:5002 -p 8080:8080 \

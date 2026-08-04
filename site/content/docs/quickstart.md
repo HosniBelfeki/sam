@@ -53,7 +53,7 @@ sam-node join https://bananas.sam-mesh.dev
 
 #### Using Docker
 ```bash
-mkdir -p $(pwd)/sam-data
+mkdir -p $(pwd)/sam-data && chmod 777 $(pwd)/sam-data
 docker run -it \
   -v $(pwd)/sam-data:/data \
   ghcr.io/google/sam-node:latest \
@@ -73,6 +73,7 @@ sam-node join --bootstrap-token <your-token> https://bananas.sam-mesh.dev
 
 #### Using Docker
 ```bash
+mkdir -p $(pwd)/sam-data && chmod 777 $(pwd)/sam-data
 docker run -it \
   -v $(pwd)/sam-data:/data \
   ghcr.io/google/sam-node:latest \
@@ -101,6 +102,7 @@ PeerID: 12D3KooW...
 ### Using Docker
 Map the required ports (`5001/udp`, `5002/tcp` for libp2p, and `8080/tcp` for the local API):
 ```bash
+mkdir -p $(pwd)/sam-data && chmod 777 $(pwd)/sam-data
 docker run -d \
   --name sam-node \
   -v $(pwd)/sam-data:/data \

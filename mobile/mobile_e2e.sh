@@ -66,6 +66,9 @@ adb reverse tcp:18080 tcp:18080
 # 4. Start the Control Plane and Router containers
 rm -rf /tmp/control-plane-data /tmp/router-data
 mkdir -p /tmp/control-plane-data /tmp/router-data
+# sam-control-plane/sam-router run as the nonroot (65532) container user, so
+# host bind mounts must be writable by that UID.
+chmod 777 /tmp/control-plane-data /tmp/router-data
 
 docker run --name sam-control-plane \
   --network sam-net \
@@ -128,6 +131,7 @@ curl -s -X POST \
 # 5. Enroll and Start the External Node on Host inside Docker
 rm -rf /tmp/host-node-data
 mkdir -p /tmp/host-node-data
+chmod 777 /tmp/host-node-data
 
 HOST_JWT=$(curl -s -X POST -d "grant_type=client_credentials&client_id=test-client&client_secret=test-secret" http://127.0.0.1:18080/token | jq -r .access_token)
 
