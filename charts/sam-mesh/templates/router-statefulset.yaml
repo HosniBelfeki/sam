@@ -54,6 +54,16 @@ spec:
           hostPort: {{ .Values.router.hostPort }}
           {{- end }}
           protocol: UDP
+        readinessProbe:
+          tcpSocket:
+            port: p2p-tcp
+          periodSeconds: 5
+        livenessProbe:
+          tcpSocket:
+            port: p2p-tcp
+          periodSeconds: 15
+        resources:
+          {{- toYaml .Values.router.resources | nindent 10 }}
         env:
         {{- if not .Values.router.useOidcToken }}
         - name: BOOTSTRAP_TOKEN

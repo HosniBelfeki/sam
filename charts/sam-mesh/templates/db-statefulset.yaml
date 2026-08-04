@@ -34,6 +34,8 @@ spec:
         - containerPort: 5432
           name: postgres
           protocol: TCP
+        resources:
+          {{- toYaml .Values.database.postgres.resources | nindent 10 }}
         volumeMounts:
         - name: db-data
           mountPath: /var/lib/postgresql/data

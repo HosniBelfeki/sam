@@ -42,6 +42,18 @@ spec:
         - containerPort: 8081
           name: http
           protocol: TCP
+        readinessProbe:
+          httpGet:
+            path: /info
+            port: http
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /info
+            port: http
+          periodSeconds: 15
+        resources:
+          {{- toYaml .Values.console.resources | nindent 10 }}
         args:
         - "--hub=http://{{ include "sam-mesh.fullname" . }}-control-plane:{{ .Values.controlPlane.service.port }}"
         - "--bind-addr=:8081"
