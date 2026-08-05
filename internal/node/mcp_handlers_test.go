@@ -858,7 +858,7 @@ func newPreDiscoverMCPHandler(t *testing.T, tools []*mcp.Tool) http.Handler {
 			var probe struct {
 				Method string `json:"method"`
 			}
-			if json.Unmarshal(body, &probe) == nil && probe.Method == methodServerDiscover {
+			if json.Unmarshal(body, &probe) == nil && preflightMethodsUnsupportedByPassThrough[probe.Method] {
 				http.Error(w, "Missing session ID", http.StatusBadRequest)
 				return
 			}

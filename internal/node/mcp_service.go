@@ -38,11 +38,19 @@ func (m *MCPService) Teardown() error {
 	return m.baseService.Teardown()
 }
 
-// methodServerDiscover is the SEP-2575 stateless capability probe that
-// go-sdk clients (>= v1.7.0) send before "initialize", falling back to the
-// legacy handshake if it's rejected. See:
-// https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2575
-const methodServerDiscover = "server/discover"
+// preflightMethodsUnsupportedByPassThrough lists stateless MCP capability
+// probes that HandleStreamPassThrough answers locally instead of forwarding.
+// It opens a fresh, sessionless backend connection per stream, so it can
+// never truthfully answer these on the backend's behalf; rejecting them
+// locally lets the client's own documented fallback (e.g. to "initialize")
+// run on the same connection, instead of forwarding a call the backend may
+// not understand and losing the stream entirely. Add new SEP-introduced
+// preflight methods here as they appear; do not add anything else.
+var preflightMethodsUnsupportedByPassThrough = map[string]bool{
+	// SEP-2575: sent by go-sdk clients (>= v1.7.0) before "initialize".
+	// https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2575
+	"server/discover": true,
+}
 
 // HandleStreamPassThrough connects to the backend and proxies JSON-RPC messages.
 func (m *MCPService) HandleStreamPassThrough(s network.Stream) {
@@ -105,16 +113,10 @@ func (m *MCPService) HandleStreamPassThrough(s network.Stream) {
 				errc <- err
 				return
 			}
-			// This pipe opens a fresh, sessionless connection to the backend
-			// per stream, so it can't answer the "server/discover" probe the
-			// way a stateful server would. Reject it locally so the client's
-			// own documented fallback to "initialize" runs on this same
-			// connection, instead of forwarding a call the backend may not
-			// understand and losing the stream entirely.
-			if req, ok := msg.(*jsonrpc.Request); ok && req.Method == methodServerDiscover {
-				resp := &jsonrpc.Response{ID: req.ID, Error: &jsonrpc.Error{Code: jsonrpc.CodeMethodNotFound, Message: "server/discover is not supported by this pass-through proxy"}}
+			if req, ok := msg.(*jsonrpc.Request); ok && preflightMethodsUnsupportedByPassThrough[req.Method] {
+				resp := &jsonrpc.Response{ID: req.ID, Error: &jsonrpc.Error{Code: jsonrpc.CodeMethodNotFound, Message: req.Method + " is not supported by this pass-through proxy"}}
 				if werr := clientConn.Write(ctx, resp); werr != nil {
-					logger.Debugf("[MCPService] %s: failed to reject server/discover: %v", m.info.Name, werr)
+					logger.Debugf("[MCPService] %s: failed to reject %s: %v", m.info.Name, req.Method, werr)
 					errc <- werr
 					return
 				}
