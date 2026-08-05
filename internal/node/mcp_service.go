@@ -19,6 +19,7 @@ import (
 
 	"github.com/google/sam/api"
 	"github.com/libp2p/go-libp2p/core/network"
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -35,6 +36,20 @@ func (m *MCPService) Init(ctx context.Context) error {
 // Teardown chains to baseService.Teardown.
 func (m *MCPService) Teardown() error {
 	return m.baseService.Teardown()
+}
+
+// preflightMethodsUnsupportedByPassThrough lists stateless MCP capability
+// probes that HandleStreamPassThrough answers locally instead of forwarding.
+// It opens a fresh, sessionless backend connection per stream, so it can
+// never truthfully answer these on the backend's behalf; rejecting them
+// locally lets the client's own documented fallback (e.g. to "initialize")
+// run on the same connection, instead of forwarding a call the backend may
+// not understand and losing the stream entirely. Add new SEP-introduced
+// preflight methods here as they appear; do not add anything else.
+var preflightMethodsUnsupportedByPassThrough = map[string]bool{
+	// SEP-2575: sent by go-sdk clients (>= v1.7.0) before "initialize".
+	// https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2575
+	"server/discover": true,
 }
 
 // HandleStreamPassThrough connects to the backend and proxies JSON-RPC messages.
@@ -94,10 +109,21 @@ func (m *MCPService) HandleStreamPassThrough(s network.Stream) {
 		for {
 			msg, err := clientConn.Read(ctx)
 			if err != nil {
+				logger.Debugf("[MCPService] %s: client read error: %v", m.info.Name, err)
 				errc <- err
 				return
 			}
+			if req, ok := msg.(*jsonrpc.Request); ok && preflightMethodsUnsupportedByPassThrough[req.Method] {
+				resp := &jsonrpc.Response{ID: req.ID, Error: &jsonrpc.Error{Code: jsonrpc.CodeMethodNotFound, Message: req.Method + " is not supported by this pass-through proxy"}}
+				if werr := clientConn.Write(ctx, resp); werr != nil {
+					logger.Debugf("[MCPService] %s: failed to reject %s: %v", m.info.Name, req.Method, werr)
+					errc <- werr
+					return
+				}
+				continue
+			}
 			if err := backendConn.Write(ctx, msg); err != nil {
+				logger.Debugf("[MCPService] %s: backend write error: %v", m.info.Name, err)
 				errc <- err
 				return
 			}
@@ -108,10 +134,12 @@ func (m *MCPService) HandleStreamPassThrough(s network.Stream) {
 		for {
 			msg, err := backendConn.Read(ctx)
 			if err != nil {
+				logger.Debugf("[MCPService] %s: backend read error: %v", m.info.Name, err)
 				errc <- err
 				return
 			}
 			if err := clientConn.Write(ctx, msg); err != nil {
+				logger.Debugf("[MCPService] %s: client write error: %v", m.info.Name, err)
 				errc <- err
 				return
 			}

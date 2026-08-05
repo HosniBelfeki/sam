@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
+	"io"
 
 	"net/http"
 	"net/http/httptest"
@@ -176,6 +177,83 @@ func TestHandleFindRemoteTools_SinglePeer(t *testing.T) {
 		if !found {
 			t.Errorf("expected tool %q in response, not found; rows=%+v", name, rows)
 		}
+	}
+}
+
+// TestHandleFindRemoteTools_BackendPredatesDiscover is a regression test for
+// a go-sdk v1.7.0 (SEP-2575) incompatibility: mcp.Client.Connect() sends a
+// "server/discover" preflight before "initialize", falling back to the
+// legacy handshake if it's rejected. HandleStreamPassThrough's dumb-pipe
+// proxy used to forward that preflight straight to the backend, and a
+// backend that doesn't understand it (like calc-mcp's Python server) would
+// reject it, killing the whole libp2p stream before the "initialize"
+// fallback could run. This exercises that path with a Go backend that
+// mimics the same "discover unsupported" rejection, so it runs in
+// milliseconds instead of the full docker-based e2e suite.
+func TestHandleFindRemoteTools_BackendPredatesDiscover(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	tools := []*mcp.Tool{
+		{Name: "add", Description: "Add two numbers", InputSchema: map[string]any{"type": "object"}},
+	}
+	hostedSrv := httptest.NewServer(newPreDiscoverMCPHandler(t, tools))
+	defer hostedSrv.Close()
+
+	nodeA, cleanupA := startBareNode(t, ctx)
+	defer cleanupA()
+	nodeB, cleanupB := startBareNode(t, ctx)
+	defer cleanupB()
+
+	if err := nodeA.Host.Connect(ctx, peer.AddrInfo{ID: nodeB.Host.ID(), Addrs: nodeB.Host.Addrs()}); err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+
+	rootPub, rootPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("gen root key: %v", err)
+	}
+	if err := buildAndSaveBiscuit(nodeA, rootPriv); err != nil {
+		t.Fatalf("buildAndSaveBiscuit: %v", err)
+	}
+	nodeB.keysMu.Lock()
+	nodeB.trustedKeys = append(nodeB.trustedKeys, TrustedKey{Key: rootPub, ReceivedAt: time.Now()})
+	nodeB.keysMu.Unlock()
+
+	regReq := &api.RegisterServiceRequest{
+		Service: &api.ServiceInfo{Type: api.ServiceType_SERVICE_TYPE_MCP, Name: "calculator"},
+		Backend: &api.RegisterServiceRequest_TargetUrl{TargetUrl: hostedSrv.URL},
+	}
+	if err := nodeB.RegisterService(ctx, regReq); err != nil {
+		t.Fatalf("RegisterService: %v", err)
+	}
+
+	res, _, err := nodeA.handleFindRemoteTools(ctx, &mcp.CallToolRequest{}, FindRemoteToolsParams{
+		PeerID: nodeB.Host.ID().String(),
+	})
+	if err != nil {
+		t.Fatalf("handleFindRemoteTools: %v", err)
+	}
+	tc, ok := res.Content[0].(*mcp.TextContent)
+	if !ok {
+		t.Fatalf("expected TextContent, got %T", res.Content[0])
+	}
+	var rows []remoteToolRow
+	if err := json.Unmarshal([]byte(tc.Text), &rows); err != nil {
+		t.Fatalf("unmarshal: %v (text: %q)", err, tc.Text)
+	}
+
+	var found bool
+	for _, row := range rows {
+		if row.Error != "" {
+			t.Errorf("row for %q has unexpected error: %s", row.ToolName, row.Error)
+		}
+		if row.ToolName == "mcp://calculator/add" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected mcp://calculator/add in response, not found; rows=%+v", rows)
 	}
 }
 
@@ -758,4 +836,33 @@ func newFakeMCPHandler(t *testing.T, tools []*mcp.Tool) http.Handler {
 		})
 	}
 	return mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, nil)
+}
+
+// newPreDiscoverMCPHandler wraps a real streamable-http MCP server but
+// rejects the SEP-2575 "server/discover" preflight with a plain HTTP 400,
+// the way a server built against an older SDK/spec version does (e.g. the
+// Python `mcp` package used by development/examples/calc-mcp). This lets
+// tests exercise HandleStreamPassThrough against a backend that predates
+// "server/discover" without needing a real non-Go MCP server.
+func newPreDiscoverMCPHandler(t *testing.T, tools []*mcp.Tool) http.Handler {
+	t.Helper()
+	real := newFakeMCPHandler(t, tools)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				http.Error(w, "failed to read body", http.StatusBadRequest)
+				return
+			}
+			r.Body = io.NopCloser(strings.NewReader(string(body)))
+			var probe struct {
+				Method string `json:"method"`
+			}
+			if json.Unmarshal(body, &probe) == nil && preflightMethodsUnsupportedByPassThrough[probe.Method] {
+				http.Error(w, "Missing session ID", http.StatusBadRequest)
+				return
+			}
+		}
+		real.ServeHTTP(w, r)
+	})
 }
