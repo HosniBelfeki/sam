@@ -38,6 +38,12 @@ func (m *MCPService) Teardown() error {
 	return m.baseService.Teardown()
 }
 
+// methodServerDiscover is the SEP-2575 stateless capability probe that
+// go-sdk clients (>= v1.7.0) send before "initialize", falling back to the
+// legacy handshake if it's rejected. See:
+// https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2575
+const methodServerDiscover = "server/discover"
+
 // HandleStreamPassThrough connects to the backend and proxies JSON-RPC messages.
 func (m *MCPService) HandleStreamPassThrough(s network.Stream) {
 	defer func() {
@@ -99,24 +105,23 @@ func (m *MCPService) HandleStreamPassThrough(s network.Stream) {
 				errc <- err
 				return
 			}
+			// This pipe opens a fresh, sessionless connection to the backend
+			// per stream, so it can't answer the "server/discover" probe the
+			// way a stateful server would. Reject it locally so the client's
+			// own documented fallback to "initialize" runs on this same
+			// connection, instead of forwarding a call the backend may not
+			// understand and losing the stream entirely.
+			if req, ok := msg.(*jsonrpc.Request); ok && req.Method == methodServerDiscover {
+				resp := &jsonrpc.Response{ID: req.ID, Error: &jsonrpc.Error{Code: jsonrpc.CodeMethodNotFound, Message: "server/discover is not supported by this pass-through proxy"}}
+				if werr := clientConn.Write(ctx, resp); werr != nil {
+					logger.Debugf("[MCPService] %s: failed to reject server/discover: %v", m.info.Name, werr)
+					errc <- werr
+					return
+				}
+				continue
+			}
 			if err := backendConn.Write(ctx, msg); err != nil {
 				logger.Debugf("[MCPService] %s: backend write error: %v", m.info.Name, err)
-				// The backend transport (or the backend itself) may reject a
-				// specific request it doesn't understand - e.g. a newer SDK's
-				// preflight "server/discover" call against an older backend
-				// that only understands the legacy "initialize" handshake.
-				// Reply with a JSON-RPC error for that call instead of
-				// tearing down the whole connection, so the client can fall
-				// back and keep using the same session.
-				if req, ok := msg.(*jsonrpc.Request); ok && req.IsCall() {
-					resp := &jsonrpc.Response{ID: req.ID, Error: &jsonrpc.Error{Code: jsonrpc.CodeMethodNotFound, Message: err.Error()}}
-					if werr := clientConn.Write(ctx, resp); werr != nil {
-						logger.Debugf("[MCPService] %s: failed to write error response to client: %v", m.info.Name, werr)
-						errc <- werr
-						return
-					}
-					continue
-				}
 				errc <- err
 				return
 			}
