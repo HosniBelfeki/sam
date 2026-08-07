@@ -48,6 +48,9 @@ database:
 router:
   enabled: true
   replicaCount: 1
+  podSecurityContext:
+    fsGroup: 65532
+    fsGroupChangePolicy: "Always"
   image:
     repository: sam-router
   useOidcToken: false
