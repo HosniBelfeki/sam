@@ -42,7 +42,7 @@ spec:
       serviceAccountName: sam-router-sa
       securityContext:
         fsGroup: 65532
-        fsGroupChangePolicy: "Always"
+        fsGroupChangePolicy: "OnRootMismatch"
       containers:
       - name: sam-router
         image: ghcr.io/google/sam-router:${IMAGE_TAG}
