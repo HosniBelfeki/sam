@@ -21,7 +21,7 @@ Register the node as an HTTP MCP server. Replace `<YOUR_TOKEN>` with your `--api
 ```bash
 claude mcp add --transport http p2p-mesh-node \
   http://localhost:8080/mcp \
-  --header "Authorization: Bearer <YOUR_TOKEN>"
+  --header "X-Sam-Authentication: Bearer <YOUR_TOKEN>"
 ```
 
 By default the server is added at *local* scope (the current project only). Add `--scope user` to make it available in all your projects, or `--scope project` to write a shareable `.mcp.json` into your repository.
@@ -35,7 +35,7 @@ Alternatively, add it to a project `.mcp.json` directly:
       "type": "http",
       "url": "http://localhost:8080/mcp",
       "headers": {
-        "Authorization": "Bearer <YOUR_TOKEN>"
+        "X-Sam-Authentication": "Bearer <YOUR_TOKEN>"
       }
     }
   }
@@ -65,7 +65,7 @@ Claude Code calls the tools `sam-node` exposes like any other tool. The flow mir
 
 ## Troubleshooting
 
-* **Connection shows failed / 401**: verify the `Authorization` header matches the node's `--api-token`.
+* **Connection shows failed / 401**: verify the `X-Sam-Authentication` header matches the node's `--api-token`.
 * **Server unreachable**: confirm `sam-node` is listening (default `http://localhost:8080`).
 * **Tools not visible**: MCP servers load at session start — restart Claude Code and check `/mcp`.
 * **Remove the server**: `claude mcp remove p2p-mesh-node -s user` (match the scope you used to add it).

@@ -304,7 +304,7 @@ roles:
 	// The proxy path on Node B is /sam/<peerID>/mcp/federated-tool
 	proxyURL := fmt.Sprintf("http://127.0.0.1:%d/sam/%s/mcp/federated-tool", apiPortB, peerIDA_node)
 	req, _ := http.NewRequest("POST", proxyURL, bytes.NewBuffer([]byte(`{"jsonrpc": "2.0", "id": 1, "method": "test"}`)))
-	req.Header.Set("Authorization", "Bearer tokenB")
+	req.Header.Set(api.HeaderSamAuthentication, "Bearer tokenB")
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

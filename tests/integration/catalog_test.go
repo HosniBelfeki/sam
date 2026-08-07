@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/sam/api"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -121,7 +122,7 @@ type authRoundTripper struct {
 
 func (a *authRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	clone := req.Clone(req.Context())
-	clone.Header.Set("Authorization", "Bearer "+a.token)
+	clone.Header.Set(api.HeaderSamAuthentication, "Bearer "+a.token)
 	return a.rt.RoundTrip(clone)
 }
 

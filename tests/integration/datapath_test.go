@@ -93,7 +93,7 @@ func TestIntegrationStdioDatapath(t *testing.T) {
 	}
 
 	req, _ := http.NewRequest("POST", "http://"+actualApiAddrA+"/sam/service/register", bytes.NewBuffer(body))
-	req.Header.Set("Authorization", "Bearer "+apiToken)
+	req.Header.Set(api.HeaderSamAuthentication, "Bearer "+apiToken)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := http.DefaultClient.Do(req)
@@ -121,7 +121,7 @@ func TestIntegrationStdioDatapath(t *testing.T) {
 	var postResp *http.Response
 	for i := 0; i < 3; i++ {
 		postReq, _ := http.NewRequest("POST", postURL, bytes.NewBufferString(testMessage))
-		postReq.Header.Set("Authorization", "Bearer "+apiToken)
+		postReq.Header.Set(api.HeaderSamAuthentication, "Bearer "+apiToken)
 		postReq.Header.Set("Content-Type", "application/json")
 		postReq.Header.Set("Accept", "application/json")
 
@@ -223,7 +223,7 @@ func TestIntegrationHTTPDatapath(t *testing.T) {
 	}
 
 	req, _ := http.NewRequest("POST", "http://"+actualApiAddrA+"/sam/service/register", bytes.NewBuffer(body))
-	req.Header.Set("Authorization", "Bearer "+apiToken)
+	req.Header.Set(api.HeaderSamAuthentication, "Bearer "+apiToken)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := http.DefaultClient.Do(req)
@@ -245,7 +245,7 @@ func TestIntegrationHTTPDatapath(t *testing.T) {
 	var httpResp *http.Response
 	for i := 0; i < 3; i++ {
 		req, _ := http.NewRequest("GET", url, nil)
-		req.Header.Set("Authorization", "Bearer "+apiToken)
+		req.Header.Set(api.HeaderSamAuthentication, "Bearer "+apiToken)
 		req.Close = true // Force close the connection so the libp2p stream terminates and flushed accounting logs
 		httpResp, err = client.Do(req)
 		if err == nil && httpResp.StatusCode == http.StatusOK {

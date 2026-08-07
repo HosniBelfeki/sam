@@ -98,7 +98,7 @@ req = urllib.request.Request(
     \"http://${node1_name}:8080/sam/service/register\",
     data=json.dumps(data).encode(\"utf-8\"),
     headers={
-        \"Authorization\": \"Bearer secret-token\",
+        \"X-Sam-Authentication\": \"Bearer secret-token\",
         \"Content-Type\": \"application/json\"
     }
 )
@@ -131,7 +131,7 @@ req = urllib.request.Request(
     'http://${node2_name}:8080/sam/service/register',
     data=json.dumps(data).encode('utf-8'),
     headers={
-        'Authorization': 'Bearer secret-token',
+        'X-Sam-Authentication': 'Bearer secret-token',
         'Content-Type': 'application/json'
     }
 )
@@ -154,7 +154,7 @@ with urllib.request.urlopen(req) as response:
 import urllib.request
 req = urllib.request.Request(
     \"http://${node2_name}:8080/sam/${node1_peer_id}/mcp/http-tool/\",
-    headers={\"Authorization\": \"Bearer secret-token\"}
+    headers={\"X-Sam-Authentication\": \"Bearer secret-token\"}
 )
 with urllib.request.urlopen(req) as response:
     print(response.read().decode(\"utf-8\"))
@@ -180,7 +180,7 @@ with urllib.request.urlopen(req) as response:
 import urllib.request
 req = urllib.request.Request(
     \"http://${node1_name}:8080/sam/${node2_peer_id}/mcp/stdio-tool/\",
-    headers={\"Authorization\": \"Bearer secret-token\"}
+    headers={\"X-Sam-Authentication\": \"Bearer secret-token\"}
 )
 try:
     with urllib.request.urlopen(req) as response:
@@ -210,7 +210,7 @@ req = urllib.request.Request(
     \"http://${node1_name}:8080/sam/${node2_peer_id}/mcp/stdio-tool/\",
     data=os.environ['MSG'].encode('utf-8'),
     headers={
-        \"Authorization\": \"Bearer secret-token\",
+        \"X-Sam-Authentication\": \"Bearer secret-token\",
         \"Content-Type\": \"application/json\"
     }
 )

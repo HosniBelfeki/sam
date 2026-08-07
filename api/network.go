@@ -80,15 +80,19 @@ const (
 	// are forwarded to backend services.
 	HeaderSamBiscuit = "X-Sam-Biscuit"
 
-	// HeaderSamAuthorization is the custom HTTP header that a client can pass to a local
-	// SAM node's egress proxy to supply the Authorization header intended for the remote service.
+	// HeaderSamAuthentication is the custom HTTP header used to authenticate a local
+	// process to this node's sidecar API (the shared secret configured via
+	// "--api-token"). Using a SAM-specific header name — instead of the standard
+	// "Authorization" header — leaves "Authorization" free to always mean what
+	// every HTTP client expects: the credential for the destination being called.
+	// The sidecar strips this header before forwarding any request off-node, so
+	// it never leaks to a remote peer or backend service.
 	//
-	// The egress proxy uses "Authorization: Bearer <token>" for its own local authentication.
-	// By specifying the target service's auth token in HeaderSamAuthorization, the client avoids
-	// stomping local authentication, and prevents the egress proxy from leaking the local sidecar
-	// authentication token to the remote peer. The egress proxy maps this header back to
-	// "Authorization" before transmitting the request to the destination node.
-	HeaderSamAuthorization = "X-Sam-Authorization"
+	// For compatibility with MCP clients that only support a plain "Authorization"
+	// header, purely-local endpoints (that never forward it anywhere) also accept
+	// "Authorization" as an alias. The egress/inference proxy does NOT: there,
+	// "Authorization" is reserved exclusively for the destination's credential.
+	HeaderSamAuthentication = "X-Sam-Authentication"
 
 	// HeaderSamNoTrailingSlash is the custom HTTP header set by the ingress handler
 	// to indicate that the original request had no trailing slash.

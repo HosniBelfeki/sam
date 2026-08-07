@@ -36,7 +36,7 @@ import (
 
 func TestWithAuth(t *testing.T) {
 	token := "test-token"
-	handler := withAuth(token, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := withAuth(token, true, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -71,7 +71,7 @@ func TestWithAuth(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			req := httptest.NewRequest("GET", "/any", nil)
 			if tt.authHeader != "" {
-				req.Header.Set("Authorization", tt.authHeader)
+				req.Header.Set(api.HeaderSamAuthentication, tt.authHeader)
 			}
 			rr := httptest.NewRecorder()
 			handler.ServeHTTP(rr, req)
@@ -82,12 +82,37 @@ func TestWithAuth(t *testing.T) {
 		})
 	}
 
-	t.Run("Empty token configured", func(t *testing.T) {
-		handlerEmpty := withAuth("", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	t.Run("Authorization fallback accepted when allowed", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/any", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+
+		if rr.Code != http.StatusOK {
+			t.Errorf("expected status %d, got %d", http.StatusOK, rr.Code)
+		}
+	})
+
+	t.Run("Authorization fallback rejected in strict mode", func(t *testing.T) {
+		strictHandler := withAuth(token, false, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		}))
 		req := httptest.NewRequest("GET", "/any", nil)
-		req.Header.Set("Authorization", "Bearer anything")
+		req.Header.Set("Authorization", "Bearer "+token)
+		rr := httptest.NewRecorder()
+		strictHandler.ServeHTTP(rr, req)
+
+		if rr.Code != http.StatusUnauthorized {
+			t.Errorf("expected status %d, got %d", http.StatusUnauthorized, rr.Code)
+		}
+	})
+
+	t.Run("Empty token configured", func(t *testing.T) {
+		handlerEmpty := withAuth("", true, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}))
+		req := httptest.NewRequest("GET", "/any", nil)
+		req.Header.Set(api.HeaderSamAuthentication, "Bearer anything")
 		rr := httptest.NewRecorder()
 		handlerEmpty.ServeHTTP(rr, req)
 
@@ -161,7 +186,7 @@ func TestSidecarServerAuthEnforcement(t *testing.T) {
 				t.Fatalf("Failed to create request: %v", err)
 			}
 			if tt.needsToken {
-				req.Header.Set("Authorization", "Bearer "+token)
+				req.Header.Set(api.HeaderSamAuthentication, "Bearer "+token)
 			}
 
 			resp, err := client.Do(req)
@@ -171,6 +196,73 @@ func TestSidecarServerAuthEnforcement(t *testing.T) {
 			defer func() {
 				_ = resp.Body.Close()
 			}()
+
+			if resp.StatusCode != tt.expectedStatus {
+				t.Errorf("expected status %d for %s, got %d", tt.expectedStatus, tt.path, resp.StatusCode)
+			}
+		})
+	}
+}
+
+// TestSidecarAuthorizationFallbackScope verifies that plain "Authorization" is
+// only accepted as a local-gate credential on endpoints that never forward it
+// (register/unregister/discover, mcp), and rejected on the egress proxy, which
+// must forward "Authorization" untouched to the destination service.
+func TestSidecarAuthorizationFallbackScope(t *testing.T) {
+	node := &SamNode{
+		BiscuitTimeout: 500 * time.Millisecond,
+		services:       NewServiceRegistry(&fakeDHT{}),
+	}
+	token := "test-token"
+
+	sidecarSrv, err := StartSidecarServer(node, "127.0.0.1:0", token, "", "", "")
+	if err != nil {
+		t.Fatalf("Failed to start sidecar server: %v", err)
+	}
+	defer func() { _ = sidecarSrv.Close() }()
+
+	baseURL := "http://" + node.BoundHTTPAddr
+	client := &http.Client{Timeout: 2 * time.Second}
+	ready := false
+	for i := 0; i < 50; i++ {
+		time.Sleep(10 * time.Millisecond)
+		resp, err := client.Get(baseURL + "/healthz")
+		if err == nil {
+			_ = resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				ready = true
+				break
+			}
+		}
+	}
+	if !ready {
+		t.Fatalf("Sidecar server failed to become ready")
+	}
+
+	tests := []struct {
+		name           string
+		method         string
+		path           string
+		expectedStatus int // status once past the auth gate (may still be a downstream error)
+	}{
+		{"discover accepts Authorization fallback", "GET", "/sam/service/discover?type=mcp&name=test", http.StatusServiceUnavailable},
+		{"mcp root accepts Authorization fallback", "GET", "/mcp", http.StatusServiceUnavailable},
+		{"egress proxy rejects Authorization fallback", "GET", "/sam/", http.StatusUnauthorized},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req, err := http.NewRequest(tt.method, baseURL+tt.path, nil)
+			if err != nil {
+				t.Fatalf("Failed to create request: %v", err)
+			}
+			req.Header.Set("Authorization", "Bearer "+token)
+
+			resp, err := client.Do(req)
+			if err != nil {
+				t.Fatalf("Request failed: %v", err)
+			}
+			defer func() { _ = resp.Body.Close() }()
 
 			if resp.StatusCode != tt.expectedStatus {
 				t.Errorf("expected status %d for %s, got %d", tt.expectedStatus, tt.path, resp.StatusCode)

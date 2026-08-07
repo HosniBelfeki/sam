@@ -45,7 +45,9 @@ To use these remote services and their tools, the client can use the following f
 
 Other useful tools: discover_remote_services browses services by type (e.g. 'MCP' or 'Inference'), get_mesh_info reports connected peers and mesh state, list_local_services shows what this node hosts.
 
-Tools on remote services are identified via the format 'scheme://service-name/tool-name' (where 'scheme://service-name' represents the well-known local address of the service, and 'tool-name' is the individual tool to execute on it. Tool names themselves can contain any characters).`
+Tools on remote services are identified via the format 'scheme://service-name/tool-name' (where 'scheme://service-name' represents the well-known local address of the service, and 'tool-name' is the individual tool to execute on it. Tool names themselves can contain any characters).
+
+Inference services ('inference://...') are NOT called via call_remote_tool — they are plain OpenAI-compatible HTTP endpoints. Use discover_remote_services with type 'inference' to get each one's local_proxy_url, then send a normal HTTP request (e.g. POST <local_proxy_url>/chat/completions) directly to that URL: add header 'X-Sam-Authentication: Bearer <your local --api-token>' to authenticate to this node, and only add 'Authorization: Bearer <upstream-credential>' if the destination service itself requires its own credential — it passes straight through untouched and is never used to authenticate to this node.`
 
 // NewMCPServer creates a new MCP server instance with all tools registered.
 func NewMCPServer(node *SamNode) *mcp.Server {
@@ -69,7 +71,7 @@ func NewMCPServer(node *SamNode) *mcp.Server {
 	// Add discover_remote_services tool
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "discover_remote_services",
-		Description: "Discover remote services in the mesh. Provide only `type` to browse every reachable service of that type (returns name + description for each); add `name` to target a specific service.",
+		Description: "Discover remote services in the mesh. Provide only `type` to browse every reachable service of that type (returns name + description for each); add `name` to target a specific service. For `type: inference`, each result's `local_proxy_url` is called directly over HTTP (NOT via call_remote_tool) — the response includes a usage hint with the exact headers required.",
 	}, node.handleDiscoverRemoteServices)
 
 	// Add the mesh_pubsub_broadcast tool.

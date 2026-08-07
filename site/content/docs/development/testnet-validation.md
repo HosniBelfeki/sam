@@ -101,7 +101,7 @@ Initiate a handshake by sending a POST `initialize` JSON-RPC request. You must s
 
 ```bash
 curl -i -X POST \
-  -H "Authorization: Bearer secret-token" \
+  -H "X-Sam-Authentication: Bearer secret-token" \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test-client","version":"1.0.0"}}}' \
@@ -120,7 +120,7 @@ Use the returned session ID to query the remote service's resource list:
 
 ```bash
 curl -s -X POST \
-  -H "Authorization: Bearer secret-token" \
+  -H "X-Sam-Authentication: Bearer secret-token" \
   -H "Mcp-Session-Id: 4616e90e-a1a9-4953-b7d3-6884ff502472" \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
@@ -133,7 +133,7 @@ Request the contents of a specific resource URI (e.g. `demo://resource/static/do
 
 ```bash
 curl -s -X POST \
-  -H "Authorization: Bearer secret-token" \
+  -H "X-Sam-Authentication: Bearer secret-token" \
   -H "Mcp-Session-Id: 4616e90e-a1a9-4953-b7d3-6884ff502472" \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \

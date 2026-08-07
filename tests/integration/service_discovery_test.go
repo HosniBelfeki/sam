@@ -214,7 +214,7 @@ func TestServiceDiscoveryStreaming(t *testing.T) {
 	// Call streaming endpoint with invalid timeout first to verify validation
 	t.Log("Testing invalid timeout query parameter...")
 	badReq, _ := http.NewRequest("GET", "http://"+actualApiAddrB+"/sam/service/discover?type=mcp&name="+serviceName+"&stream=true&timeout=invalid", nil)
-	badReq.Header.Set("Authorization", "Bearer "+apiToken)
+	badReq.Header.Set(api.HeaderSamAuthentication, "Bearer "+apiToken)
 	badResp, err := http.DefaultClient.Do(badReq)
 	if err != nil {
 		t.Fatal(err)
@@ -227,7 +227,7 @@ func TestServiceDiscoveryStreaming(t *testing.T) {
 	// Agent B queries the streaming endpoint via HTTP Sidecar
 	t.Log("Agent B discovering service via SSE stream...")
 	req, _ := http.NewRequest("GET", "http://"+actualApiAddrB+"/sam/service/discover?type=mcp&name="+serviceName+"&stream=true&timeout=5s", nil)
-	req.Header.Set("Authorization", "Bearer "+apiToken)
+	req.Header.Set(api.HeaderSamAuthentication, "Bearer "+apiToken)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -313,7 +313,7 @@ func registerService(t *testing.T, apiAddr, token, serviceName, targetURL string
 		t.Fatal(err)
 	}
 	req, _ := http.NewRequest("POST", "http://"+apiAddr+"/sam/service/register", bytes.NewBuffer(body))
-	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set(api.HeaderSamAuthentication, "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := http.DefaultClient.Do(req)
@@ -332,7 +332,7 @@ func unregisterService(t *testing.T, apiAddr, token, serviceName string) {
 	reqBody := map[string]string{"Name": serviceName}
 	body, _ := json.Marshal(reqBody)
 	req, _ := http.NewRequest("POST", "http://"+apiAddr+"/sam/service/unregister", bytes.NewBuffer(body))
-	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set(api.HeaderSamAuthentication, "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := http.DefaultClient.Do(req)
@@ -348,7 +348,7 @@ func unregisterService(t *testing.T, apiAddr, token, serviceName string) {
 func discoverService(t *testing.T, apiAddr, token, serviceName string) []peer.AddrInfo {
 	t.Helper()
 	req, _ := http.NewRequest("GET", "http://"+apiAddr+"/sam/service/discover?type=mcp&name="+serviceName, nil)
-	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set(api.HeaderSamAuthentication, "Bearer "+token)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

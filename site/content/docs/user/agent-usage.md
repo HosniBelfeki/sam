@@ -30,7 +30,7 @@ sequenceDiagram
     Note over User,Agent: Phase 2: Agent Tool Invocation
     User->>Node: sam-node run --api-token "secret-key"
     Node->>Node: Start local MCP server on 127.0.0.1:8080
-    Agent->>Node: Connect to local MCP (with Bearer "secret-key")
+    Agent->>Node: Connect to local MCP (X-Sam-Authentication: Bearer "secret-key")
     Agent->>Node: Call Remote P2P Tool
     Node->>Hub: Verify Biscuit / Allowed Policies
     Node-->>Agent: Execute tool and return result
@@ -91,10 +91,21 @@ The local MCP endpoint is served via **HTTP Server-Sent Events (SSE)** at:
 `http://127.0.0.1:8080/mcp`
 
 ### Authentication
-When configuring your agent client, you must pass the API token in the headers:
+When configuring your agent client, you must pass the API token in a SAM-specific
+header — not the standard `Authorization` header:
 ```http
-Authorization: Bearer my-agent-super-token-123
+X-Sam-Authentication: Bearer my-agent-super-token-123
 ```
+This leaves `Authorization` free to always mean the credential for whatever
+remote service you're calling *through* the node (e.g. a `mcp://` or
+`inference://` service that requires its own upstream credential) — it passes
+straight through untouched and is never used to authenticate to the node itself.
+
+> For MCP clients that only support a plain `Authorization` header, the `/mcp`
+> endpoint (and the `/sam/service/*` control endpoints) also accept it as a
+> compatibility alias, since they never forward it anywhere. The egress/inference
+> proxy (`/sam/<peer>/...`) does **not** accept this fallback — there,
+> `Authorization` is reserved exclusively for the destination's own credential.
 
 ### Specific Integration Guides
 Explore our step-by-step guides for integrating your node with popular agent clients:
