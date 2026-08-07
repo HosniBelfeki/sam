@@ -213,19 +213,25 @@ func withAuth(token string, allowAuthorizationFallback bool, next http.Handler) 
 			return
 		}
 
-		authHeader := r.Header.Get(api.HeaderSamAuthentication)
+		headerName := api.HeaderSamAuthentication
+		authHeader := r.Header.Get(headerName)
 		if authHeader == "" && allowAuthorizationFallback {
-			authHeader = r.Header.Get("Authorization")
+			headerName = "Authorization"
+			authHeader = r.Header.Get(headerName)
 		}
 		if authHeader == "" {
-			logger.Warnf("[SidecarAuth] Request %s %s rejected: missing %s header", r.Method, r.URL.Path, api.HeaderSamAuthentication)
-			http.Error(w, fmt.Sprintf("Unauthorized: missing %q header, e.g. %q: \"Bearer <api-token>\"", api.HeaderSamAuthentication, api.HeaderSamAuthentication), http.StatusUnauthorized)
+			accepted := fmt.Sprintf("%q", api.HeaderSamAuthentication)
+			if allowAuthorizationFallback {
+				accepted += ` or "Authorization"`
+			}
+			logger.Warnf("[SidecarAuth] Request %s %s rejected: missing %s header", r.Method, r.URL.Path, accepted)
+			http.Error(w, fmt.Sprintf("Unauthorized: missing %s header, e.g. %q: \"Bearer <api-token>\"", accepted, api.HeaderSamAuthentication), http.StatusUnauthorized)
 			return
 		}
 
 		parts := strings.Split(authHeader, " ")
 		if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
-			http.Error(w, fmt.Sprintf("Invalid %q header format, expected \"Bearer <api-token>\"", api.HeaderSamAuthentication), http.StatusUnauthorized)
+			http.Error(w, fmt.Sprintf("Invalid %q header format, expected \"Bearer <api-token>\"", headerName), http.StatusUnauthorized)
 			return
 		}
 
