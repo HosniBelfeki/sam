@@ -1,4 +1,4 @@
-version: 1
+version: 2
 project_name: sam
 builds:
   - id: sam-node
@@ -86,7 +86,8 @@ builds:
     ldflags:
       - -s -w
 archives:
-  - format: tar.gz
+  - formats:
+      - tar.gz
     name_template: >-
       {{ .ProjectName }}_
       {{- title .Os }}_
@@ -96,4 +97,5 @@ archives:
       {{- if .Arm }}v{{ .Arm }}{{ end }}
     format_overrides:
       - goos: windows
-        format: zip
+        formats:
+          - zip
