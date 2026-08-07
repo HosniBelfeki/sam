@@ -112,7 +112,7 @@ but the settings are always the same:
 
 - **Transport:** HTTP (Streamable HTTP / `http`)
 - **URL:** `http://127.0.0.1:9099/mcp`
-- **Header:** `Authorization: Bearer devtoken`
+- **Header:** `X-Sam-Authentication: Bearer devtoken`
 
 For example, harnesses that use the common `mcpServers` JSON config (Claude Code,
 Cursor, and others) would add:
@@ -123,7 +123,7 @@ Cursor, and others) would add:
     "sam-mesh": {
       "type": "http",
       "url": "http://127.0.0.1:9099/mcp",
-      "headers": { "Authorization": "Bearer devtoken" }
+      "headers": { "X-Sam-Authentication": "Bearer devtoken" }
     }
   }
 }

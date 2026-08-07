@@ -22,6 +22,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/google/sam/api"
 )
 
 func TestNodeAuthEnforcementIntegration(t *testing.T) {
@@ -109,7 +111,7 @@ func TestNodeAuthEnforcementIntegration(t *testing.T) {
 				t.Fatalf("Failed to create request: %v", err)
 			}
 			if tt.needsToken {
-				req.Header.Set("Authorization", "Bearer "+apiToken)
+				req.Header.Set(api.HeaderSamAuthentication, "Bearer "+apiToken)
 			}
 
 			resp, err := client.Do(req)

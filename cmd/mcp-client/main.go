@@ -30,6 +30,8 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/google/sam/api"
 )
 
 func main() {
@@ -92,7 +94,7 @@ func main() {
 		}
 
 		if *tokenOpt != "" {
-			req.Header.Set("Authorization", "Bearer "+*tokenOpt)
+			req.Header.Set(api.HeaderSamAuthentication, "Bearer "+*tokenOpt)
 		}
 
 		resp, err := http.DefaultClient.Do(req)
@@ -222,6 +224,6 @@ type authTransport struct {
 func (t *authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// Clone request to avoid mutating original request if shared/retried
 	reqCopy := req.Clone(req.Context())
-	reqCopy.Header.Set("Authorization", "Bearer "+t.token)
+	reqCopy.Header.Set(api.HeaderSamAuthentication, "Bearer "+t.token)
 	return t.underlying.RoundTrip(reqCopy)
 }

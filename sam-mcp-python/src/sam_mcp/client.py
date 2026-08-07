@@ -22,7 +22,7 @@ class SamClient:
         import httpx
         headers = {"Accept": "application/json, text/event-stream"}
         if self.token:
-            headers["Authorization"] = f"Bearer {self.token}"
+            headers["X-Sam-Authentication"] = f"Bearer {self.token}"
         
         self._http_client = httpx.AsyncClient(headers=headers)
         try:

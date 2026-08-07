@@ -144,7 +144,7 @@ req = urllib.request.Request(
     data=json.dumps(data).encode('utf-8'),
     headers={
         \"Content-Type\": \"application/json\",
-        \"Authorization\": \"Bearer secret-token\"
+        \"X-Sam-Authentication\": \"Bearer secret-token\"
     },
     method=\"POST\"
 )
@@ -160,7 +160,7 @@ with urllib.request.urlopen(req) as response:
 import urllib.request
 req = urllib.request.Request(
     \"http://${MESH_PREFIX}-node-2:8080/sam/${node1_peer_id}/mcp/http-tool/\",
-    headers={\"Authorization\": \"Bearer secret-token\"}
+    headers={\"X-Sam-Authentication\": \"Bearer secret-token\"}
 )
 with urllib.request.urlopen(req) as response:
     print(response.read().decode(\"utf-8\"))

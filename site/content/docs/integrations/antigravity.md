@@ -26,7 +26,7 @@ Add the node directly using its HTTP endpoint (replace `<YOUR_TOKEN>` with your 
     "sam-mesh": {
       "serverUrl": "http://localhost:8080/mcp",
       "headers": {
-        "Authorization": "Bearer <YOUR_TOKEN>"
+        "X-Sam-Authentication": "Bearer <YOUR_TOKEN>"
       }
     }
   }

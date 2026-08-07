@@ -36,7 +36,7 @@ Add the node through the `mcp-remote` bridge (replace `<YOUR_TOKEN>` with your `
         "http://localhost:8080/mcp",
         "--allow-http",
         "--header",
-        "Authorization: Bearer <YOUR_TOKEN>"
+        "X-Sam-Authentication: Bearer <YOUR_TOKEN>"
       ]
     }
   }

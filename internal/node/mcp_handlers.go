@@ -59,6 +59,13 @@ func (n *SamNode) handleListLocalServices(ctx context.Context, req *mcp.CallTool
 	}, nil, nil
 }
 
+// inferenceInvocationHint tells the calling agent how to call an inference://
+// service's local_proxy_url directly over HTTP. Inference services are plain
+// OpenAI-compatible endpoints, never invoked via call_remote_tool.
+const inferenceInvocationHint = `To call an inference service, send a normal HTTP request (e.g. POST <local_proxy_url>/chat/completions) directly to its "local_proxy_url" — do NOT use call_remote_tool. Required headers:
+  - "X-Sam-Authentication: Bearer <your local --api-token>" authenticates you to this node; it is never forwarded off-node.
+  - "Authorization: Bearer <upstream-credential>" is OPTIONAL and only needed if the destination service itself requires its own credential (e.g. a provider API key); it passes straight through untouched and plays no part in authenticating to this node.`
+
 // DiscoverRemoteServicesParams defines the parameters for the discover_remote_services tool.
 type DiscoverRemoteServicesParams struct {
 	Type   string `json:"type" jsonschema:"Service type (mcp, inference, a2a)"`
@@ -101,10 +108,12 @@ func (n *SamNode) handleDiscoverRemoteServices(ctx context.Context, req *mcp.Cal
 	if err != nil {
 		return nil, nil, err
 	}
+	content := []mcp.Content{&mcp.TextContent{Text: string(respData)}}
+	if serviceType == api.ServiceType_SERVICE_TYPE_INFERENCE && len(providers) > 0 {
+		content = append(content, &mcp.TextContent{Text: inferenceInvocationHint})
+	}
 	return &mcp.CallToolResult{
-		Content: []mcp.Content{
-			&mcp.TextContent{Text: string(respData)},
-		},
+		Content: content,
 	}, nil, nil
 }
 

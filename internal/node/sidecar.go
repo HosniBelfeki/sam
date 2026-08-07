@@ -44,23 +44,26 @@ func StartSidecarServer(node *SamNode, addr, token, certFile, keyFile, caFile st
 	mux.HandleFunc("/healthz", handleHealthz)
 	mux.HandleFunc("/readyz", handleReadyz)
 
-	// Protected endpoints
-	mux.Handle("/sam/service/register", withAuth(token, withMeshConnection(node, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// Protected endpoints. allowAuthorizationFallback=true is safe here: none of
+	// these ever forward the inbound Authorization header to another service.
+	mux.Handle("/sam/service/register", withAuth(token, true, withMeshConnection(node, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handleRegisterService(node, w, r)
 	}))))
-	mux.Handle("/sam/service/unregister", withAuth(token, withMeshConnection(node, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("/sam/service/unregister", withAuth(token, true, withMeshConnection(node, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handleUnregisterService(node, w, r)
 	}))))
-	mux.Handle("/sam/service/discover", withAuth(token, withMeshConnection(node, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("/sam/service/discover", withAuth(token, true, withMeshConnection(node, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handleDiscoverService(node, w, r)
 	}))))
 
-	// Mount Egress Proxy
-	mux.Handle("/sam/", withAuth(token, withMeshConnection(node, createEgressProxy(node))))
+	// Mount Egress Proxy. allowAuthorizationFallback=false is required here: this
+	// handler forwards Authorization to the destination service, so it must never
+	// also accept it as the local gate credential (would leak the sidecar token off-node).
+	mux.Handle("/sam/", withAuth(token, false, withMeshConnection(node, createEgressProxy(node))))
 
 	// Mount MCP handler
 	mcpHandler := NewMCPHandler(node)
-	mux.Handle("/", withAuth(token, withMeshConnection(node, mcpHandler)))
+	mux.Handle("/", withAuth(token, true, withMeshConnection(node, mcpHandler)))
 
 	server := &http.Server{
 		Handler: mux,
@@ -192,7 +195,15 @@ func withMeshConnection(node *SamNode, next http.Handler) http.Handler {
 	})
 }
 
-func withAuth(token string, next http.Handler) http.Handler {
+// withAuth gates a handler behind the sidecar's shared-secret token.
+//
+// allowAuthorizationFallback additionally accepts the standard "Authorization"
+// header as the local gate credential, for endpoints that never forward it to
+// another service. It must be false for anything that proxies the request
+// onward (the egress/inference proxy), since there "Authorization" is reserved
+// exclusively for the destination's own credential and must never double as
+// (or leak) the local sidecar token.
+func withAuth(token string, allowAuthorizationFallback bool, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		logger.Debugf("[SidecarAuth] Incoming request: %s %s from %s", r.Method, r.URL.Path, r.RemoteAddr)
 		if token == "" {
@@ -202,16 +213,25 @@ func withAuth(token string, next http.Handler) http.Handler {
 			return
 		}
 
-		authHeader := r.Header.Get("Authorization")
+		headerName := api.HeaderSamAuthentication
+		authHeader := r.Header.Get(headerName)
+		if authHeader == "" && allowAuthorizationFallback {
+			headerName = "Authorization"
+			authHeader = r.Header.Get(headerName)
+		}
 		if authHeader == "" {
-			logger.Warnf("[SidecarAuth] Request %s %s rejected: missing Authorization header", r.Method, r.URL.Path)
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			accepted := fmt.Sprintf("%q", api.HeaderSamAuthentication)
+			if allowAuthorizationFallback {
+				accepted += ` or "Authorization"`
+			}
+			logger.Warnf("[SidecarAuth] Request %s %s rejected: missing %s header", r.Method, r.URL.Path, accepted)
+			http.Error(w, fmt.Sprintf("Unauthorized: missing %s header, e.g. %q: \"Bearer <api-token>\"", accepted, api.HeaderSamAuthentication), http.StatusUnauthorized)
 			return
 		}
 
 		parts := strings.Split(authHeader, " ")
 		if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
-			http.Error(w, "Invalid authorization header format", http.StatusUnauthorized)
+			http.Error(w, fmt.Sprintf("Invalid %q header format, expected \"Bearer <api-token>\"", headerName), http.StatusUnauthorized)
 			return
 		}
 
@@ -486,14 +506,9 @@ func createEgressProxy(node *SamNode) http.Handler {
 
 		r.Header.Set(api.HeaderSamBiscuit, base64.StdEncoding.EncodeToString(biscuitBytes))
 
-		// Map X-Sam-Authorization to Authorization header for the remote service,
-		// and delete the local sidecar Authorization header to prevent leaking it.
-		if upstreamAuth := r.Header.Get(api.HeaderSamAuthorization); upstreamAuth != "" {
-			r.Header.Set("Authorization", upstreamAuth)
-			r.Header.Del(api.HeaderSamAuthorization)
-		} else {
-			r.Header.Del("Authorization")
-		}
+		// Strip the local sidecar gate header before forwarding off-node; a caller-supplied
+		// "Authorization" header passes straight through untouched as the destination's own credential.
+		r.Header.Del(api.HeaderSamAuthentication)
 
 		proxy.ServeHTTP(w, r)
 	})

@@ -715,16 +715,16 @@ func TestDatapathHeadersAndRoutingTable(t *testing.T) {
 		wantReceivedPathSuffix string
 	}{
 		{
-			name:       "Auth mapping with X-Sam-Authorization",
+			name:       "Authorization passes through untouched to the destination",
 			pathSuffix: "/api/v1/test",
 			requestHeaders: map[string]string{
-				"Authorization":            "Bearer local-token",
-				api.HeaderSamAuthorization: "Bearer upstream-token",
-				"X-Test-Request":           "yes",
+				"Authorization":             "Bearer upstream-token",
+				api.HeaderSamAuthentication: "Bearer local-token",
+				"X-Test-Request":            "yes",
 			},
 			wantReceivedHeaders: map[string]string{
 				"Authorization":              "Bearer upstream-token",
-				api.HeaderSamAuthorization:   "", // Must be stripped
+				api.HeaderSamAuthentication:  "", // Must be stripped, local-only
 				api.HeaderSamBiscuit:         "", // Must be stripped
 				api.HeaderSamNoTrailingSlash: "", // Must be stripped
 				"X-Test-Request":             "yes",
@@ -732,15 +732,15 @@ func TestDatapathHeadersAndRoutingTable(t *testing.T) {
 			wantReceivedPathSuffix: "/api/v1/test",
 		},
 		{
-			name:       "Auth stripping when X-Sam-Authorization is absent",
+			name:       "Local gate header stripped, no Authorization to pass through",
 			pathSuffix: "/api/v1/test",
 			requestHeaders: map[string]string{
-				"Authorization":  "Bearer local-token",
-				"X-Test-Request": "yes",
+				api.HeaderSamAuthentication: "Bearer local-token",
+				"X-Test-Request":            "yes",
 			},
 			wantReceivedHeaders: map[string]string{
-				"Authorization":              "", // Must be stripped to avoid leaking local sidecar token
-				api.HeaderSamAuthorization:   "",
+				"Authorization":              "", // Nothing to pass through
+				api.HeaderSamAuthentication:  "", // Must be stripped to avoid leaking local sidecar token
 				api.HeaderSamBiscuit:         "",
 				api.HeaderSamNoTrailingSlash: "",
 				"X-Test-Request":             "yes",
@@ -751,7 +751,7 @@ func TestDatapathHeadersAndRoutingTable(t *testing.T) {
 			name:       "Trailing slash handling with empty path",
 			pathSuffix: "", // Requesting the root of the service: .../dummy-tool
 			requestHeaders: map[string]string{
-				"Authorization": "Bearer local-token",
+				api.HeaderSamAuthentication: "Bearer local-token",
 			},
 			wantReceivedHeaders: map[string]string{
 				api.HeaderSamNoTrailingSlash: "", // Must be stripped
