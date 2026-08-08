@@ -43,7 +43,10 @@ func GetOrGenerateKey(s *Store) crypto.PrivKey {
 		if err != nil {
 			logger.Fatalf("Failed to generate key: %v", err)
 		}
-		raw, _ := crypto.MarshalPrivateKey(priv)
+		raw, err := crypto.MarshalPrivateKey(priv)
+		if err != nil {
+			logger.Fatalf("Failed to marshal private key: %v", err)
+		}
 		if err := s.SaveKey(raw); err != nil {
 			logger.Fatalf("Failed to save key: %v", err)
 		}
