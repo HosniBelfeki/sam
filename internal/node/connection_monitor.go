@@ -91,7 +91,7 @@ func checkHubConnection(ctx context.Context, mgr hubConnectionManager) (stable b
 		}
 	}
 	if len(connectedAddrsFallback) > 0 {
-		mgr.UpdateRelays(newHubAddrs)
+		mgr.UpdateRelays(connectedAddrsFallback)
 		return false, true
 	}
 
