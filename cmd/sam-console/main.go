@@ -15,11 +15,11 @@ import (
 
 func main() {
 	var (
-		hubURL     = flag.String("hub", "http://localhost:8080", "URL of the SAM control plane")
-		adminToken = flag.String("admin-token", "", "Admin token for control plane authentication")
-		bindAddr   = flag.String("bind-addr", ":8081", "Address to bind the console server")
-		staticDir  = flag.String("static-dir", "public", "Directory containing static frontend files")
-		basePath   = flag.String("base-path", "", "Base path prefix for the console (e.g. /console)")
+		controlPlaneURL = flag.String("control-plane", "http://localhost:8080", "URL of the SAM control plane")
+		adminToken      = flag.String("admin-token", "", "Admin token for control plane authentication")
+		bindAddr        = flag.String("bind-addr", ":8081", "Address to bind the console server")
+		staticDir       = flag.String("static-dir", "public", "Directory containing static frontend files")
+		basePath        = flag.String("base-path", "", "Base path prefix for the console (e.g. /console)")
 	)
 	flag.Parse()
 
@@ -28,10 +28,10 @@ func main() {
 	}
 
 	srv, err := console.NewServer(console.Config{
-		HubURL:     *hubURL,
-		AdminToken: *adminToken,
-		StaticDir:  *staticDir,
-		BasePath:   *basePath,
+		ControlPlaneURL: *controlPlaneURL,
+		AdminToken:      *adminToken,
+		StaticDir:       *staticDir,
+		BasePath:        *basePath,
 	})
 	if err != nil {
 		log.Fatalf("Failed to initialize console server: %v", err)

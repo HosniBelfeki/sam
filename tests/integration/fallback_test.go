@@ -73,7 +73,7 @@ func TestSelfHealingHTTPFallback(t *testing.T) {
 
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
-		t.Fatalf("Failed to generate hub key: %v", err)
+		t.Fatalf("Failed to generate control plane key: %v", err)
 	}
 
 	createNewHost := func() host.Host {
@@ -155,9 +155,9 @@ func TestSelfHealingHTTPFallback(t *testing.T) {
 		}
 
 		resp := &api.EnrollResponse{
-			BiscuitToken: createMockBiscuitToken(t, enrollReq.PeerId, priv, api.RoleNode),
-			HubPublicKey: pub,
-			HubAddresses: []string{addr},
+			BiscuitToken:          createMockBiscuitToken(t, enrollReq.PeerId, priv, api.RoleNode),
+			ControlPlanePublicKey: pub,
+			RouterAddresses:       []string{addr},
 		}
 		data, _ := proto.Marshal(resp)
 		w.Header().Set("Content-Type", "application/x-protobuf")
@@ -167,11 +167,11 @@ func TestSelfHealingHTTPFallback(t *testing.T) {
 		mu.Lock()
 		addr := currentP2PAddr
 		mu.Unlock()
-		resp := &api.HubInfoResponse{
-			OidcIssuer:   "http://" + r.Host,
-			ClientId:     "sam-mesh-audience",
-			Audience:     "sam-mesh-audience",
-			HubAddresses: []string{addr},
+		resp := &api.ControlPlaneInfoResponse{
+			OidcIssuer:      "http://" + r.Host,
+			ClientId:        "sam-mesh-audience",
+			Audience:        "sam-mesh-audience",
+			RouterAddresses: []string{addr},
 		}
 		data, _ := proto.Marshal(resp)
 		w.Header().Set("Content-Type", "application/x-protobuf")
@@ -208,7 +208,7 @@ func TestSelfHealingHTTPFallback(t *testing.T) {
 		t.Fatalf("Join did not succeed:\n%s", out)
 	}
 
-	// Step 2: Simulate Hub changing its P2P port (HTTP URL stays the same)
+	// Step 2: Simulate router changing its P2P port (HTTP URL stays the same)
 	_ = h.Close()
 	h = createNewHost()
 	defer func() { _ = h.Close() }()
@@ -236,8 +236,8 @@ func TestSelfHealingHTTPFallback(t *testing.T) {
 	success := false
 	for i := 0; i < 50; i++ {
 		out = stdout.String()
-		if strings.Contains(out, "Fetching latest hub addresses via HTTP") &&
-			strings.Contains(out, "Successfully authenticated with hub via libp2p") {
+		if strings.Contains(out, "Fetching latest router addresses via HTTP") &&
+			strings.Contains(out, "Successfully authenticated with router via libp2p") {
 			success = true
 			break
 		}

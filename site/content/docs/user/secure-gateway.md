@@ -17,13 +17,13 @@ sequenceDiagram
     participant Agent as AI Agent (Inside Sandbox)
     participant Init as nano-init (Sandbox PID 1)
     participant Box as sam-box (Host / Shared Vol)
-    participant Hub as sam-control-plane (Mesh)
+    participant ControlPlane as sam-control-plane (Mesh)
     participant Upstream as External Service (e.g. OpenAI API)
     
     Agent->>Init: HTTP GET http://api.openai.com/v1/models (via HTTP_PROXY)
     Init->>Box: Forward raw bytes via Unix Domain Socket (UDS)
     Box->>Box: Parse & verify client's Biscuit token
-    Box->>Hub: Verify policy rights
+    Box->>ControlPlane: Verify policy rights
     Box->>Box: Lookup & Inject real API Key (e.g. Bearer sk-...)
     Box->>Upstream: HTTPS GET https://api.openai.com/v1/models (Upgraded to SSL)
     Upstream-->>Box: Response
@@ -154,7 +154,7 @@ spec:
           - "--uds-path=/var/run/sam/sam-box.sock"
           - "--config=/etc/sam/sam-node.yaml"
           - "--secrets-file=/etc/sam/secrets.yaml"
-          - "--hub=http://sam-control-plane.sam.svc.cluster.local:8080"
+          - "--control-plane=http://sam-control-plane.sam.svc.cluster.local:8080"
           - "--jwt-path=/var/run/secrets/tokens/sam-token"
         volumeMounts:
         - name: config-volume

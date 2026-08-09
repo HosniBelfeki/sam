@@ -9,7 +9,7 @@ SAM (Sovereign Agent Mesh) is a smart, zero-config, zero-trust P2P network built
 Instead of exposing your agent's tools (like local scripts, LLM endpoints, or internal APIs) to the public internet, SAM allows you to create secure, private mesh networks. This is especially critical because modern AI agents operate across highly heterogeneous environments—spanning cloud servers, on-premises datacenters, personal laptops, Raspberry Pis, and Android devices. SAM seamlessly connects them all, regardless of complex network topologies or NATs.
 
 **Security & Trust Boundaries (Read This First!)**
-* **Isolated by Default:** You do NOT join any mesh by default. You must explicitly configure the control plane (Hub) you want to join.
+* **Isolated by Default:** You do NOT join any mesh by default. You must explicitly configure the control plane you want to join.
 * **Closed by Default:** Joining a mesh does not expose your tools. By default, your node does not allow any services to be reached by others. You must explicitly configure policies to share tools.
 * **Bring Your Own Control Plane (DIY):** While we offer public testnets, the core design allows you to host your own SAM control plane. You retain 100% control over your data, identities, and authorization policies.
 
@@ -26,7 +26,7 @@ For the fastest way to get started and experiment, you can join our public beta 
 
 ### "DIY Mode" (Self-Hosted for Developers & Operators)
 Compile from source, run local clusters, host your own control plane, or execute tests:
-- 🛠️ **[Developer Guide](development/)**: Prereqs, compilation, local hub setup, and Kubernetes Kind deployment.
+- 🛠️ **[Developer Guide](development/)**: Prereqs, compilation, local control plane setup, and Kubernetes Kind deployment.
 - 🧪 **[Testing Guide](development/testing/)**: Go tests, E2E BATS, and containerized mesh execution.
 
 ---

@@ -57,7 +57,7 @@ func TestDatapathIntegration(t *testing.T) {
 
 	nodeA, err := NewSamNode(Options{
 		PrivKey:           privA,
-		HubAddrs:          nil,
+		RouterAddrs:       nil,
 		Store:             storeA,
 		MeshID:            "test-mesh",
 		DiscoveryInterval: "1s",
@@ -84,7 +84,7 @@ func TestDatapathIntegration(t *testing.T) {
 
 	nodeB, err := NewSamNode(Options{
 		PrivKey:           privB,
-		HubAddrs:          nil,
+		RouterAddrs:       nil,
 		Store:             storeB,
 		MeshID:            "test-mesh",
 		DiscoveryInterval: "1s",
@@ -261,7 +261,7 @@ func TestDatapathIntegration_Unauthenticated(t *testing.T) {
 
 	nodeA, err := NewSamNode(Options{
 		PrivKey:           privA,
-		HubAddrs:          nil,
+		RouterAddrs:       nil,
 		Store:             storeA,
 		MeshID:            "test-mesh",
 		DiscoveryInterval: "1s",
@@ -288,7 +288,7 @@ func TestDatapathIntegration_Unauthenticated(t *testing.T) {
 
 	nodeB, err := NewSamNode(Options{
 		PrivKey:           privB,
-		HubAddrs:          nil,
+		RouterAddrs:       nil,
 		Store:             storeB,
 		MeshID:            "test-mesh",
 		DiscoveryInterval: "1s",
@@ -410,7 +410,7 @@ func TestStdioDatapathIntegration(t *testing.T) {
 
 	nodeA, err := NewSamNode(Options{
 		PrivKey:           privA,
-		HubAddrs:          nil,
+		RouterAddrs:       nil,
 		Store:             storeA,
 		MeshID:            "test-mesh",
 		DiscoveryInterval: "1s",
@@ -433,7 +433,7 @@ func TestStdioDatapathIntegration(t *testing.T) {
 
 	nodeB, err := NewSamNode(Options{
 		PrivKey:           privB,
-		HubAddrs:          nil,
+		RouterAddrs:       nil,
 		Store:             storeB,
 		MeshID:            "test-mesh",
 		DiscoveryInterval: "1s",
@@ -600,7 +600,7 @@ func TestDatapathHeadersAndRoutingTable(t *testing.T) {
 
 	nodeA, err := NewSamNode(Options{
 		PrivKey:           privA,
-		HubAddrs:          nil,
+		RouterAddrs:       nil,
 		Store:             storeA,
 		MeshID:            "test-mesh",
 		DiscoveryInterval: "1s",
@@ -627,7 +627,7 @@ func TestDatapathHeadersAndRoutingTable(t *testing.T) {
 
 	nodeB, err := NewSamNode(Options{
 		PrivKey:           privB,
-		HubAddrs:          nil,
+		RouterAddrs:       nil,
 		Store:             storeB,
 		MeshID:            "test-mesh",
 		DiscoveryInterval: "1s",

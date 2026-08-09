@@ -53,9 +53,9 @@ By default, services on your node are completely locked down. To allow agents in
 
 The service format for an inference service is always `inference:<service-name>`. 
 
-To allow **any** authenticated mesh agent to use the service, no local attenuation policies are necessary—the Hub will manage access centrally based on the node's assigned roles.
+To allow **any** authenticated mesh agent to use the service, no local attenuation policies are necessary—the control plane will manage access centrally based on the node's assigned roles.
 
-If you only want to allow specific identities or groups (e.g., agents belonging to the "research" group) and want to enforce this restriction locally at the node (regardless of Hub configuration), you can add a local check based on the cryptographic facts injected by the Hub:
+If you only want to allow specific identities or groups (e.g., agents belonging to the "research" group) and want to enforce this restriction locally at the node (regardless of control plane configuration), you can add a local check based on the cryptographic facts injected by the control plane:
 ```yaml
 version: "v1alpha1"
 attenuation:

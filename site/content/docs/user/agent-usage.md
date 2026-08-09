@@ -15,16 +15,16 @@ Connecting your AI agent to the Sovereign Agent Mesh involves two phases:
 sequenceDiagram
     actor User as Developer/Operator
     participant Node as sam-node (Local)
-    participant Hub as sam-control-plane (Mesh)
+    participant ControlPlane as sam-control-plane (Mesh)
     participant Agent as AI Agent (Gemini/Claude)
     
-    Note over User,Hub: Phase 1: Mesh Join (OIDC Authorization)
+    Note over User,ControlPlane: Phase 1: Mesh Join (OIDC Authorization)
     User->>Node: sam-node join <control-plane-url>
-    Node->>Hub: Get OIDC Info
-    Hub-->>Node: OIDC Issuer, Client ID
+    Node->>ControlPlane: Get OIDC Info
+    ControlPlane-->>Node: OIDC Issuer, Client ID
     Node->>User: Display Login URL & Code
     User->>User: Login in Browser
-    Node->>Hub: Exchange Code for Biscuit Identity
+    Node->>ControlPlane: Exchange Code for Biscuit Identity
     Node->>Node: Persist Biscuit in Local Store (agent.db)
 
     Note over User,Agent: Phase 2: Agent Tool Invocation
@@ -32,7 +32,7 @@ sequenceDiagram
     Node->>Node: Start local MCP server on 127.0.0.1:8080
     Agent->>Node: Connect to local MCP (X-Sam-Authentication: Bearer "secret-key")
     Agent->>Node: Call Remote P2P Tool
-    Node->>Hub: Verify Biscuit / Allowed Policies
+    Node->>ControlPlane: Verify Biscuit / Allowed Policies
     Node-->>Agent: Execute tool and return result
 ```
 
@@ -43,12 +43,12 @@ sequenceDiagram
 Before starting the node daemon, you must authorize your node and obtain a cryptographic Biscuit identity.
 
 ### Standard Login
-Run the `join` command, pointing to the mesh control hub:
+Run the `join` command, pointing to the mesh control plane:
 ```bash
 sam-node join https://bananas.sam-mesh.dev
 ```
 
-*   **Browser Flow**: The CLI will discover the OIDC credentials from the hub, print an OIDC authorization URL, and attempt to open your system's default web browser automatically.
+*   **Browser Flow**: The CLI will discover the OIDC credentials from the control plane, print an OIDC authorization URL, and attempt to open your system's default web browser automatically.
 *   **Approval**: Log in with your corporate or identity credentials (e.g. Google Accounts), approve the authorization request, and return to the terminal. The node will automatically exchange the credentials for a Biscuit token and save it to `~/.config/sam-mesh/agent.db`.
 
 ### Headless (Server) Login

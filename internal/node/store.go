@@ -195,28 +195,28 @@ func (s *Store) LoadKey() ([]byte, error) {
 	return val, nil
 }
 
-func (s *Store) SaveHubConfig(pubKey []byte, addrs []string) error {
+func (s *Store) SaveMeshConfig(pubKey []byte, addrs []string) error {
 	return s.db.Update(func(tx *bbolt.Tx) error {
 		b := tx.Bucket([]byte(bucketIdentity))
-		if err := b.Put([]byte("hub_public_key"), pubKey); err != nil {
+		if err := b.Put([]byte("control_plane_public_key"), pubKey); err != nil {
 			return err
 		}
 		data, _ := json.Marshal(addrs)
-		return b.Put([]byte("hub_addresses"), data)
+		return b.Put([]byte("router_addresses"), data)
 	})
 }
 
-func (s *Store) LoadHubConfig() ([]byte, []string, error) {
+func (s *Store) LoadMeshConfig() ([]byte, []string, error) {
 	var pubKey []byte
 	var addrs []string
 	err := s.db.View(func(tx *bbolt.Tx) error {
 		b := tx.Bucket([]byte(bucketIdentity))
-		dbVal := b.Get([]byte("hub_public_key"))
+		dbVal := b.Get([]byte("control_plane_public_key"))
 		if len(dbVal) > 0 {
 			pubKey = make([]byte, len(dbVal))
 			copy(pubKey, dbVal)
 		}
-		addrsBytes := b.Get([]byte("hub_addresses"))
+		addrsBytes := b.Get([]byte("router_addresses"))
 		if len(addrsBytes) > 0 {
 			return json.Unmarshal(addrsBytes, &addrs)
 		}
@@ -225,18 +225,18 @@ func (s *Store) LoadHubConfig() ([]byte, []string, error) {
 	return pubKey, addrs, err
 }
 
-func (s *Store) SaveHubURL(url string) error {
+func (s *Store) SaveControlPlaneURL(url string) error {
 	return s.db.Update(func(tx *bbolt.Tx) error {
 		b := tx.Bucket([]byte(bucketIdentity))
-		return b.Put([]byte("hub_url"), []byte(url))
+		return b.Put([]byte("control_plane_url"), []byte(url))
 	})
 }
 
-func (s *Store) LoadHubURL() (string, error) {
+func (s *Store) LoadControlPlaneURL() (string, error) {
 	var val []byte
 	err := s.db.View(func(tx *bbolt.Tx) error {
 		b := tx.Bucket([]byte(bucketIdentity))
-		val = b.Get([]byte("hub_url"))
+		val = b.Get([]byte("control_plane_url"))
 		return nil
 	})
 	return string(val), err

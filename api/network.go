@@ -40,8 +40,8 @@ const (
 	// GossipEvents is the GossipSub topic used to broadcast mesh event updates (e.g., node bans).
 	GossipEvents = "/sam/mesh/events/v1"
 
-	// GossipHubSync is the GossipSub topic used by the Hub to sync cluster state.
-	GossipHubSync = "/sam/hub/sync/v1"
+	// GossipControlPlaneSync is the GossipSub topic used by the control plane to sync cluster state.
+	GossipControlPlaneSync = "/sam/control-plane/sync/v1"
 
 	// DefaultAudience is the default audience string used in OIDC token validation.
 	DefaultAudience = "sam-mesh-audience"

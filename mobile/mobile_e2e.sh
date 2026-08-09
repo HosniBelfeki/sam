@@ -143,7 +143,7 @@ docker run --name host-node \
   sam-node:local \
   run \
   --data-dir /data \
-  --hub http://sam-control-plane:37001 \
+  --control-plane http://sam-control-plane:37001 \
   --jwt "$HOST_JWT" \
   --bind-addr 0.0.0.0:8081 \
   --api-token host-token \

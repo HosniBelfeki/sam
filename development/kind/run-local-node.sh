@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Enroll a locally-built ./bin/sam-node into the kind mesh hub for local testing.
-# The hub (exposed via sam-hub-nodeport + kind extraPortMappings) is reached at
+# Enroll a locally-built ./bin/sam-node into the kind mesh for local testing.
+# The control plane (exposed via sam-control-plane-nodeport + kind extraPortMappings) is reached at
 # 127.0.0.1:9090 (HTTP enroll) and 127.0.0.1:4001 (libp2p TCP); the node relays
-# peer traffic through the hub. Extra args pass through, e.g. to host a service:
+# peer traffic through the router. Extra args pass through, e.g. to host a service:
 #   ARGS="--config development/examples/calc-mcp/sam-node-config.yaml"
 set -euo pipefail
 
@@ -27,14 +27,14 @@ kubectl --context "${KCTX}" -n "${NAMESPACE}" create serviceaccount local-node-s
 JWT="$(kubectl --context "${KCTX}" -n "${NAMESPACE}" create token local-node-sa \
   --audience=sam-mesh-audience --duration=1h)"
 
-echo "Enrolling local ./bin/sam-node into mesh hub at http://127.0.0.1:9090…"
+echo "Enrolling local ./bin/sam-node into the mesh control plane at http://127.0.0.1:9090…"
 echo "  MCP/sidecar API on 127.0.0.1:9099"
 exec ./bin/sam-node run \
-  --hub http://127.0.0.1:9090 \
+  --control-plane http://127.0.0.1:9090 \
   --jwt "${JWT}" \
   --listen /ip4/0.0.0.0/tcp/0 \
   --bind-addr 127.0.0.1:9099 \
   --api-token devtoken \
   --discovery-interval 200ms \
-  --hub-connect-timeout 10s \
+  --router-connect-timeout 10s \
   "$@"

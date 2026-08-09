@@ -55,23 +55,23 @@ func GetNodeID() *C.char {
 }
 
 //export EnrollNode
-func EnrollNode(dataDir *C.char, hubURL *C.char, jwt *C.char, allowLoopback C.char) *C.char {
+func EnrollNode(dataDir *C.char, controlPlaneURL *C.char, jwt *C.char, allowLoopback C.char) *C.char {
 	goDataDir := C.GoString(dataDir)
-	goHubURL := C.GoString(hubURL)
+	goControlPlaneURL := C.GoString(controlPlaneURL)
 	goJWT := C.GoString(jwt)
 	goAllowLoopback := allowLoopback != 0
 
-	err := ffi.EnrollNode(goDataDir, goHubURL, goJWT, goAllowLoopback)
+	err := ffi.EnrollNode(goDataDir, goControlPlaneURL, goJWT, goAllowLoopback)
 	if err != nil {
 		return C.CString(err.Error())
 	}
 	return nil
 }
 
-//export FetchHubInfoJSON
-func FetchHubInfoJSON(hubURL *C.char) *C.char {
-	goHubURL := C.GoString(hubURL)
-	jsonStr := ffi.FetchHubInfoJSON(goHubURL)
+//export FetchControlPlaneInfoJSON
+func FetchControlPlaneInfoJSON(controlPlaneURL *C.char) *C.char {
+	goControlPlaneURL := C.GoString(controlPlaneURL)
+	jsonStr := ffi.FetchControlPlaneInfoJSON(goControlPlaneURL)
 	return C.CString(jsonStr)
 }
 

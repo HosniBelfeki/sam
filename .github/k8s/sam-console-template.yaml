@@ -32,7 +32,7 @@ spec:
         image: ghcr.io/google/sam-console:${IMAGE_TAG}
         imagePullPolicy: IfNotPresent
         args:
-        - "--hub=http://sam-control-plane-${ENV_NAME}:8080"
+        - "--control-plane=http://sam-control-plane-${ENV_NAME}:8080"
         - "--bind-addr=:8081"
         - "--static-dir=/app/public"
         - "--admin-token=$(SAM_ADMIN_TOKEN)"

@@ -442,14 +442,14 @@ func (x *EnrollRequest) GetRequestedRole() string {
 }
 
 type EnrollResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	BiscuitToken  []byte                 `protobuf:"bytes,1,opt,name=biscuit_token,json=biscuitToken,proto3" json:"biscuit_token,omitempty"`
-	ErrorMessage  string                 `protobuf:"bytes,2,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
-	HubPublicKey  []byte                 `protobuf:"bytes,3,opt,name=hub_public_key,json=hubPublicKey,proto3" json:"hub_public_key,omitempty"`
-	HubAddresses  []string               `protobuf:"bytes,4,rep,name=hub_addresses,json=hubAddresses,proto3" json:"hub_addresses,omitempty"`
-	Expiration    int64                  `protobuf:"varint,5,opt,name=expiration,proto3" json:"expiration,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                 protoimpl.MessageState `protogen:"open.v1"`
+	BiscuitToken          []byte                 `protobuf:"bytes,1,opt,name=biscuit_token,json=biscuitToken,proto3" json:"biscuit_token,omitempty"`
+	ErrorMessage          string                 `protobuf:"bytes,2,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
+	ControlPlanePublicKey []byte                 `protobuf:"bytes,3,opt,name=control_plane_public_key,json=controlPlanePublicKey,proto3" json:"control_plane_public_key,omitempty"`
+	RouterAddresses       []string               `protobuf:"bytes,4,rep,name=router_addresses,json=routerAddresses,proto3" json:"router_addresses,omitempty"`
+	Expiration            int64                  `protobuf:"varint,5,opt,name=expiration,proto3" json:"expiration,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *EnrollResponse) Reset() {
@@ -496,16 +496,16 @@ func (x *EnrollResponse) GetErrorMessage() string {
 	return ""
 }
 
-func (x *EnrollResponse) GetHubPublicKey() []byte {
+func (x *EnrollResponse) GetControlPlanePublicKey() []byte {
 	if x != nil {
-		return x.HubPublicKey
+		return x.ControlPlanePublicKey
 	}
 	return nil
 }
 
-func (x *EnrollResponse) GetHubAddresses() []string {
+func (x *EnrollResponse) GetRouterAddresses() []string {
 	if x != nil {
-		return x.HubAddresses
+		return x.RouterAddresses
 	}
 	return nil
 }
@@ -630,16 +630,16 @@ func (x *BootstrapEnrollRequest) GetRequestedRole() string {
 }
 
 type BootstrapEnrollResponse struct {
-	state               protoimpl.MessageState `protogen:"open.v1"`
-	Status              EnrollmentStatus       `protobuf:"varint,1,opt,name=status,proto3,enum=sam.v1.EnrollmentStatus" json:"status,omitempty"`
-	BiscuitToken        []byte                 `protobuf:"bytes,2,opt,name=biscuit_token,json=biscuitToken,proto3" json:"biscuit_token,omitempty"`                         // Populated only if APPROVED
-	PollIntervalSeconds int32                  `protobuf:"varint,3,opt,name=poll_interval_seconds,json=pollIntervalSeconds,proto3" json:"poll_interval_seconds,omitempty"` // Recommended polling wait time
-	ErrorMessage        string                 `protobuf:"bytes,4,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
-	HubPublicKey        []byte                 `protobuf:"bytes,5,opt,name=hub_public_key,json=hubPublicKey,proto3" json:"hub_public_key,omitempty"` // Populated only if APPROVED
-	HubAddresses        []string               `protobuf:"bytes,6,rep,name=hub_addresses,json=hubAddresses,proto3" json:"hub_addresses,omitempty"`   // Populated only if APPROVED
-	Expiration          int64                  `protobuf:"varint,7,opt,name=expiration,proto3" json:"expiration,omitempty"`                          // Populated only if APPROVED
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	state                 protoimpl.MessageState `protogen:"open.v1"`
+	Status                EnrollmentStatus       `protobuf:"varint,1,opt,name=status,proto3,enum=sam.v1.EnrollmentStatus" json:"status,omitempty"`
+	BiscuitToken          []byte                 `protobuf:"bytes,2,opt,name=biscuit_token,json=biscuitToken,proto3" json:"biscuit_token,omitempty"`                         // Populated only if APPROVED
+	PollIntervalSeconds   int32                  `protobuf:"varint,3,opt,name=poll_interval_seconds,json=pollIntervalSeconds,proto3" json:"poll_interval_seconds,omitempty"` // Recommended polling wait time
+	ErrorMessage          string                 `protobuf:"bytes,4,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
+	ControlPlanePublicKey []byte                 `protobuf:"bytes,5,opt,name=control_plane_public_key,json=controlPlanePublicKey,proto3" json:"control_plane_public_key,omitempty"` // Populated only if APPROVED
+	RouterAddresses       []string               `protobuf:"bytes,6,rep,name=router_addresses,json=routerAddresses,proto3" json:"router_addresses,omitempty"`                       // Populated only if APPROVED
+	Expiration            int64                  `protobuf:"varint,7,opt,name=expiration,proto3" json:"expiration,omitempty"`                                                       // Populated only if APPROVED
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *BootstrapEnrollResponse) Reset() {
@@ -700,16 +700,16 @@ func (x *BootstrapEnrollResponse) GetErrorMessage() string {
 	return ""
 }
 
-func (x *BootstrapEnrollResponse) GetHubPublicKey() []byte {
+func (x *BootstrapEnrollResponse) GetControlPlanePublicKey() []byte {
 	if x != nil {
-		return x.HubPublicKey
+		return x.ControlPlanePublicKey
 	}
 	return nil
 }
 
-func (x *BootstrapEnrollResponse) GetHubAddresses() []string {
+func (x *BootstrapEnrollResponse) GetRouterAddresses() []string {
 	if x != nil {
-		return x.HubAddresses
+		return x.RouterAddresses
 	}
 	return nil
 }
@@ -991,30 +991,30 @@ func (x *DiscoveredProvider) GetSrvDescription() string {
 	return ""
 }
 
-type HubInfoResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	OidcIssuer    string                 `protobuf:"bytes,1,opt,name=oidc_issuer,json=oidcIssuer,proto3" json:"oidc_issuer,omitempty"`
-	ClientId      string                 `protobuf:"bytes,2,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`
-	Audience      string                 `protobuf:"bytes,3,opt,name=audience,proto3" json:"audience,omitempty"`
-	HubAddresses  []string               `protobuf:"bytes,4,rep,name=hub_addresses,json=hubAddresses,proto3" json:"hub_addresses,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+type ControlPlaneInfoResponse struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	OidcIssuer      string                 `protobuf:"bytes,1,opt,name=oidc_issuer,json=oidcIssuer,proto3" json:"oidc_issuer,omitempty"`
+	ClientId        string                 `protobuf:"bytes,2,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`
+	Audience        string                 `protobuf:"bytes,3,opt,name=audience,proto3" json:"audience,omitempty"`
+	RouterAddresses []string               `protobuf:"bytes,4,rep,name=router_addresses,json=routerAddresses,proto3" json:"router_addresses,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
-func (x *HubInfoResponse) Reset() {
-	*x = HubInfoResponse{}
+func (x *ControlPlaneInfoResponse) Reset() {
+	*x = ControlPlaneInfoResponse{}
 	mi := &file_api_sam_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *HubInfoResponse) String() string {
+func (x *ControlPlaneInfoResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*HubInfoResponse) ProtoMessage() {}
+func (*ControlPlaneInfoResponse) ProtoMessage() {}
 
-func (x *HubInfoResponse) ProtoReflect() protoreflect.Message {
+func (x *ControlPlaneInfoResponse) ProtoReflect() protoreflect.Message {
 	mi := &file_api_sam_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -1026,35 +1026,35 @@ func (x *HubInfoResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use HubInfoResponse.ProtoReflect.Descriptor instead.
-func (*HubInfoResponse) Descriptor() ([]byte, []int) {
+// Deprecated: Use ControlPlaneInfoResponse.ProtoReflect.Descriptor instead.
+func (*ControlPlaneInfoResponse) Descriptor() ([]byte, []int) {
 	return file_api_sam_proto_rawDescGZIP(), []int{12}
 }
 
-func (x *HubInfoResponse) GetOidcIssuer() string {
+func (x *ControlPlaneInfoResponse) GetOidcIssuer() string {
 	if x != nil {
 		return x.OidcIssuer
 	}
 	return ""
 }
 
-func (x *HubInfoResponse) GetClientId() string {
+func (x *ControlPlaneInfoResponse) GetClientId() string {
 	if x != nil {
 		return x.ClientId
 	}
 	return ""
 }
 
-func (x *HubInfoResponse) GetAudience() string {
+func (x *ControlPlaneInfoResponse) GetAudience() string {
 	if x != nil {
 		return x.Audience
 	}
 	return ""
 }
 
-func (x *HubInfoResponse) GetHubAddresses() []string {
+func (x *ControlPlaneInfoResponse) GetRouterAddresses() []string {
 	if x != nil {
-		return x.HubAddresses
+		return x.RouterAddresses
 	}
 	return nil
 }
@@ -1787,12 +1787,12 @@ const file_api_sam_proto_rawDesc = "" +
 	"\apeer_id\x18\x02 \x01(\tR\x06peerId\x12\x1d\n" +
 	"\n" +
 	"public_key\x18\x03 \x01(\fR\tpublicKey\x12%\n" +
-	"\x0erequested_role\x18\x04 \x01(\tR\rrequestedRole\"\xc5\x01\n" +
+	"\x0erequested_role\x18\x04 \x01(\tR\rrequestedRole\"\xde\x01\n" +
 	"\x0eEnrollResponse\x12#\n" +
 	"\rbiscuit_token\x18\x01 \x01(\fR\fbiscuitToken\x12#\n" +
-	"\rerror_message\x18\x02 \x01(\tR\ferrorMessage\x12$\n" +
-	"\x0ehub_public_key\x18\x03 \x01(\fR\fhubPublicKey\x12#\n" +
-	"\rhub_addresses\x18\x04 \x03(\tR\fhubAddresses\x12\x1e\n" +
+	"\rerror_message\x18\x02 \x01(\tR\ferrorMessage\x127\n" +
+	"\x18control_plane_public_key\x18\x03 \x01(\fR\x15controlPlanePublicKey\x12)\n" +
+	"\x10router_addresses\x18\x04 \x03(\tR\x0frouterAddresses\x12\x1e\n" +
 	"\n" +
 	"expiration\x18\x05 \x01(\x03R\n" +
 	"expiration\"2\n" +
@@ -1803,14 +1803,14 @@ const file_api_sam_proto_rawDesc = "" +
 	"\apeer_id\x18\x02 \x01(\tR\x06peerId\x12\x1d\n" +
 	"\n" +
 	"public_key\x18\x03 \x01(\fR\tpublicKey\x12%\n" +
-	"\x0erequested_role\x18\x04 \x01(\tR\rrequestedRole\"\xb4\x02\n" +
+	"\x0erequested_role\x18\x04 \x01(\tR\rrequestedRole\"\xcd\x02\n" +
 	"\x17BootstrapEnrollResponse\x120\n" +
 	"\x06status\x18\x01 \x01(\x0e2\x18.sam.v1.EnrollmentStatusR\x06status\x12#\n" +
 	"\rbiscuit_token\x18\x02 \x01(\fR\fbiscuitToken\x122\n" +
 	"\x15poll_interval_seconds\x18\x03 \x01(\x05R\x13pollIntervalSeconds\x12#\n" +
-	"\rerror_message\x18\x04 \x01(\tR\ferrorMessage\x12$\n" +
-	"\x0ehub_public_key\x18\x05 \x01(\fR\fhubPublicKey\x12#\n" +
-	"\rhub_addresses\x18\x06 \x03(\tR\fhubAddresses\x12\x1e\n" +
+	"\rerror_message\x18\x04 \x01(\tR\ferrorMessage\x127\n" +
+	"\x18control_plane_public_key\x18\x05 \x01(\fR\x15controlPlanePublicKey\x12)\n" +
+	"\x10router_addresses\x18\x06 \x03(\tR\x0frouterAddresses\x12\x1e\n" +
 	"\n" +
 	"expiration\x18\a \x01(\x03R\n" +
 	"expiration\"l\n" +
@@ -1834,13 +1834,13 @@ const file_api_sam_proto_rawDesc = "" +
 	"\apeer_id\x18\x01 \x01(\tR\x06peerId\x12&\n" +
 	"\x0flocal_proxy_url\x18\x02 \x01(\tR\rlocalProxyUrl\x12\x19\n" +
 	"\bsrv_name\x18\x03 \x01(\tR\asrvName\x12'\n" +
-	"\x0fsrv_description\x18\x04 \x01(\tR\x0esrvDescription\"\x90\x01\n" +
-	"\x0fHubInfoResponse\x12\x1f\n" +
+	"\x0fsrv_description\x18\x04 \x01(\tR\x0esrvDescription\"\x9f\x01\n" +
+	"\x18ControlPlaneInfoResponse\x12\x1f\n" +
 	"\voidc_issuer\x18\x01 \x01(\tR\n" +
 	"oidcIssuer\x12\x1b\n" +
 	"\tclient_id\x18\x02 \x01(\tR\bclientId\x12\x1a\n" +
-	"\baudience\x18\x03 \x01(\tR\baudience\x12#\n" +
-	"\rhub_addresses\x18\x04 \x03(\tR\fhubAddresses\"\xa9\x01\n" +
+	"\baudience\x18\x03 \x01(\tR\baudience\x12)\n" +
+	"\x10router_addresses\x18\x04 \x03(\tR\x0frouterAddresses\"\xa9\x01\n" +
 	"\x12RouterLeaseRequest\x12\x17\n" +
 	"\apeer_id\x18\x01 \x01(\tR\x06peerId\x12\x1c\n" +
 	"\taddresses\x18\x02 \x03(\tR\taddresses\x12\x18\n" +
@@ -1927,7 +1927,7 @@ var file_api_sam_proto_goTypes = []any{
 	(*CommandBackend)(nil),             // 12: sam.v1.CommandBackend
 	(*RegisterServiceRequest)(nil),     // 13: sam.v1.RegisterServiceRequest
 	(*DiscoveredProvider)(nil),         // 14: sam.v1.DiscoveredProvider
-	(*HubInfoResponse)(nil),            // 15: sam.v1.HubInfoResponse
+	(*ControlPlaneInfoResponse)(nil),   // 15: sam.v1.ControlPlaneInfoResponse
 	(*RouterLeaseRequest)(nil),         // 16: sam.v1.RouterLeaseRequest
 	(*RouterLeaseResponse)(nil),        // 17: sam.v1.RouterLeaseResponse
 	(*PolicyRole)(nil),                 // 18: sam.v1.PolicyRole

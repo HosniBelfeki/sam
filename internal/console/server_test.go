@@ -19,13 +19,13 @@ func TestNewServer_OIDCAutoDiscovery(t *testing.T) {
 		t.Fatalf("failed to generate RSA key: %v", err)
 	}
 
-	// 2. Start mock Hub + OIDC server
+	// 2. Start mock control plane + OIDC server
 	var serverURL string
 	mux := http.NewServeMux()
 
 	// Mock Control Plane /info endpoint
 	mux.HandleFunc("/info", func(w http.ResponseWriter, r *http.Request) {
-		resp := &api.HubInfoResponse{
+		resp := &api.ControlPlaneInfoResponse{
 			OidcIssuer: serverURL,
 			ClientId:   "mock-console-client",
 		}
@@ -75,9 +75,9 @@ func TestNewServer_OIDCAutoDiscovery(t *testing.T) {
 
 	// 3. Instantiate console Server with auto-discovery flags (empty issuer and client ID)
 	cfg := Config{
-		HubURL:     serverURL,
-		AdminToken: "test-admin-token",
-		StaticDir:  t.TempDir(),
+		ControlPlaneURL: serverURL,
+		AdminToken:      "test-admin-token",
+		StaticDir:       t.TempDir(),
 	}
 
 	srv, err := NewServer(cfg)

@@ -17,17 +17,17 @@ import 'package:url_launcher/url_launcher.dart';
 import 'sam_ffi.dart';
 import 'mcp_server.dart';
 
-String? _isolatedFetchHubInfo(String url) {
+String? _isolatedFetchControlPlaneInfo(String url) {
   try {
-    return SamNodeLib().fetchHubInfoJSON(url);
+    return SamNodeLib().fetchControlPlaneInfoJSON(url);
   } catch (e) {
     return jsonEncode({'error': 'FFI_ERROR: ${e.toString()}'});
   }
 }
 
-String? _isolatedEnroll(String dataDir, String hubText, String jwtText, bool allowLoopback) {
+String? _isolatedEnroll(String dataDir, String controlPlaneText, String jwtText, bool allowLoopback) {
   try {
-    return SamNodeLib().enroll(dataDir, hubText, jwtText, allowLoopback);
+    return SamNodeLib().enroll(dataDir, controlPlaneText, jwtText, allowLoopback);
   } catch (e) {
     return e.toString();
   }
@@ -67,7 +67,7 @@ class NodeControlPage extends StatefulWidget {
 }
 
 class _NodeControlPageState extends State<NodeControlPage> {
-  final _hubController =
+  final _controlPlaneController =
       TextEditingController(text: 'https://bananas.sam-mesh.dev');
   final _jwtController = TextEditingController();
   final _tokenController = TextEditingController(text: 'secret-token');
@@ -113,7 +113,7 @@ class _NodeControlPageState extends State<NodeControlPage> {
   @override
   void dispose() {
     _pollingTimer?.cancel();
-    _hubController.dispose();
+    _controlPlaneController.dispose();
     _jwtController.dispose();
     _tokenController.dispose();
     _externalMcpUrlController.dispose();
@@ -152,23 +152,23 @@ class _NodeControlPageState extends State<NodeControlPage> {
     debugPrint('DEBUG: _loginAndEnroll started');
     setState(() {
       _loggingIn = true;
-      _status = 'Fetching hub info...';
+      _status = 'Fetching control plane info...';
     });
 
     HttpServer? server;
 
     try {
-      final hubUrl = _hubController.text.trim();
-      debugPrint('DEBUG: Fetching hub info from $hubUrl');
-      final infoJson = await Isolate.run(() => _isolatedFetchHubInfo(hubUrl));
-      debugPrint('DEBUG: Hub info JSON: $infoJson');
+      final controlPlaneUrl = _controlPlaneController.text.trim();
+      debugPrint('DEBUG: Fetching control plane info from $controlPlaneUrl');
+      final infoJson = await Isolate.run(() => _isolatedFetchControlPlaneInfo(controlPlaneUrl));
+      debugPrint('DEBUG: Control plane info JSON: $infoJson');
       if (infoJson == null) {
-        throw Exception('Failed to fetch hub info');
+        throw Exception('Failed to fetch control plane info');
       }
 
       final info = jsonDecode(infoJson);
       if (info['error'] != null) {
-        throw Exception('Hub info error: ${info['error']}');
+        throw Exception('Control plane info error: ${info['error']}');
       }
 
       final issuer = info['oidcIssuer'];
@@ -178,7 +178,7 @@ class _NodeControlPageState extends State<NodeControlPage> {
       debugPrint('DEBUG: Issuer: $issuer, ClientId: $clientId, Audience: $audience');
 
       if (issuer == null || clientId == null) {
-        throw Exception('Incomplete hub info received');
+        throw Exception('Incomplete control plane info received');
       }
 
       setState(() {
@@ -357,18 +357,18 @@ class _NodeControlPageState extends State<NodeControlPage> {
   Future<void> _startDeviceLogin() async {
     setState(() {
       _loggingIn = true;
-      _status = 'Fetching hub info for device login...';
+      _status = 'Fetching control plane info for device login...';
     });
 
     try {
-      final hubUrl = _hubController.text.trim();
-      debugPrint('DEBUG: Device Login: Fetching hub info from $hubUrl');
-      final infoJson = await Isolate.run(() => _isolatedFetchHubInfo(hubUrl));
-      if (infoJson == null) throw Exception('Failed to fetch hub info');
+      final controlPlaneUrl = _controlPlaneController.text.trim();
+      debugPrint('DEBUG: Device Login: Fetching control plane info from $controlPlaneUrl');
+      final infoJson = await Isolate.run(() => _isolatedFetchControlPlaneInfo(controlPlaneUrl));
+      if (infoJson == null) throw Exception('Failed to fetch control plane info');
 
       final info = jsonDecode(infoJson);
       if (info['error'] != null) {
-        throw Exception('Hub info error: ${info['error']}');
+        throw Exception('Control plane info error: ${info['error']}');
       }
 
       final issuer = info['oidcIssuer'];
@@ -376,7 +376,7 @@ class _NodeControlPageState extends State<NodeControlPage> {
       final audience = info['audience'];
 
       if (issuer == null || clientId == null) {
-        throw Exception('Incomplete hub info received');
+        throw Exception('Incomplete control plane info received');
       }
 
       // OIDC discovery
@@ -572,10 +572,10 @@ class _NodeControlPageState extends State<NodeControlPage> {
   Future<void> _enroll() async {
     final appDir = await getApplicationDocumentsDirectory();
     final dataDir = '${appDir.path}/sam_data';
-    final hubText = _hubController.text;
+    final controlPlaneText = _controlPlaneController.text;
     final jwtText = _jwtController.text;
     final err = await Isolate.run(() {
-      return _isolatedEnroll(dataDir, hubText, jwtText, true);
+      return _isolatedEnroll(dataDir, controlPlaneText, jwtText, true);
     });
 
     setState(() {
@@ -627,7 +627,7 @@ class _NodeControlPageState extends State<NodeControlPage> {
 
     final err = _samLib.start({
       'dataDir': dataDir,
-      'hubURL': _hubController.text,
+      'controlPlaneURL': _controlPlaneController.text,
       'meshID': 'public-mesh',
       'bindAddr': '127.0.0.1:5005', // sidecar port inside phone
       'apiToken': _tokenController.text,
@@ -930,9 +930,9 @@ class _NodeControlPageState extends State<NodeControlPage> {
               textAlign: TextAlign.center),
           const SizedBox(height: 30),
           TextField(
-            controller: _hubController,
+            controller: _controlPlaneController,
             decoration: const InputDecoration(
-              labelText: 'Hub URL',
+              labelText: 'Control plane URL',
               border: OutlineInputBorder(),
               hintText: 'https://bananas.sam-mesh.dev',
             ),

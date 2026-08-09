@@ -54,8 +54,8 @@ message EnrollRequest {
 message EnrollResponse {
   bytes biscuit_token = 1;
   string error_message = 2;
-  bytes hub_public_key = 3;
-  repeated string hub_addresses = 4;
+  bytes control_plane_public_key = 3;
+  repeated string router_addresses = 4;
   int64 expiration = 5;
 }
 
@@ -82,8 +82,8 @@ message BootstrapEnrollResponse {
   bytes biscuit_token = 2;         // Populated only if APPROVED
   int32 poll_interval_seconds = 3; // Recommended polling wait time
   string error_message = 4;
-  bytes hub_public_key = 5;         // Populated only if APPROVED
-  repeated string hub_addresses = 6; // Populated only if APPROVED
+  bytes control_plane_public_key = 5;   // Populated only if APPROVED
+  repeated string router_addresses = 6; // Populated only if APPROVED
   int64 expiration = 7;             // Populated only if APPROVED
 }
 
@@ -121,11 +121,11 @@ message DiscoveredProvider {
   string srv_description = 4;
 }
 
-message HubInfoResponse {
+message ControlPlaneInfoResponse {
   string oidc_issuer = 1;
   string client_id = 2;
   string audience = 3;
-  repeated string hub_addresses = 4;
+  repeated string router_addresses = 4;
 }
 
 message RouterLeaseRequest {

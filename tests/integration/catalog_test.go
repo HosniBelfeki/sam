@@ -15,13 +15,13 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-func startBackgroundNode(t *testing.T, nodeBin string, hubAddr string, homeDir string, args ...string) *exec.Cmd {
+func startBackgroundNode(t *testing.T, nodeBin string, routerAddr string, homeDir string, args ...string) *exec.Cmd {
 	t.Helper()
 	env := append(os.Environ(),
 		"HOME="+homeDir,
 		"XDG_CONFIG_HOME="+filepath.Join(homeDir, ".config"),
 	)
-	allArgs := append([]string{"run", "--hub", hubAddr, "--jwt", "test-jwt", "--bind-addr", "127.0.0.1:0", "--api-token", "test-token", "--allow-loopback"}, args...)
+	allArgs := append([]string{"run", "--control-plane", routerAddr, "--jwt", "test-jwt", "--bind-addr", "127.0.0.1:0", "--api-token", "test-token", "--allow-loopback"}, args...)
 	cmd := exec.Command(nodeBin, allArgs...)
 	cmd.Env = env
 
@@ -158,7 +158,7 @@ func waitForPeerInfoInLog(t *testing.T, logPath string) string {
 
 func TestCatalogRoutingAndFailover(t *testing.T) {
 	nodeBin := buildBinary(t, "./cmd/sam-node")
-	_, hubAddr := startMockLibp2pHub(t)
+	_, routerAddr := startMockRouter(t)
 
 	homeA := t.TempDir()
 	homeB := t.TempDir()
@@ -166,7 +166,7 @@ func TestCatalogRoutingAndFailover(t *testing.T) {
 
 	// Start Node A (Client)
 	t.Log("Starting Node A...")
-	_ = startBackgroundNode(t, nodeBin, hubAddr, homeA, "--listen", "/ip4/127.0.0.1/udp/0/quic-v1", "--listen", "/ip4/127.0.0.1/tcp/0", "--discovery-interval", "100ms")
+	_ = startBackgroundNode(t, nodeBin, routerAddr, homeA, "--listen", "/ip4/127.0.0.1/udp/0/quic-v1", "--listen", "/ip4/127.0.0.1/tcp/0", "--discovery-interval", "100ms")
 	t.Log("Node A started.")
 
 	// Wait for Node A to start and get its MCP address
@@ -174,12 +174,12 @@ func TestCatalogRoutingAndFailover(t *testing.T) {
 
 	// Start Node B (Provider 1)
 	t.Log("Starting Node B...")
-	cmdB := startBackgroundNode(t, nodeBin, hubAddr, homeB, "--listen", "/ip4/127.0.0.1/udp/0/quic-v1", "--listen", "/ip4/127.0.0.1/tcp/0", "--discovery-interval", "100ms")
+	cmdB := startBackgroundNode(t, nodeBin, routerAddr, homeB, "--listen", "/ip4/127.0.0.1/udp/0/quic-v1", "--listen", "/ip4/127.0.0.1/tcp/0", "--discovery-interval", "100ms")
 	t.Log("Node B started.")
 
 	// Start Node C (Provider 2)
 	t.Log("Starting Node C...")
-	_ = startBackgroundNode(t, nodeBin, hubAddr, homeC, "--listen", "/ip4/127.0.0.1/udp/0/quic-v1", "--listen", "/ip4/127.0.0.1/tcp/0", "--discovery-interval", "100ms")
+	_ = startBackgroundNode(t, nodeBin, routerAddr, homeC, "--listen", "/ip4/127.0.0.1/udp/0/quic-v1", "--listen", "/ip4/127.0.0.1/tcp/0", "--discovery-interval", "100ms")
 	t.Log("Node C started.")
 
 	// Wait for Node B and C to start and get their addresses
@@ -247,7 +247,7 @@ func TestCatalogRoutingAndFailover(t *testing.T) {
 		time.Sleep(2 * time.Second)
 	}
 	if !connected {
-		t.Fatalf("failed to discover peers (Hub + 2 nodes) in time")
+		t.Fatalf("failed to discover peers (router + 2 nodes) in time")
 	}
 
 	respData := callMCP(t, mcpAddrA, "send_message", map[string]any{"peer_id": "target-peer", "message": "hello"})

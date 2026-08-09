@@ -93,7 +93,7 @@ To enforce the principle of least privilege, the Sovereign Agent Mesh implements
 - `sam-box` requests `sam:role:sambox` (Secure Gateway sidecar)
 - `sam-router` requests `sam:role:router` (P2P routing and relay service)
 
-The Hub control plane validates that the enrolling client is authorized for the requested role before issuing the Biscuit identity token:
+The control plane control plane validates that the enrolling client is authorized for the requested role before issuing the Biscuit identity token:
 1. **Node Fallback**: By default, any successfully authenticated OIDC identity or generic bootstrap token can claim the `sam:role:node` role.
 2. **Explicit Bindings**: The higher-privilege capability roles `sam:role:router` and `sam:role:sambox` must be explicitly authorized to the user/service account by mapping the role name in bindings. For example:
 

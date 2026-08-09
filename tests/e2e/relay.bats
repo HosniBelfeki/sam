@@ -40,7 +40,7 @@ teardown() {
   run mesh_start_mock_oidc
   [[ "$status" -eq 0 ]]
 
-  run mesh_start_hub
+  run mesh_start_router
   [[ "$status" -eq 0 ]]
 
   # Start node with relay flag
@@ -55,21 +55,21 @@ teardown() {
   run mesh_start_mock_oidc
   [[ "$status" -eq 0 ]]
 
-  run mesh_start_hub
+  run mesh_start_router
   [[ "$status" -eq 0 ]]
 
   local MESH_NETWORK_2="${MESH_PREFIX}-2-net"
   docker network create "${MESH_NETWORK_2}"
   CLEANUP_NETWORKS+=("${MESH_NETWORK_2}")
 
-  local hub_node
-  hub_node=$(kubectl --context="${KUBECONTEXT}" get pod sam-router-0 -o jsonpath='{.spec.nodeName}')
+  local router_node
+  router_node=$(kubectl --context="${KUBECONTEXT}" get pod sam-router-0 -o jsonpath='{.spec.nodeName}')
   local oidc_node
   oidc_node=$(kubectl --context="${KUBECONTEXT}" get pod -l app=mock-oidc -o jsonpath='{.items[0].spec.nodeName}')
 
-  docker network connect "${MESH_NETWORK_2}" "${hub_node}"
-  DISCONNECT_CONTAINERS+=("${hub_node}:${MESH_NETWORK_2}")
-  if [[ "${oidc_node}" != "${hub_node}" ]]; then
+  docker network connect "${MESH_NETWORK_2}" "${router_node}"
+  DISCONNECT_CONTAINERS+=("${router_node}:${MESH_NETWORK_2}")
+  if [[ "${oidc_node}" != "${router_node}" ]]; then
     docker network connect "${MESH_NETWORK_2}" "${oidc_node}"
     DISCONNECT_CONTAINERS+=("${oidc_node}:${MESH_NETWORK_2}")
   fi
@@ -86,11 +86,11 @@ teardown() {
   run mesh_wait_for_log "${MESH_PREFIX}-node-2" "PeerID:" 20
   [[ "$status" -eq 0 ]]
 
-  # Node 1 should eventually see 1 peer (node 2) besides the hub
+  # Node 1 should eventually see 1 peer (node 2) besides the router
   run mesh_wait_for_node_count "1" 1 30
   [[ "$status" -eq 0 ]]
 
-  # Node 2 should eventually see 1 peer (node 1) besides the hub
+  # Node 2 should eventually see 1 peer (node 1) besides the router
   OLD_NET=$MESH_NETWORK
   MESH_NETWORK=$MESH_NETWORK_2
   run mesh_wait_for_node_count "2" 1 30

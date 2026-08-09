@@ -67,7 +67,7 @@ spec:
           - "--uds-path=/var/run/sam/sam-box.sock"
           - "--config=/etc/sam/sam-node.yaml"
           - "--secrets-file=/etc/sam/secrets.yaml"
-          - "--hub=http://sam-control-plane-${ENV_NAME}.${NAMESPACE}.svc.cluster.local:8080"
+          - "--control-plane=http://sam-control-plane-${ENV_NAME}.${NAMESPACE}.svc.cluster.local:8080"
           - "--jwt-path=/var/run/secrets/tokens/sam-token"
           - "--allow-loopback"
           - "--log-level=debug"

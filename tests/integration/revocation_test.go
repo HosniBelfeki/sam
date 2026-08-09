@@ -124,7 +124,7 @@ roles:
 	defer func() { _ = node1LogFile.Close() }()
 
 	node1Cmd := exec.Command(nodeBin, "run",
-		"--hub", fmt.Sprintf("http://127.0.0.1:%d", cpPort),
+		"--control-plane", fmt.Sprintf("http://127.0.0.1:%d", cpPort),
 		"--jwt", mintToken(map[string]interface{}{"sub": "mock-user", "roles": []string{api.RoleNode}}),
 		"--listen", "/ip4/127.0.0.1/udp/0/quic-v1",
 		"--listen", "/ip4/127.0.0.1/tcp/0",
@@ -154,7 +154,7 @@ roles:
 	defer func() { _ = node2LogFile.Close() }()
 
 	node2Cmd := exec.Command(nodeBin, "run",
-		"--hub", fmt.Sprintf("http://127.0.0.1:%d", cpPort),
+		"--control-plane", fmt.Sprintf("http://127.0.0.1:%d", cpPort),
 		"--jwt", mintToken(map[string]interface{}{"sub": "mock-user", "roles": []string{api.RoleNode}}),
 		"--listen", "/ip4/127.0.0.1/udp/0/quic-v1",
 		"--listen", "/ip4/127.0.0.1/tcp/0",

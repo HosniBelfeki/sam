@@ -131,7 +131,7 @@ func TestResolveRelayAddresses(t *testing.T) {
 	targetID := targetHost.ID()
 
 	// Add a dns-based circuit address for the target node to the local host's peerstore
-	circuitAddrStr := fmt.Sprintf("/dns4/hub.com/tcp/4501/p2p/%s/p2p-circuit", relayID.String())
+	circuitAddrStr := fmt.Sprintf("/dns4/router.com/tcp/4501/p2p/%s/p2p-circuit", relayID.String())
 	circuitAddr, _ := multiaddr.NewMultiaddr(circuitAddrStr)
 	localHost.Peerstore().AddAddr(targetID, circuitAddr, peerstore.PermanentAddrTTL)
 

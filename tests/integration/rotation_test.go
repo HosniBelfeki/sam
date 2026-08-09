@@ -126,7 +126,7 @@ roles:
 	defer func() { _ = nodeLogFile.Close() }()
 
 	nodeCmd := exec.Command(nodeBin, "run",
-		"--hub", fmt.Sprintf("http://127.0.0.1:%d", cpPort),
+		"--control-plane", fmt.Sprintf("http://127.0.0.1:%d", cpPort),
 		"--jwt", nodeJWT,
 		"--listen", "/ip4/127.0.0.1/udp/0/quic-v1",
 		"--listen", "/ip4/127.0.0.1/tcp/0",

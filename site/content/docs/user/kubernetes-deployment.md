@@ -4,7 +4,7 @@ linkTitle: "Kubernetes Deployment"
 weight: 30
 ---
 
-This guide explains how to deploy a production-grade SAM cluster (Hub, DNS synchronizer, OIDC bridge, and Nodes) in a Kubernetes environment (like GKE, EKS, AKS, or custom bare-metal clusters), based on our official public testnet architectures.
+This guide explains how to deploy a production-grade SAM cluster (control plane, router, DNS synchronizer, OIDC bridge, and Nodes) in a Kubernetes environment (like GKE, EKS, AKS, or custom bare-metal clusters), based on our official public testnet architectures.
 
 ---
 
@@ -299,7 +299,7 @@ spec:
         args: 
           - "run"
           - "--config=/etc/sam/sam-node.yaml"
-          - "--hub=http://sam-control-plane.sam.svc.cluster.local:8080"
+          - "--control-plane=http://sam-control-plane.sam.svc.cluster.local:8080"
           - "--jwt-path=/var/run/secrets/tokens/sam-token"
           - "--api-token=secret-token"
         volumeMounts:

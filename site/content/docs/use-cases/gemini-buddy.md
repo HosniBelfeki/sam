@@ -95,7 +95,7 @@ node-e:
 
 ```bash
 make build            # builds ./bin/sam-node (once)
-make kind-up          # hub + buddy (node-b)
+make kind-up          # control plane + router + buddy (node-b)
 make kind-local-node  # local sam-node enrolled in the mesh — LEAVE RUNNING
 ```
 

@@ -31,7 +31,7 @@ Get a node running on the public testnet (`bananas.sam-mesh.dev`) in minutes:
 
 ### For Developers & Contributors
 Compile from source, run local clusters, or execute tests:
-- 🛠️ **[Developer Guide](site/content/docs/development/_index.md)**: Prereqs, compilation, local hub setup, and Kubernetes Kind deployment.
+- 🛠️ **[Developer Guide](site/content/docs/development/_index.md)**: Prereqs, compilation, local control plane setup, and Kubernetes Kind deployment.
 - 🧪 **[Testing Guide](site/content/docs/development/testing.md)**: Go tests, E2E BATS, and containerized mesh execution.
 
 ---

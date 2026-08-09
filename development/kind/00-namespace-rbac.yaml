@@ -3,7 +3,7 @@ kind: Namespace
 metadata:
   name: ${NAMESPACE}
 ---
-# Let the hub validate node SA tokens against the kube API OIDC discovery
+# Let the control plane validate node SA tokens against the kube API OIDC discovery
 # endpoints without credentials.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole

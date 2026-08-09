@@ -213,7 +213,7 @@ func TestStore_Key(t *testing.T) {
 	}
 }
 
-func TestStore_HubConfig(t *testing.T) {
+func TestStore_MeshConfig(t *testing.T) {
 	store, err := NewStore(t.TempDir())
 	if err != nil {
 		t.Fatalf("Failed to create store: %v", err)
@@ -225,35 +225,35 @@ func TestStore_HubConfig(t *testing.T) {
 	}()
 
 	// Loading when not set
-	pubKey, addrs, err := store.LoadHubConfig()
+	pubKey, addrs, err := store.LoadMeshConfig()
 	if err != nil {
-		t.Fatalf("LoadHubConfig failed: %v", err)
+		t.Fatalf("LoadMeshConfig failed: %v", err)
 	}
 	if len(pubKey) > 0 || len(addrs) > 0 {
-		t.Errorf("Expected empty hub config, got pubKey=%v, addrs=%v", pubKey, addrs)
+		t.Errorf("Expected empty mesh config, got pubKey=%v, addrs=%v", pubKey, addrs)
 	}
 
-	hubPubKey := []byte("hub-public-key-bytes")
-	hubAddrs := []string{"/ip4/127.0.0.1/tcp/5001", "/dns4/hub.example.com/tcp/5001"}
+	controlPlanePubKey := []byte("control-plane-public-key-bytes")
+	routerAddrs := []string{"/ip4/127.0.0.1/tcp/5001", "/dns4/cp.example.com/tcp/5001"}
 
-	if err := store.SaveHubConfig(hubPubKey, hubAddrs); err != nil {
-		t.Fatalf("SaveHubConfig failed: %v", err)
+	if err := store.SaveMeshConfig(controlPlanePubKey, routerAddrs); err != nil {
+		t.Fatalf("SaveMeshConfig failed: %v", err)
 	}
 
-	loadedPubKey, loadedAddrs, err := store.LoadHubConfig()
+	loadedPubKey, loadedAddrs, err := store.LoadMeshConfig()
 	if err != nil {
-		t.Fatalf("LoadHubConfig failed: %v", err)
+		t.Fatalf("LoadMeshConfig failed: %v", err)
 	}
 
-	if !bytes.Equal(loadedPubKey, hubPubKey) {
-		t.Errorf("Expected loaded hub pubkey %v, got %v", hubPubKey, loadedPubKey)
+	if !bytes.Equal(loadedPubKey, controlPlanePubKey) {
+		t.Errorf("Expected loaded control plane pubkey %v, got %v", controlPlanePubKey, loadedPubKey)
 	}
-	if !reflect.DeepEqual(loadedAddrs, hubAddrs) {
-		t.Errorf("Expected loaded hub addrs %v, got %v", hubAddrs, loadedAddrs)
+	if !reflect.DeepEqual(loadedAddrs, routerAddrs) {
+		t.Errorf("Expected loaded router addrs %v, got %v", routerAddrs, loadedAddrs)
 	}
 }
 
-func TestStore_HubURL(t *testing.T) {
+func TestStore_ControlPlaneURL(t *testing.T) {
 	store, err := NewStore(t.TempDir())
 	if err != nil {
 		t.Fatalf("Failed to create store: %v", err)
@@ -265,26 +265,26 @@ func TestStore_HubURL(t *testing.T) {
 	}()
 
 	// Loading when not set
-	url, err := store.LoadHubURL()
+	url, err := store.LoadControlPlaneURL()
 	if err != nil {
-		t.Fatalf("LoadHubURL failed: %v", err)
+		t.Fatalf("LoadControlPlaneURL failed: %v", err)
 	}
 	if url != "" {
-		t.Errorf("Expected empty Hub URL, got %q", url)
+		t.Errorf("Expected empty Control plane URL, got %q", url)
 	}
 
-	hubURL := "https://hub.example.com"
-	if err := store.SaveHubURL(hubURL); err != nil {
-		t.Fatalf("SaveHubURL failed: %v", err)
+	controlPlaneURL := "https://cp.example.com"
+	if err := store.SaveControlPlaneURL(controlPlaneURL); err != nil {
+		t.Fatalf("SaveControlPlaneURL failed: %v", err)
 	}
 
-	loaded, err := store.LoadHubURL()
+	loaded, err := store.LoadControlPlaneURL()
 	if err != nil {
-		t.Fatalf("LoadHubURL failed: %v", err)
+		t.Fatalf("LoadControlPlaneURL failed: %v", err)
 	}
 
-	if loaded != hubURL {
-		t.Errorf("Expected loaded hub URL %q, got %q", hubURL, loaded)
+	if loaded != controlPlaneURL {
+		t.Errorf("Expected loaded control plane URL %q, got %q", controlPlaneURL, loaded)
 	}
 }
 

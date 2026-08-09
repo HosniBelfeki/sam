@@ -14,7 +14,7 @@ teardown() {
   run mesh_start_mock_oidc
   [[ "$status" -eq 0 ]]
 
-  run mesh_start_hub
+  run mesh_start_router
   [[ "$status" -eq 0 ]]
 
   # mesh_start_node uses --token-url by default, which implements Client Credentials flow
@@ -28,7 +28,7 @@ teardown() {
   run mesh_start_mock_oidc
   [[ "$status" -eq 0 ]]
 
-  run mesh_start_hub
+  run mesh_start_router
   [[ "$status" -eq 0 ]]
 
   # 1. Get a token from mock provider using Python helper
@@ -39,8 +39,8 @@ teardown() {
 
   # 2. Run sam-node join to enroll and store identity
   local node_name="${MESH_PREFIX}-node-login"
-  local hub_peer_id
-  hub_peer_id=$(cat "/tmp/${MESH_PREFIX}-hub-peer-id")
+  local router_peer_id
+  router_peer_id=$(cat "/tmp/${MESH_PREFIX}-router-peer-id")
 
   local data_vol="${MESH_PREFIX}-data"
   docker volume create "${data_vol}"
@@ -97,7 +97,7 @@ teardown() {
     "sam-node:local" \
     run \
     --data-dir /data \
-    --hub "http://sam-hub:9090"
+    --control-plane "http://sam-control-plane:9090"
   MESH_CONTAINERS+=("${node_name}")
 
   mesh_wait_for_log "${node_name}" "Using stored identity." 20
@@ -107,7 +107,7 @@ teardown() {
   run mesh_start_mock_oidc
   [[ "$status" -eq 0 ]]
 
-  run mesh_start_hub
+  run mesh_start_router
   [[ "$status" -eq 0 ]]
 
   # 1. Get a token from mock provider
@@ -128,8 +128,8 @@ teardown() {
 
   # 3. Run sam-node with --jwt-path
   local node_name="${MESH_PREFIX}-node-wi"
-  local hub_peer_id
-  hub_peer_id=$(cat "/tmp/${MESH_PREFIX}-hub-peer-id")
+  local router_peer_id
+  router_peer_id=$(cat "/tmp/${MESH_PREFIX}-router-peer-id")
 
   docker run -d \
     --name "${node_name}" \
@@ -138,7 +138,7 @@ teardown() {
     -v "${token_vol}:/var/run/secrets/tokens" \
     "sam-node:local" \
     run \
-    --hub "http://sam-control-plane:8080" \
+    --control-plane "http://sam-control-plane:8080" \
     --jwt-path "/var/run/secrets/tokens/sa-token" \
     --api-token "secret-token"
   MESH_CONTAINERS+=("${node_name}")
@@ -150,7 +150,7 @@ teardown() {
   run mesh_start_mock_oidc
   [[ "$status" -eq 0 ]]
 
-  run mesh_start_hub
+  run mesh_start_router
   [[ "$status" -eq 0 ]]
 
   # 1. Generate bootstrap token via control plane API running in Kubernetes
@@ -204,7 +204,7 @@ teardown() {
     "sam-node:local" \
     run \
     --data-dir /data \
-    --hub "http://sam-control-plane:8080"
+    --control-plane "http://sam-control-plane:8080"
   MESH_CONTAINERS+=("${node_name}")
 
   mesh_wait_for_log "${node_name}" "Using stored identity." 20

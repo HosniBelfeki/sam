@@ -34,18 +34,18 @@ import (
 )
 
 func TestMobileFFILifecycle(t *testing.T) {
-	// 1. Setup Mock Hub
-	hubHost, err := libp2p.New(libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"))
+	// 1. Setup Mock Router
+	routerHost, err := libp2p.New(libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = hubHost.Close() }()
+	defer func() { _ = routerHost.Close() }()
 
-	hubDHT, err := dht.New(hubHost, dht.Mode(dht.ModeServer), dht.ProtocolPrefix("/sam"))
+	routerDHT, err := dht.New(routerHost, dht.Mode(dht.ModeServer), dht.ProtocolPrefix("/sam"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = hubDHT.Close() }()
+	defer func() { _ = routerDHT.Close() }()
 
 	// Generate key-pair for Mock Control Plane signing
 	cpPubKey, cpPrivKey, err := ed25519.GenerateKey(rand.Reader)
@@ -53,11 +53,11 @@ func TestMobileFFILifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	hubHost.SetStreamHandler(api.AuthProtocolID, func(s network.Stream) {
-		println("--- MOCK HUB: received auth stream connection")
+	routerHost.SetStreamHandler(api.AuthProtocolID, func(s network.Stream) {
+		println("--- MOCK ROUTER: received auth stream connection")
 		defer func() { _ = s.Close() }()
 
-		biscuitBytes := mintMockBiscuit(t, hubHost.ID().String(), cpPrivKey, api.RoleRouter)
+		biscuitBytes := mintMockBiscuit(t, routerHost.ID().String(), cpPrivKey, api.RoleRouter)
 
 		resp := &api.AuthResponse{
 			Success: true,
@@ -66,10 +66,10 @@ func TestMobileFFILifecycle(t *testing.T) {
 		data, _ := proto.Marshal(resp)
 		writer := msgio.NewVarintWriter(s)
 		if err := writer.WriteMsg(data); err != nil {
-			println("--- MOCK HUB: failed to write AuthResponse:", err.Error())
+			println("--- MOCK ROUTER: failed to write AuthResponse:", err.Error())
 			return
 		}
-		println("--- MOCK HUB: wrote AuthResponse success with valid biscuit")
+		println("--- MOCK ROUTER: wrote AuthResponse success with valid biscuit")
 	})
 
 	mux := http.NewServeMux()
@@ -80,16 +80,16 @@ func TestMobileFFILifecycle(t *testing.T) {
 
 		biscuitBytes := mintMockBiscuit(t, req.PeerId, cpPrivKey, api.RoleNode)
 		resp := &api.EnrollResponse{
-			BiscuitToken: biscuitBytes,
-			HubPublicKey: cpPubKey,
-			HubAddresses: []string{hubHost.Addrs()[0].String() + "/p2p/" + hubHost.ID().String()},
+			BiscuitToken:          biscuitBytes,
+			ControlPlanePublicKey: cpPubKey,
+			RouterAddresses:       []string{routerHost.Addrs()[0].String() + "/p2p/" + routerHost.ID().String()},
 		}
 		data, _ := proto.Marshal(resp)
 		w.Header().Set("Content-Type", "application/x-protobuf")
 		_, _ = w.Write(data)
 	})
 	mux.HandleFunc("/info", func(w http.ResponseWriter, r *http.Request) {
-		resp := &api.HubInfoResponse{
+		resp := &api.ControlPlaneInfoResponse{
 			OidcIssuer: "http://mock-issuer",
 			ClientId:   "mock-client",
 			Audience:   "mock-audience",
@@ -111,12 +111,12 @@ func TestMobileFFILifecycle(t *testing.T) {
 
 	// 3. Mobile Node Start
 	cfg := MobileConfig{
-		DataDir:       tmpDir,
-		HubURL:        httpServer.URL,
-		MeshID:        "test-mesh",
-		BindAddr:      "127.0.0.1:0", // random free port
-		ApiToken:      "test-token",
-		AllowLoopback: true,
+		DataDir:         tmpDir,
+		ControlPlaneURL: httpServer.URL,
+		MeshID:          "test-mesh",
+		BindAddr:        "127.0.0.1:0", // random free port
+		ApiToken:        "test-token",
+		AllowLoopback:   true,
 	}
 	cfgBytes, _ := json.Marshal(cfg)
 

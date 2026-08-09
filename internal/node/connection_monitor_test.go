@@ -9,59 +9,59 @@ import (
 	"github.com/multiformats/go-multiaddr"
 )
 
-type mockHubConnectionManager struct {
-	connected      bool
-	hubConfigErr   error
-	storedAddrs    []string
-	hubURLErr      error
-	hubURL         string
-	discoverErr    error
-	discoverResp   *api.HubInfoResponse
-	connectP2PErr  error
-	connectHTTPReq bool
-	connectHTTPErr error
-	saveConfigErr  error
+type mockRouterConnectionManager struct {
+	connected          bool
+	meshConfigErr      error
+	storedAddrs        []string
+	controlPlaneURLErr error
+	controlPlaneURL    string
+	discoverErr        error
+	discoverResp       *api.ControlPlaneInfoResponse
+	connectP2PErr      error
+	connectHTTPReq     bool
+	connectHTTPErr     error
+	saveConfigErr      error
 }
 
-func (m *mockHubConnectionManager) IsConnected() bool {
+func (m *mockRouterConnectionManager) IsConnected() bool {
 	return m.connected
 }
 
-func (m *mockHubConnectionManager) LoadHubConfig() ([]byte, []string, error) {
-	return nil, m.storedAddrs, m.hubConfigErr
+func (m *mockRouterConnectionManager) LoadMeshConfig() ([]byte, []string, error) {
+	return nil, m.storedAddrs, m.meshConfigErr
 }
 
-func (m *mockHubConnectionManager) ConnectAndAuthWithHub(ctx context.Context, addr multiaddr.Multiaddr) error {
+func (m *mockRouterConnectionManager) ConnectAndAuthWithRouter(ctx context.Context, addr multiaddr.Multiaddr) error {
 	if m.connectHTTPReq {
 		return m.connectHTTPErr
 	}
 	return m.connectP2PErr
 }
 
-func (m *mockHubConnectionManager) LoadHubURL() (string, error) {
-	return m.hubURL, m.hubURLErr
+func (m *mockRouterConnectionManager) LoadControlPlaneURL() (string, error) {
+	return m.controlPlaneURL, m.controlPlaneURLErr
 }
 
-func (m *mockHubConnectionManager) DiscoverHubInfo(ctx context.Context, url string) (*api.HubInfoResponse, error) {
+func (m *mockRouterConnectionManager) DiscoverControlPlaneInfo(ctx context.Context, url string) (*api.ControlPlaneInfoResponse, error) {
 	return m.discoverResp, m.discoverErr
 }
 
-func (m *mockHubConnectionManager) SaveHubConfig(pubKey []byte, addrs []string) error {
+func (m *mockRouterConnectionManager) SaveMeshConfig(pubKey []byte, addrs []string) error {
 	return m.saveConfigErr
 }
 
-func (m *mockHubConnectionManager) UpdateRelays(addrs []multiaddr.Multiaddr) {}
+func (m *mockRouterConnectionManager) UpdateRelays(addrs []multiaddr.Multiaddr) {}
 
-func TestCheckHubConnection(t *testing.T) {
+func TestCheckRouterConnection(t *testing.T) {
 	cases := []struct {
 		name       string
-		mgr        *mockHubConnectionManager
+		mgr        *mockRouterConnectionManager
 		wantStable bool
 		wantReconn bool
 	}{
 		{
 			name: "already connected",
-			mgr: &mockHubConnectionManager{
+			mgr: &mockRouterConnectionManager{
 				connected: true,
 			},
 			wantStable: true,
@@ -69,7 +69,7 @@ func TestCheckHubConnection(t *testing.T) {
 		},
 		{
 			name: "disconnected, reconnects via P2P",
-			mgr: &mockHubConnectionManager{
+			mgr: &mockRouterConnectionManager{
 				connected:     false,
 				storedAddrs:   []string{"/ip4/127.0.0.1/tcp/4001"},
 				connectP2PErr: nil,
@@ -79,13 +79,13 @@ func TestCheckHubConnection(t *testing.T) {
 		},
 		{
 			name: "disconnected, P2P fails, reconnects via HTTP",
-			mgr: &mockHubConnectionManager{
-				connected:     false,
-				storedAddrs:   []string{"/ip4/127.0.0.1/tcp/4001"},
-				connectP2PErr: errors.New("p2p failed"),
-				hubURL:        "https://hub.example.com",
-				discoverResp: &api.HubInfoResponse{
-					HubAddresses: []string{"/ip4/127.0.0.1/tcp/4002"},
+			mgr: &mockRouterConnectionManager{
+				connected:       false,
+				storedAddrs:     []string{"/ip4/127.0.0.1/tcp/4001"},
+				connectP2PErr:   errors.New("p2p failed"),
+				controlPlaneURL: "https://cp.example.com",
+				discoverResp: &api.ControlPlaneInfoResponse{
+					RouterAddresses: []string{"/ip4/127.0.0.1/tcp/4002"},
 				},
 				connectHTTPReq: true,
 				connectHTTPErr: nil,
@@ -95,13 +95,13 @@ func TestCheckHubConnection(t *testing.T) {
 		},
 		{
 			name: "disconnected, all fail",
-			mgr: &mockHubConnectionManager{
-				connected:     false,
-				storedAddrs:   []string{"/ip4/127.0.0.1/tcp/4001"},
-				connectP2PErr: errors.New("p2p failed"),
-				hubURL:        "https://hub.example.com",
-				discoverResp: &api.HubInfoResponse{
-					HubAddresses: []string{"/ip4/127.0.0.1/tcp/4002"},
+			mgr: &mockRouterConnectionManager{
+				connected:       false,
+				storedAddrs:     []string{"/ip4/127.0.0.1/tcp/4001"},
+				connectP2PErr:   errors.New("p2p failed"),
+				controlPlaneURL: "https://cp.example.com",
+				discoverResp: &api.ControlPlaneInfoResponse{
+					RouterAddresses: []string{"/ip4/127.0.0.1/tcp/4002"},
 				},
 				connectHTTPReq: true,
 				connectHTTPErr: errors.New("http fallback connect failed"),
@@ -111,12 +111,12 @@ func TestCheckHubConnection(t *testing.T) {
 		},
 		{
 			name: "disconnected, HTTP discovery fails",
-			mgr: &mockHubConnectionManager{
-				connected:     false,
-				storedAddrs:   []string{"/ip4/127.0.0.1/tcp/4001"},
-				connectP2PErr: errors.New("p2p failed"),
-				hubURL:        "https://hub.example.com",
-				discoverErr:   errors.New("discovery failed"),
+			mgr: &mockRouterConnectionManager{
+				connected:       false,
+				storedAddrs:     []string{"/ip4/127.0.0.1/tcp/4001"},
+				connectP2PErr:   errors.New("p2p failed"),
+				controlPlaneURL: "https://cp.example.com",
+				discoverErr:     errors.New("discovery failed"),
 			},
 			wantStable: false,
 			wantReconn: false,
@@ -125,7 +125,7 @@ func TestCheckHubConnection(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			stable, reconnected := checkHubConnection(context.Background(), tc.mgr)
+			stable, reconnected := checkRouterConnection(context.Background(), tc.mgr)
 			if stable != tc.wantStable {
 				t.Errorf("expected stable %v, got %v", tc.wantStable, stable)
 			}
