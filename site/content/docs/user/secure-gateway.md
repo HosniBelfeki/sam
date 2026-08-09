@@ -178,5 +178,5 @@ spec:
           - serviceAccountToken:
               path: sam-token
               expirationSeconds: 3600
-              audience: "sam-hub-audience"
+              audience: "sam-control-plane-audience"
 ```

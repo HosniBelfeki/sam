@@ -11,7 +11,7 @@ controlPlane:
   autoApproveEnrollment: true
   insecureSkipTlsVerify: true
   oidcIssuer: "http://sam-mesh-dex:5556/dex"
-  allowedAudiences: "sam-mesh-audience,sam-hub-audience"
+  allowedAudiences: "sam-mesh-audience,sam-control-plane-audience"
   resources:
     requests:
       cpu: 100m

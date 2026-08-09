@@ -216,7 +216,7 @@ spec:
           - serviceAccountToken:
               path: sam-token
               expirationSeconds: 3600
-              audience: "sam-hub-audience"
+              audience: "sam-control-plane-audience"
   volumeClaimTemplates:
   - metadata:
       name: router-data
@@ -280,7 +280,7 @@ data:
 ```
 
 ### 3. Deploy Nodes using Token Projection
-Deploy the nodes. We use a `projected` volume to request a short-lived token containing the audience expected by the control plane (`sam-hub-audience`):
+Deploy the nodes. We use a `projected` volume to request a short-lived token containing the audience expected by the control plane (`sam-control-plane-audience`):
 
 ```yaml
 apiVersion: apps/v1
@@ -318,7 +318,7 @@ spec:
           - serviceAccountToken:
               path: sam-token
               expirationSeconds: 3600
-              audience: "sam-hub-audience" # Match this with what the control plane expects
+              audience: "sam-control-plane-audience" # Match this with what the control plane expects
 ```
 
 ---

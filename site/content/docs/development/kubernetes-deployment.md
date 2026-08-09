@@ -417,5 +417,5 @@ spec:
           - serviceAccountToken:
               path: sam-token
               expirationSeconds: 3600
-              audience: "sam-hub-audience" # Match this with what the control plane expects
+              audience: "sam-control-plane-audience" # Match this with what the control plane expects
 ```

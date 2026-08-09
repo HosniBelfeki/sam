@@ -144,7 +144,7 @@ if [[ -n "${OIDC_ISSUER}" ]]; then
   CONTROL_PLANE_ISSUERS="${OIDC_ISSUER},${ISSUER}"
 fi
 
-ALLOWED_AUDIENCES="sam-mesh-audience,sam-hub-audience"
+ALLOWED_AUDIENCES="sam-mesh-audience,sam-control-plane-audience"
 if [[ -n "${OIDC_CLIENT_ID}" ]]; then
   ALLOWED_AUDIENCES="${OIDC_CLIENT_ID},${ALLOWED_AUDIENCES}"
 fi
