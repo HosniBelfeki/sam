@@ -107,7 +107,7 @@ docker run --network none \
   -v /tmp/sam-box.sock:/var/run/sam-box.sock \
   -e TOKEN="<agent-biscuit-token>" \
   my-agent-image \
-  /usr/local/bin/nano-init /var/run/sam-box.sock python3 agent.py
+  /usr/local/bin/nano-init run /var/run/sam-box.sock python3 agent.py
 ```
 
 ---

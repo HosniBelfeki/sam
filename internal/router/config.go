@@ -39,6 +39,8 @@ type Options struct {
 	LogVerbose         bool
 	DHTProviderAddrTTL time.Duration
 	DHTMaxRecordAge    time.Duration
+	LowWaterMark       int
+	HighWaterMark      int
 	// RequiredRole restricts enrollment and startup to only accept tokens containing this role.
 	RequiredRole string
 }
@@ -56,6 +58,12 @@ func (o *Options) Default() {
 	}
 	if o.LeaseRenewInterval <= 0 {
 		o.LeaseRenewInterval = 30 * time.Second
+	}
+	if o.LowWaterMark <= 0 {
+		o.LowWaterMark = 1000
+	}
+	if o.HighWaterMark <= 0 {
+		o.HighWaterMark = 4000
 	}
 	if o.KeysDBPath == "" {
 		o.KeysDBPath = "router.key"

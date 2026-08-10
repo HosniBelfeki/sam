@@ -520,6 +520,35 @@ func TestRouterLeaseRenewalReEnrollOn401(t *testing.T) {
 	}
 }
 
+func TestRouterLeaseRenewalRepeated401Terminates(t *testing.T) {
+	serverCalls := 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		serverCalls++
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+	}))
+	defer ts.Close()
+
+	h, err := libp2p.New(libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"))
+	if err != nil {
+		t.Fatalf("failed to create libp2p host: %v", err)
+	}
+	defer func() { _ = h.Close() }()
+
+	r := &Router{
+		Host:         h,
+		biscuitToken: []byte("dummy-biscuit"),
+		config: Options{
+			ControlPlaneURL: ts.URL,
+		},
+	}
+
+	r.renewLease()
+
+	if serverCalls > 2 {
+		t.Errorf("renewLease made %d HTTP calls; expected at most 2 calls before terminating", serverCalls)
+	}
+}
+
 func TestRouterReEnrollUninitializedHostGuard(t *testing.T) {
 	r := &Router{}
 	err := r.reEnroll()
@@ -747,4 +776,21 @@ func TestRouterEnrollWithTokensResolution(t *testing.T) {
 			t.Fatalf("expected 'no enrollment token available', got %v", err)
 		}
 	})
+}
+
+func TestRouterConnectionManagerWatermarks(t *testing.T) {
+	opts := Options{
+		LowWaterMark:  500,
+		HighWaterMark: 1500,
+	}
+	opts.Default()
+	if opts.LowWaterMark != 500 || opts.HighWaterMark != 1500 {
+		t.Fatalf("expected explicit watermarks to be preserved, got Low: %d, High: %d", opts.LowWaterMark, opts.HighWaterMark)
+	}
+
+	defaultOpts := Options{}
+	defaultOpts.Default()
+	if defaultOpts.LowWaterMark != 1000 || defaultOpts.HighWaterMark != 4000 {
+		t.Fatalf("expected default watermarks 1000/4000, got Low: %d, High: %d", defaultOpts.LowWaterMark, defaultOpts.HighWaterMark)
+	}
 }

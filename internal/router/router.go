@@ -55,9 +55,9 @@ import (
 var logger = golog.Logger("sam-router")
 
 const (
-	LowWaterMark    = 100
-	HighWaterMark   = 400
-	ConnGracePeriod = 1 * time.Minute
+	DefaultLowWaterMark  = 1000
+	DefaultHighWaterMark = 4000
+	ConnGracePeriod      = 1 * time.Minute
 )
 
 type relayACL struct {
@@ -162,7 +162,15 @@ func (r *Router) Start() error {
 	}
 
 	// 4. Initialize libp2p host
-	cm, err := connmgr.NewConnManager(LowWaterMark, HighWaterMark, connmgr.WithGracePeriod(ConnGracePeriod))
+	low := r.config.LowWaterMark
+	if low <= 0 {
+		low = DefaultLowWaterMark
+	}
+	high := r.config.HighWaterMark
+	if high <= 0 {
+		high = DefaultHighWaterMark
+	}
+	cm, err := connmgr.NewConnManager(low, high, connmgr.WithGracePeriod(ConnGracePeriod))
 	if err != nil {
 		return fmt.Errorf("failed to create connection manager: %w", err)
 	}
@@ -649,83 +657,84 @@ func (r *Router) runLeaseRenewalLoop() {
 }
 
 func (r *Router) renewLease() {
-	r.keysMu.RLock()
-	biscuit := r.biscuitToken
-	r.keysMu.RUnlock()
+	for attempt := 0; attempt < 2; attempt++ {
+		r.keysMu.RLock()
+		biscuit := r.biscuitToken
+		r.keysMu.RUnlock()
 
-	if len(biscuit) == 0 {
-		logger.Warn("Cannot renew lease: router is not enrolled (no biscuit)")
-		return
-	}
-
-	var addrs []string
-	if len(r.config.ExternalAddrs) > 0 {
-		for _, addr := range r.config.ExternalAddrs {
-			addrs = append(addrs, addr+"/p2p/"+r.Host.ID().String())
-		}
-	} else {
-		for _, addr := range r.Host.Addrs() {
-			addrs = append(addrs, addr.String()+"/p2p/"+r.Host.ID().String())
-		}
-	}
-
-	var connectedPeers []string
-	if r.Host != nil && r.Host.Network() != nil {
-		for _, p := range r.Host.Network().Peers() {
-			connectedPeers = append(connectedPeers, p.String())
-		}
-	}
-	var dhtSize int32
-	if r.DHT != nil && r.DHT.RoutingTable() != nil {
-		dhtSize = int32(r.DHT.RoutingTable().Size())
-	}
-
-	req := &api.RouterLeaseRequest{
-		PeerId:         r.Host.ID().String(),
-		Addresses:      addrs,
-		Biscuit:        biscuit,
-		ConnectedPeers: connectedPeers,
-		DhtSize:        dhtSize,
-	}
-	data, _ := proto.Marshal(req)
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Post(r.config.ControlPlaneURL+"/routers/lease", "application/x-protobuf", bytes.NewReader(data))
-	if err != nil {
-		logger.Errorf("Failed to renew lease with control plane: %v", err)
-		return
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode == http.StatusUnauthorized {
-		body, _ := io.ReadAll(resp.Body)
-		logger.Warnf("Control plane lease renewal rejected (401 Unauthorized: %s), attempting re-enrollment...", string(body))
-		if err := r.reEnroll(); err != nil {
-			logger.Errorf("Re-enrollment failed after 401 Unauthorized lease renewal: %v", err)
+		if len(biscuit) == 0 {
+			logger.Warn("Cannot renew lease: router is not enrolled (no biscuit)")
 			return
 		}
-		logger.Info("Successfully re-enrolled after 401 Unauthorized lease renewal, retrying lease renewal...")
-		r.renewLease()
-		return
-	}
 
-	if resp.StatusCode != http.StatusOK {
+		var addrs []string
+		if len(r.config.ExternalAddrs) > 0 {
+			for _, addr := range r.config.ExternalAddrs {
+				addrs = append(addrs, addr+"/p2p/"+r.Host.ID().String())
+			}
+		} else {
+			for _, addr := range r.Host.Addrs() {
+				addrs = append(addrs, addr.String()+"/p2p/"+r.Host.ID().String())
+			}
+		}
+
+		var connectedPeers []string
+		if r.Host != nil && r.Host.Network() != nil {
+			for _, p := range r.Host.Network().Peers() {
+				connectedPeers = append(connectedPeers, p.String())
+			}
+		}
+		var dhtSize int32
+		if r.DHT != nil && r.DHT.RoutingTable() != nil {
+			dhtSize = int32(r.DHT.RoutingTable().Size())
+		}
+
+		req := &api.RouterLeaseRequest{
+			PeerId:         r.Host.ID().String(),
+			Addresses:      addrs,
+			Biscuit:        biscuit,
+			ConnectedPeers: connectedPeers,
+			DhtSize:        dhtSize,
+		}
+		data, _ := proto.Marshal(req)
+
+		client := &http.Client{Timeout: 10 * time.Second}
+		resp, err := client.Post(r.config.ControlPlaneURL+"/routers/lease", "application/x-protobuf", bytes.NewReader(data))
+		if err != nil {
+			logger.Errorf("Failed to renew lease with control plane: %v", err)
+			return
+		}
+
 		body, _ := io.ReadAll(resp.Body)
-		logger.Errorf("Control plane lease renewal rejected, status %s: %s", resp.Status, string(body))
-		return
-	}
+		_ = resp.Body.Close()
 
-	var leaseResp api.RouterLeaseResponse
-	body, _ := io.ReadAll(resp.Body)
-	if err := proto.Unmarshal(body, &leaseResp); err != nil {
-		logger.Errorf("Failed to parse lease response: %v", err)
-		return
-	}
+		if resp.StatusCode == http.StatusUnauthorized && attempt == 0 {
+			logger.Warnf("Control plane lease renewal rejected (401 Unauthorized: %s), attempting re-enrollment...", string(body))
+			if err := r.reEnroll(); err != nil {
+				logger.Errorf("Re-enrollment failed after 401 Unauthorized lease renewal: %v", err)
+				return
+			}
+			logger.Info("Successfully re-enrolled after 401 Unauthorized lease renewal, retrying lease renewal...")
+			continue
+		}
 
-	if !leaseResp.Success {
-		logger.Errorf("Lease renewal failed: %s", leaseResp.Error)
-	} else {
-		logger.Debugf("Lease renewed successfully. Expires at: %s", time.Unix(leaseResp.ExpiresAt, 0))
+		if resp.StatusCode != http.StatusOK {
+			logger.Errorf("Control plane lease renewal rejected, status %s: %s", resp.Status, string(body))
+			return
+		}
+
+		var leaseResp api.RouterLeaseResponse
+		if err := proto.Unmarshal(body, &leaseResp); err != nil {
+			logger.Errorf("Failed to parse lease response: %v", err)
+			return
+		}
+
+		if !leaseResp.Success {
+			logger.Errorf("Lease renewal failed: %s", leaseResp.Error)
+		} else {
+			logger.Debugf("Lease renewed successfully. Expires at: %s", time.Unix(leaseResp.ExpiresAt, 0))
+		}
+		return
 	}
 }
 

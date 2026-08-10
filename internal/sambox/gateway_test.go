@@ -59,7 +59,10 @@ func TestGenerateEphemeralCA(t *testing.T) {
 
 func TestCertCache(t *testing.T) {
 	ca, _ := GenerateEphemeralCA()
-	cache := NewCertCache()
+	cache, err := NewCertCache()
+	if err != nil {
+		t.Fatalf("Failed to create CertCache: %v", err)
+	}
 
 	cert1, err := cache.GetCertificate("example.com", ca)
 	if err != nil {

@@ -43,9 +43,11 @@ import (
 	golog "github.com/ipfs/go-log/v2"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"golang.org/x/time/rate"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
+	"gopkg.in/yaml.v2"
 )
 
 var logger = golog.Logger("sam-control-plane")
@@ -147,6 +149,9 @@ func (s *Server) Start() error {
 	s.listener = l
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", s.HandleHealthz)
+	mux.HandleFunc("/readyz", s.HandleReadyz)
+	mux.Handle("/metrics", promhttp.Handler())
 	mux.HandleFunc("/info", s.HandleInfo)
 	mux.HandleFunc("/register", s.HandleRegister)
 	mux.HandleFunc("/keys", s.HandleKeys)
@@ -286,6 +291,36 @@ func (s *Server) runKeyRotationLoop() {
 			return
 		}
 	}
+}
+
+// HandleHealthz HTTP GET `/healthz`
+func (s *Server) HandleHealthz(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(`{"status":"ok"}`))
+}
+
+// HandleReadyz HTTP GET `/readyz`
+func (s *Server) HandleReadyz(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.store != nil {
+		if err := s.store.Ping(r.Context()); err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = fmt.Fprintf(w, `{"status":"error","message":%q}`, err.Error())
+			return
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(`{"status":"ready"}`))
 }
 
 // HandleInfo HTTP GET `/info`
@@ -1649,7 +1684,41 @@ func (s *Server) HandleUserStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var policyYAML string // TODO: Implement relational policy rendering.
+	roles, bindings, err := s.store.GetMeshPolicy(r.Context())
+	if err != nil {
+		logger.Errorf("Failed to list policy: %v", err)
+	}
+
+	type displayRole struct {
+		AllowedServices []string `yaml:"allowed_services"`
+		AllowedTargets  []string `yaml:"allowed_targets"`
+	}
+	type displayBinding struct {
+		Role    string   `yaml:"role"`
+		Members []string `yaml:"members"`
+	}
+	displayMap := map[string]interface{}{
+		"roles":    make(map[string]displayRole),
+		"bindings": make([]displayBinding, 0),
+	}
+
+	for _, role := range roles {
+		displayMap["roles"].(map[string]displayRole)[role.Name] = displayRole{
+			AllowedServices: role.AllowedServices,
+			AllowedTargets:  role.AllowedTargets,
+		}
+	}
+	for _, b := range bindings {
+		displayMap["bindings"] = append(displayMap["bindings"].([]displayBinding), displayBinding{
+			Role:    b.Role,
+			Members: b.Members,
+		})
+	}
+
+	var policyYAML string
+	if yamlBytes, err := yaml.Marshal(displayMap); err == nil {
+		policyYAML = string(yamlBytes)
+	}
 
 	resp := map[string]any{
 		"user": map[string]any{

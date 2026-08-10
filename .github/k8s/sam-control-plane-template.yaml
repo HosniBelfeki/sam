@@ -105,14 +105,14 @@ spec:
           name: http
         readinessProbe:
           httpGet:
-            path: /info
+            path: /readyz
             port: http
             scheme: HTTP
           initialDelaySeconds: 5
           periodSeconds: 10
         livenessProbe:
           httpGet:
-            path: /info
+            path: /healthz
             port: http
             scheme: HTTP
           initialDelaySeconds: 15
