@@ -155,13 +155,10 @@ func TestPubSubTools(t *testing.T) {
 		t.Fatalf("Subscribe node 2 failed: %s", subscribeResult2)
 	}
 
-	// Allow mesh propagation
-	time.Sleep(300 * time.Millisecond)
-
 	var pollResult string
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		// Node 1 broadcasts on topic "test-topic" again to ensure delivery after subscription
+		// Node 1 broadcasts on topic "test-topic"
 		broadcastResult := callTool(mcpAddr1, "mesh_pubsub_broadcast", map[string]any{
 			"topic":   "test-topic",
 			"payload": "hello from node 1",
@@ -177,7 +174,7 @@ func TestPubSubTools(t *testing.T) {
 		if strings.Contains(pollResult, "hello from node 1") {
 			break
 		}
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond)
 	}
 
 	if !strings.Contains(pollResult, "hello from node 1") {
