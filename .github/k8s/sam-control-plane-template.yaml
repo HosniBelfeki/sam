@@ -125,6 +125,7 @@ spec:
         - "--allowed-audiences=sam-mesh-audience,sam-hub-audience"
         - "--admin-token=$(ADMIN_TOKEN)"
         - "--auto-approve-enrollment"
+        - "--key-grace-period=48h"
         resources:
           requests:
             cpu: 100m

@@ -26,7 +26,9 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -683,4 +685,66 @@ func TestRouterGossipSubBannedEvent(t *testing.T) {
 	if _, banned := r.bannedPeers.Load(bannedPeerID); !banned {
 		t.Errorf("expected peer %s to be stored in bannedPeers blocklist upon receiving MeshEvent_BANNED", bannedPeerIDStr)
 	}
+}
+
+func TestRouterEnrollWithTokensResolution(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/enroll", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"biscuit":"dummy-biscuit-bootstrap"}`))
+	})
+	mux.HandleFunc("/register", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"biscuit":"dummy-biscuit-oidc"}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	t.Run("BootstrapTokenPath updates BootstrapToken", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "bootstrap-token")
+		if err := os.WriteFile(path, []byte("  boot-123  \n"), 0o600); err != nil {
+			t.Fatalf("failed to write bootstrap token: %v", err)
+		}
+
+		r := &Router{config: Options{BootstrapTokenPath: path, ControlPlaneURL: srv.URL}}
+		priv, _, _ := crypto.GenerateKeyPair(crypto.Ed25519, -1)
+		r.privKey = priv
+
+		err := r.enrollWithTokens(peer.ID("dummy"))
+		if err == nil || !strings.Contains(err.Error(), "failed to unmarshal") {
+			// We expect a proto unmarshal error because the dummy biscuit is just JSON,
+			// but we want to assert the token was read correctly first.
+			t.Logf("expected proto unmarshal error, got: %v", err)
+		}
+		if r.config.BootstrapToken != "boot-123" {
+			t.Fatalf("expected BootstrapToken %q, got %q", "boot-123", r.config.BootstrapToken)
+		}
+	})
+
+	t.Run("JWTPath updates OIDCToken", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "oidc-token")
+		if err := os.WriteFile(path, []byte("  oidc-123  \n"), 0o600); err != nil {
+			t.Fatalf("failed to write oidc token: %v", err)
+		}
+
+		r := &Router{config: Options{JWTPath: path, ControlPlaneURL: srv.URL}}
+		priv, _, _ := crypto.GenerateKeyPair(crypto.Ed25519, -1)
+		r.privKey = priv
+
+		err := r.enrollWithTokens(peer.ID("dummy"))
+		if err == nil || !strings.Contains(err.Error(), "failed to unmarshal") {
+			t.Logf("expected proto unmarshal error, got: %v", err)
+		}
+		if r.config.OIDCToken != "oidc-123" {
+			t.Fatalf("expected OIDCToken %q, got %q", "oidc-123", r.config.OIDCToken)
+		}
+	})
+
+	t.Run("No tokens returns error", func(t *testing.T) {
+		r := &Router{config: Options{ControlPlaneURL: srv.URL}}
+		err := r.enrollWithTokens(peer.ID("dummy"))
+		if err == nil || err.Error() != "no enrollment token available" {
+			t.Fatalf("expected 'no enrollment token available', got %v", err)
+		}
+	})
 }
