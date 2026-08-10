@@ -47,6 +47,7 @@ import (
 	"golang.org/x/time/rate"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
+	"gopkg.in/yaml.v2"
 )
 
 var logger = golog.Logger("sam-control-plane")
@@ -1683,7 +1684,41 @@ func (s *Server) HandleUserStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var policyYAML string // TODO: Implement relational policy rendering.
+	roles, bindings, err := s.store.GetMeshPolicy(r.Context())
+	if err != nil {
+		logger.Errorf("Failed to list policy: %v", err)
+	}
+
+	type displayRole struct {
+		AllowedServices []string `yaml:"allowed_services"`
+		AllowedTargets  []string `yaml:"allowed_targets"`
+	}
+	type displayBinding struct {
+		Role    string   `yaml:"role"`
+		Members []string `yaml:"members"`
+	}
+	displayMap := map[string]interface{}{
+		"roles":    make(map[string]displayRole),
+		"bindings": make([]displayBinding, 0),
+	}
+
+	for _, role := range roles {
+		displayMap["roles"].(map[string]displayRole)[role.Name] = displayRole{
+			AllowedServices: role.AllowedServices,
+			AllowedTargets:  role.AllowedTargets,
+		}
+	}
+	for _, b := range bindings {
+		displayMap["bindings"] = append(displayMap["bindings"].([]displayBinding), displayBinding{
+			Role:    b.Role,
+			Members: b.Members,
+		})
+	}
+
+	var policyYAML string
+	if yamlBytes, err := yaml.Marshal(displayMap); err == nil {
+		policyYAML = string(yamlBytes)
+	}
 
 	resp := map[string]any{
 		"user": map[string]any{
