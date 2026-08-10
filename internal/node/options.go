@@ -60,6 +60,8 @@ type Options struct {
 	RequiredRole string
 	// PolicySyncInterval specifies how often the node syncs the mesh policy from the Hub.
 	PolicySyncInterval time.Duration
+	// PolicySyncJitter specifies the maximum jitter delay when scheduling policy syncs on event broadcasts.
+	PolicySyncJitter time.Duration
 }
 
 // Default applies default values to Options if they are not specified.
@@ -102,6 +104,9 @@ func (o *Options) Default() {
 	}
 	if o.PolicySyncInterval == 0 {
 		o.PolicySyncInterval = 1 * time.Hour
+	}
+	if o.PolicySyncJitter <= 0 {
+		o.PolicySyncJitter = 10 * time.Second
 	}
 }
 

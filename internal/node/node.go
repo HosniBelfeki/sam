@@ -1133,10 +1133,15 @@ func (n *SamNode) listenForHubEvents(ctx context.Context) {
 		case api.MeshEvent_POLICY_UPDATE:
 			logger.Infof("[Mesh Event] Received POLICY_UPDATE event from %s, triggering sync", msg.ReceivedFrom)
 			go func() {
-				// Jitter delay (0-2s) to prevent thundering herd on Control Plane
-				jitter := time.Duration(rand.Intn(2000)) * time.Millisecond
+				maxJitter := n.config.PolicySyncJitter
+				if maxJitter <= 0 {
+					maxJitter = 10 * time.Second
+				}
+				jitter := time.Duration(rand.Int63n(int64(maxJitter)))
+				timer := time.NewTimer(jitter)
+				defer timer.Stop()
 				select {
-				case <-time.After(jitter):
+				case <-timer.C:
 				case <-ctx.Done():
 					return
 				}
