@@ -691,18 +691,20 @@ func TestRouterEnrollWithTokensResolution(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/enroll", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"biscuit":"dummy-biscuit-bootstrap"}`))
+		_, _ = w.Write([]byte(`{"biscuit":"dummy-biscuit-bootstrap"}`))
 	})
 	mux.HandleFunc("/register", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"biscuit":"dummy-biscuit-oidc"}`))
+		_, _ = w.Write([]byte(`{"biscuit":"dummy-biscuit-oidc"}`))
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
 	t.Run("BootstrapTokenPath updates BootstrapToken", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "bootstrap-token")
-		os.WriteFile(path, []byte("  boot-123  \n"), 0o600)
+		if err := os.WriteFile(path, []byte("  boot-123  \n"), 0o600); err != nil {
+			t.Fatalf("failed to write bootstrap token: %v", err)
+		}
 
 		r := &Router{config: Options{BootstrapTokenPath: path, ControlPlaneURL: srv.URL}}
 		priv, _, _ := crypto.GenerateKeyPair(crypto.Ed25519, -1)
@@ -712,6 +714,7 @@ func TestRouterEnrollWithTokensResolution(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "failed to unmarshal") {
 			// We expect a proto unmarshal error because the dummy biscuit is just JSON,
 			// but we want to assert the token was read correctly first.
+			t.Logf("expected proto unmarshal error, got: %v", err)
 		}
 		if r.config.BootstrapToken != "boot-123" {
 			t.Fatalf("expected BootstrapToken %q, got %q", "boot-123", r.config.BootstrapToken)
@@ -720,7 +723,9 @@ func TestRouterEnrollWithTokensResolution(t *testing.T) {
 
 	t.Run("JWTPath updates OIDCToken", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "oidc-token")
-		os.WriteFile(path, []byte("  oidc-123  \n"), 0o600)
+		if err := os.WriteFile(path, []byte("  oidc-123  \n"), 0o600); err != nil {
+			t.Fatalf("failed to write oidc token: %v", err)
+		}
 
 		r := &Router{config: Options{JWTPath: path, ControlPlaneURL: srv.URL}}
 		priv, _, _ := crypto.GenerateKeyPair(crypto.Ed25519, -1)
@@ -728,6 +733,7 @@ func TestRouterEnrollWithTokensResolution(t *testing.T) {
 
 		err := r.enrollWithTokens(peer.ID("dummy"))
 		if err == nil || !strings.Contains(err.Error(), "failed to unmarshal") {
+			t.Logf("expected proto unmarshal error, got: %v", err)
 		}
 		if r.config.OIDCToken != "oidc-123" {
 			t.Fatalf("expected OIDCToken %q, got %q", "oidc-123", r.config.OIDCToken)
