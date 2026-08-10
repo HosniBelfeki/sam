@@ -313,7 +313,7 @@ func (s *Server) HandleReadyz(w http.ResponseWriter, r *http.Request) {
 		if err := s.store.Ping(r.Context()); err != nil {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusServiceUnavailable)
-			_, _ = w.Write([]byte(fmt.Sprintf(`{"status":"error","message":%q}`, err.Error())))
+			_, _ = fmt.Fprintf(w, `{"status":"error","message":%q}`, err.Error())
 			return
 		}
 	}
