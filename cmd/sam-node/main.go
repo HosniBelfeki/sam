@@ -385,6 +385,9 @@ func main() {
 			}
 			defer func() {
 				_ = sidecarSrv.Close()
+				if err := meshNode.Teardown(); err != nil {
+					logger.Warnf("Error during mesh node teardown: %v", err)
+				}
 			}()
 
 			fmt.Printf("SAM Node Online.\nPeerID: %s\nListening on: %v\n", meshNode.Host.ID(), meshNode.Host.Addrs())

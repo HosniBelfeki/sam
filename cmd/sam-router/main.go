@@ -17,6 +17,8 @@ package main
 import (
 	"context"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/google/sam/internal/router"
@@ -109,7 +111,7 @@ func main() {
 	rootCmd.Flags().DurationVar(&dhtProviderAddrTTL, "dht-provider-addr-ttl", 0, "Time-To-Live for DHT provider addresses (0s uses library default)")
 	rootCmd.Flags().DurationVar(&dhtMaxRecordAge, "dht-max-record-age", 0, "Maximum age for DHT records (0s uses library default)")
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
 	if err := rootCmd.ExecuteContext(ctx); err != nil {

@@ -17,7 +17,9 @@ package main
 import (
 	"context"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/google/sam/api"
@@ -179,7 +181,7 @@ func main() {
 	adminCmd.AddCommand(banCmd, unbanCmd)
 	rootCmd.AddCommand(adminCmd)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
 	if err := rootCmd.ExecuteContext(ctx); err != nil {
