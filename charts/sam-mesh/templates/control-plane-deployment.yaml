@@ -38,12 +38,12 @@ spec:
           protocol: TCP
         readinessProbe:
           httpGet:
-            path: /info
+            path: /readyz
             port: http
           periodSeconds: 5
         livenessProbe:
           httpGet:
-            path: /info
+            path: /healthz
             port: http
           periodSeconds: 15
         resources:

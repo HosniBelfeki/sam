@@ -43,6 +43,7 @@ import (
 	golog "github.com/ipfs/go-log/v2"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"golang.org/x/time/rate"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
@@ -147,6 +148,9 @@ func (s *Server) Start() error {
 	s.listener = l
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", s.HandleHealthz)
+	mux.HandleFunc("/readyz", s.HandleReadyz)
+	mux.Handle("/metrics", promhttp.Handler())
 	mux.HandleFunc("/info", s.HandleInfo)
 	mux.HandleFunc("/register", s.HandleRegister)
 	mux.HandleFunc("/keys", s.HandleKeys)
@@ -286,6 +290,36 @@ func (s *Server) runKeyRotationLoop() {
 			return
 		}
 	}
+}
+
+// HandleHealthz HTTP GET `/healthz`
+func (s *Server) HandleHealthz(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(`{"status":"ok"}`))
+}
+
+// HandleReadyz HTTP GET `/readyz`
+func (s *Server) HandleReadyz(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.store != nil {
+		if err := s.store.Ping(r.Context()); err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(fmt.Sprintf(`{"status":"error","message":%q}`, err.Error())))
+			return
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(`{"status":"ready"}`))
 }
 
 // HandleInfo HTTP GET `/info`

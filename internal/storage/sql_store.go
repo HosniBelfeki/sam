@@ -1181,6 +1181,14 @@ func (s *SQLStore) ListUsers(ctx context.Context) ([]User, error) {
 	return users, nil
 }
 
+// Ping implements Store.
+func (s *SQLStore) Ping(ctx context.Context) error {
+	if s.db == nil {
+		return fmt.Errorf("database connection is nil")
+	}
+	return s.db.PingContext(ctx)
+}
+
 // Close implements Store.
 func (s *SQLStore) Close() error {
 	return s.db.Close()

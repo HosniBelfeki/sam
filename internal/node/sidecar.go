@@ -34,6 +34,7 @@ import (
 	libp2phttp "github.com/libp2p/go-libp2p-http"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
@@ -43,6 +44,7 @@ func StartSidecarServer(node *SamNode, addr, token, certFile, keyFile, caFile st
 	// Public endpoints
 	mux.HandleFunc("/healthz", handleHealthz)
 	mux.HandleFunc("/readyz", handleReadyz)
+	mux.Handle("/metrics", promhttp.Handler())
 
 	// Protected endpoints. allowAuthorizationFallback=true is safe here: none of
 	// these ever forward the inbound Authorization header to another service.

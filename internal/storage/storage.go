@@ -94,6 +94,9 @@ type EnrollmentRequest struct {
 
 // Store defines the persistent operations for the SAM control plane.
 type Store interface {
+	// Ping checks the health of the underlying database connection.
+	Ping(ctx context.Context) error
+
 	// GetCurrentKey retrieves the active key pair for biscuit signing.
 	GetCurrentKey(ctx context.Context) (ed25519.PrivateKey, ed25519.PublicKey, error)
 

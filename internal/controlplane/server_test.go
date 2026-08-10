@@ -156,6 +156,27 @@ func TestControlPlaneBasic(t *testing.T) {
 
 	client := &http.Client{Timeout: 5 * time.Second}
 
+	// Test /healthz
+	respHealth, err := client.Get(baseURL + "/healthz")
+	if err != nil || respHealth.StatusCode != http.StatusOK {
+		t.Fatalf("GET /healthz failed: %v, status: %v", err, respHealth.Status)
+	}
+	_ = respHealth.Body.Close()
+
+	// Test /readyz
+	respReady, err := client.Get(baseURL + "/readyz")
+	if err != nil || respReady.StatusCode != http.StatusOK {
+		t.Fatalf("GET /readyz failed: %v, status: %v", err, respReady.Status)
+	}
+	_ = respReady.Body.Close()
+
+	// Test /metrics
+	respMetrics, err := client.Get(baseURL + "/metrics")
+	if err != nil || respMetrics.StatusCode != http.StatusOK {
+		t.Fatalf("GET /metrics failed: %v, status: %v", err, respMetrics.Status)
+	}
+	_ = respMetrics.Body.Close()
+
 	// 1. Test /info (no routers registered yet)
 	resp, err := client.Get(baseURL + "/info")
 	if err != nil {
