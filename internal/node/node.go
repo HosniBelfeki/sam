@@ -1275,7 +1275,7 @@ func (n *SamNode) subscribeToTopic(ctx context.Context, topicName string) error 
 			logger.Infof("[PubSub] Exited subscription background loop for topic: %s", topicName)
 		}()
 		for {
-			msg, err := sub.Next(ctx)
+			msg, err := sub.Next(context.Background())
 			if err != nil {
 				logger.Errorf("[PubSub] subscription Next() error for topic %s: %v", topicName, err)
 				return

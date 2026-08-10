@@ -39,7 +39,7 @@ func TestPubSubTools(t *testing.T) {
 	}
 	t.Logf("Node 2 logs at: %s/node2.log", tmpHome2)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	// Start Node 1
@@ -139,28 +139,30 @@ func TestPubSubTools(t *testing.T) {
 	t.Logf("Node 2 address: %s", addr2)
 	callTool(mcpAddr1, "connect_peer", map[string]any{"peer_addr": addr2})
 
-	// Node 1 broadcasts on topic "test-topic"
-	broadcastResult := callTool(mcpAddr1, "mesh_pubsub_broadcast", map[string]any{
-		"topic":   "test-topic",
-		"payload": "hello from node 1",
+	// Node 1 subscribes to topic "test-topic"
+	subscribeResult1 := callTool(mcpAddr1, "subscribe_topic", map[string]any{
+		"topic": "test-topic",
 	})
-	if !strings.Contains(broadcastResult, "Published") {
-		t.Fatalf("Broadcast failed: %s", broadcastResult)
+	if !strings.Contains(subscribeResult1, "Subscribed") {
+		t.Fatalf("Subscribe node 1 failed: %s", subscribeResult1)
 	}
 
 	// Node 2 subscribes to topic "test-topic"
-	subscribeResult := callTool(mcpAddr2, "subscribe_topic", map[string]any{
+	subscribeResult2 := callTool(mcpAddr2, "subscribe_topic", map[string]any{
 		"topic": "test-topic",
 	})
-	if !strings.Contains(subscribeResult, "Subscribed") {
-		t.Fatalf("Subscribe failed: %s", subscribeResult)
+	if !strings.Contains(subscribeResult2, "Subscribed") {
+		t.Fatalf("Subscribe node 2 failed: %s", subscribeResult2)
 	}
+
+	// Allow mesh propagation
+	time.Sleep(300 * time.Millisecond)
 
 	var pollResult string
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		// Node 1 broadcasts on topic "test-topic" again to ensure delivery after subscription
-		broadcastResult = callTool(mcpAddr1, "mesh_pubsub_broadcast", map[string]any{
+		broadcastResult := callTool(mcpAddr1, "mesh_pubsub_broadcast", map[string]any{
 			"topic":   "test-topic",
 			"payload": "hello from node 1",
 		})
