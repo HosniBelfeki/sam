@@ -1085,10 +1085,13 @@ func (n *SamNode) listenForHubEvents(ctx context.Context) {
 	if err != nil {
 		return
 	}
+	defer topic.Close()
+
 	sub, err := topic.Subscribe()
 	if err != nil {
 		return
 	}
+	defer sub.Cancel()
 
 	for {
 		msg, err := sub.Next(ctx)
