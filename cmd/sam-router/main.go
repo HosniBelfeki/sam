@@ -41,6 +41,8 @@ var (
 	logLevel           string
 	dhtProviderAddrTTL time.Duration
 	dhtMaxRecordAge    time.Duration
+	lowWaterMark       int
+	highWaterMark      int
 )
 
 var logger = golog.Logger("sam-router-cli")
@@ -76,6 +78,8 @@ func main() {
 				AllowLoopback:      allowLoopback,
 				DHTProviderAddrTTL: dhtProviderAddrTTL,
 				DHTMaxRecordAge:    dhtMaxRecordAge,
+				LowWaterMark:       lowWaterMark,
+				HighWaterMark:      highWaterMark,
 			}
 
 			r, err := router.NewRouter(cmd.Context(), opts)
@@ -110,6 +114,8 @@ func main() {
 	rootCmd.Flags().StringVar(&logLevel, "log-level", "info", "Log level (debug, info, warn, error)")
 	rootCmd.Flags().DurationVar(&dhtProviderAddrTTL, "dht-provider-addr-ttl", 0, "Time-To-Live for DHT provider addresses (0s uses library default)")
 	rootCmd.Flags().DurationVar(&dhtMaxRecordAge, "dht-max-record-age", 0, "Maximum age for DHT records (0s uses library default)")
+	rootCmd.Flags().IntVar(&lowWaterMark, "low-watermark", 1000, "Connection manager low watermark limit")
+	rootCmd.Flags().IntVar(&highWaterMark, "high-watermark", 4000, "Connection manager high watermark limit")
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()

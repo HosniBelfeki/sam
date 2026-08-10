@@ -55,9 +55,9 @@ import (
 var logger = golog.Logger("sam-router")
 
 const (
-	LowWaterMark    = 100
-	HighWaterMark   = 400
-	ConnGracePeriod = 1 * time.Minute
+	DefaultLowWaterMark  = 1000
+	DefaultHighWaterMark = 4000
+	ConnGracePeriod      = 1 * time.Minute
 )
 
 type relayACL struct {
@@ -162,7 +162,15 @@ func (r *Router) Start() error {
 	}
 
 	// 4. Initialize libp2p host
-	cm, err := connmgr.NewConnManager(LowWaterMark, HighWaterMark, connmgr.WithGracePeriod(ConnGracePeriod))
+	low := r.config.LowWaterMark
+	if low <= 0 {
+		low = DefaultLowWaterMark
+	}
+	high := r.config.HighWaterMark
+	if high <= 0 {
+		high = DefaultHighWaterMark
+	}
+	cm, err := connmgr.NewConnManager(low, high, connmgr.WithGracePeriod(ConnGracePeriod))
 	if err != nil {
 		return fmt.Errorf("failed to create connection manager: %w", err)
 	}

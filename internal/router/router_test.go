@@ -777,3 +777,20 @@ func TestRouterEnrollWithTokensResolution(t *testing.T) {
 		}
 	})
 }
+
+func TestRouterConnectionManagerWatermarks(t *testing.T) {
+	opts := Options{
+		LowWaterMark:  500,
+		HighWaterMark: 1500,
+	}
+	opts.Default()
+	if opts.LowWaterMark != 500 || opts.HighWaterMark != 1500 {
+		t.Fatalf("expected explicit watermarks to be preserved, got Low: %d, High: %d", opts.LowWaterMark, opts.HighWaterMark)
+	}
+
+	defaultOpts := Options{}
+	defaultOpts.Default()
+	if defaultOpts.LowWaterMark != 1000 || defaultOpts.HighWaterMark != 4000 {
+		t.Fatalf("expected default watermarks 1000/4000, got Low: %d, High: %d", defaultOpts.LowWaterMark, defaultOpts.HighWaterMark)
+	}
+}
