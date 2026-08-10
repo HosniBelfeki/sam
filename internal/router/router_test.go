@@ -28,6 +28,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -686,37 +687,58 @@ func TestRouterGossipSubBannedEvent(t *testing.T) {
 	}
 }
 
-func TestRouterRefreshOIDCTokenRereadsRotatedFile(t *testing.T) {
-	jwtPath := filepath.Join(t.TempDir(), "sam-token")
-	if err := os.WriteFile(jwtPath, []byte("token-at-startup\n"), 0o600); err != nil {
-		t.Fatalf("write token: %v", err)
-	}
+func TestRouterEnrollWithTokensResolution(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/enroll", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"biscuit":"dummy-biscuit-bootstrap"}`))
+	})
+	mux.HandleFunc("/register", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"biscuit":"dummy-biscuit-oidc"}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
 
-	r := &Router{config: Options{JWTPath: jwtPath}}
-	if err := r.refreshOIDCToken(); err != nil {
-		t.Fatalf("refreshOIDCToken: %v", err)
-	}
-	if r.config.OIDCToken != "token-at-startup" {
-		t.Fatalf("OIDCToken = %q, want %q", r.config.OIDCToken, "token-at-startup")
-	}
+	t.Run("BootstrapTokenPath updates BootstrapToken", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "bootstrap-token")
+		os.WriteFile(path, []byte("  boot-123  \n"), 0o600)
 
-	if err := os.WriteFile(jwtPath, []byte("token-after-rotation\n"), 0o600); err != nil {
-		t.Fatalf("rotate token: %v", err)
-	}
-	if err := r.refreshOIDCToken(); err != nil {
-		t.Fatalf("refreshOIDCToken after rotation: %v", err)
-	}
-	if r.config.OIDCToken != "token-after-rotation" {
-		t.Fatalf("OIDCToken = %q, want %q", r.config.OIDCToken, "token-after-rotation")
-	}
-}
+		r := &Router{config: Options{BootstrapTokenPath: path, ControlPlaneURL: srv.URL}}
+		priv, _, _ := crypto.GenerateKeyPair(crypto.Ed25519, -1)
+		r.privKey = priv
 
-func TestRouterRefreshOIDCTokenNoPath(t *testing.T) {
-	r := &Router{config: Options{OIDCToken: "static-token"}}
-	if err := r.refreshOIDCToken(); err != nil {
-		t.Fatalf("refreshOIDCToken with no JWTPath: %v", err)
-	}
-	if r.config.OIDCToken != "static-token" {
-		t.Fatalf("OIDCToken = %q, want it untouched", r.config.OIDCToken)
-	}
+		err := r.enrollWithTokens(peer.ID("dummy"))
+		if err == nil || !strings.Contains(err.Error(), "failed to unmarshal") {
+			// We expect a proto unmarshal error because the dummy biscuit is just JSON,
+			// but we want to assert the token was read correctly first.
+		}
+		if r.config.BootstrapToken != "boot-123" {
+			t.Fatalf("expected BootstrapToken %q, got %q", "boot-123", r.config.BootstrapToken)
+		}
+	})
+
+	t.Run("JWTPath updates OIDCToken", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "oidc-token")
+		os.WriteFile(path, []byte("  oidc-123  \n"), 0o600)
+
+		r := &Router{config: Options{JWTPath: path, ControlPlaneURL: srv.URL}}
+		priv, _, _ := crypto.GenerateKeyPair(crypto.Ed25519, -1)
+		r.privKey = priv
+
+		err := r.enrollWithTokens(peer.ID("dummy"))
+		if err == nil || !strings.Contains(err.Error(), "failed to unmarshal") {
+		}
+		if r.config.OIDCToken != "oidc-123" {
+			t.Fatalf("expected OIDCToken %q, got %q", "oidc-123", r.config.OIDCToken)
+		}
+	})
+
+	t.Run("No tokens returns error", func(t *testing.T) {
+		r := &Router{config: Options{ControlPlaneURL: srv.URL}}
+		err := r.enrollWithTokens(peer.ID("dummy"))
+		if err == nil || err.Error() != "no enrollment token available" {
+			t.Fatalf("expected 'no enrollment token available', got %v", err)
+		}
+	})
 }

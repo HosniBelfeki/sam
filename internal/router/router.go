@@ -148,35 +148,11 @@ func (r *Router) Start() error {
 		return err
 	}
 
-	if r.config.BootstrapToken == "" && r.config.BootstrapTokenPath != "" {
-		tokenData, err := os.ReadFile(r.config.BootstrapTokenPath)
-		if err != nil {
-			return fmt.Errorf("failed to read bootstrap token from path %s: %w", r.config.BootstrapTokenPath, err)
-		}
-		r.config.BootstrapToken = strings.TrimSpace(string(tokenData))
-	}
-
-	if r.config.BootstrapToken != "" {
-		logger.Infof("Enrolling router %s with Control Plane at %s using Bootstrap Token...", peerID, r.config.ControlPlaneURL)
-		if err := r.enrollBootstrap(peerID); err != nil {
-			return fmt.Errorf("failed router bootstrap enrollment: %w", err)
-		}
-	} else {
-		if r.config.OIDCToken == "" && r.config.JWTPath != "" {
-			tokenData, err := os.ReadFile(r.config.JWTPath)
-			if err != nil {
-				return fmt.Errorf("failed to read JWT from path %s: %w", r.config.JWTPath, err)
-			}
-			r.config.OIDCToken = strings.TrimSpace(string(tokenData))
-		}
-
-		if r.config.OIDCToken != "" {
-			logger.Infof("Enrolling router %s with Control Plane at %s using OIDC Token...", peerID, r.config.ControlPlaneURL)
-			if err := r.enroll(peerID); err != nil {
-				return fmt.Errorf("failed router enrollment: %w", err)
-			}
-		} else {
+	if err := r.enrollWithTokens(peerID); err != nil {
+		if strings.Contains(err.Error(), "no enrollment token available") {
 			logger.Warn("Router started without OIDCToken or BootstrapToken. Enrollment bypassed. Expecting local keys sync.")
+		} else {
+			return err
 		}
 	}
 
@@ -471,17 +447,42 @@ func (r *Router) enrollBootstrap(peerID peer.ID) error {
 	return nil
 }
 
-// refreshOIDCToken re-reads the JWT from disk.
-func (r *Router) refreshOIDCToken() error {
-	if r.config.JWTPath == "" {
+func (r *Router) enrollWithTokens(peerID peer.ID) error {
+	// Always read the token from disk if a path is specified to handle rotation
+	if r.config.BootstrapTokenPath != "" {
+		tokenData, err := os.ReadFile(r.config.BootstrapTokenPath)
+		if err != nil {
+			return fmt.Errorf("failed to read bootstrap token from path %s: %w", r.config.BootstrapTokenPath, err)
+		}
+		r.config.BootstrapToken = strings.TrimSpace(string(tokenData))
+	}
+
+	if r.config.BootstrapToken != "" {
+		logger.Infof("Enrolling router %s with Control Plane at %s using Bootstrap Token...", peerID, r.config.ControlPlaneURL)
+		if err := r.enrollBootstrap(peerID); err != nil {
+			return fmt.Errorf("failed router bootstrap enrollment: %w", err)
+		}
 		return nil
 	}
-	tokenData, err := os.ReadFile(r.config.JWTPath)
-	if err != nil {
-		return fmt.Errorf("failed to re-read JWT from path %s: %w", r.config.JWTPath, err)
+
+	// Fallback to OIDC token
+	if r.config.JWTPath != "" {
+		tokenData, err := os.ReadFile(r.config.JWTPath)
+		if err != nil {
+			return fmt.Errorf("failed to read JWT from path %s: %w", r.config.JWTPath, err)
+		}
+		r.config.OIDCToken = strings.TrimSpace(string(tokenData))
 	}
-	r.config.OIDCToken = strings.TrimSpace(string(tokenData))
-	return nil
+
+	if r.config.OIDCToken != "" {
+		logger.Infof("Enrolling router %s with Control Plane at %s using OIDC Token...", peerID, r.config.ControlPlaneURL)
+		if err := r.enroll(peerID); err != nil {
+			return fmt.Errorf("failed router enrollment: %w", err)
+		}
+		return nil
+	}
+
+	return fmt.Errorf("no enrollment token available")
 }
 
 func (r *Router) reEnroll() error {
@@ -492,16 +493,7 @@ func (r *Router) reEnroll() error {
 		return fmt.Errorf("cannot re-enroll: router host is not initialized")
 	}
 
-	if r.config.BootstrapToken != "" {
-		return r.enrollBootstrap(r.Host.ID())
-	}
-	if err := r.refreshOIDCToken(); err != nil {
-		return err
-	}
-	if r.config.OIDCToken != "" {
-		return r.enroll(r.Host.ID())
-	}
-	return fmt.Errorf("no enrollment token available for re-enrollment")
+	return r.enrollWithTokens(r.Host.ID())
 }
 
 func (r *Router) syncKeys() error {
