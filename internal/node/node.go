@@ -1085,7 +1085,7 @@ func (n *SamNode) listenForHubEvents(ctx context.Context) {
 	if err != nil {
 		return
 	}
-	defer topic.Close()
+	defer func() { _ = topic.Close() }()
 
 	sub, err := topic.Subscribe()
 	if err != nil {
