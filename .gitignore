@@ -33,6 +33,14 @@ go.work.sum
 # .vscode/
 #
 bin/
+# Stray binaries from `go build ./cmd/<name>/` in the repo root
+/sam-node
+/sam-box
+/sam-router
+/sam-console
+/sam-control-plane
+/mcp-client
+/nano-init
 tests/e2e/logs/
 tests/integration/logs/
 tests/integration/scratch/
