@@ -136,11 +136,11 @@ teardown() {
     --network "${MESH_NETWORK}" \
     $(mesh_get_add_hosts) \
     -v "${token_vol}:/var/run/secrets/tokens" \
+    -e SAM_API_TOKEN="secret-token" \
     "sam-node:local" \
     run \
     --control-plane "http://sam-control-plane:8080" \
-    --jwt-path "/var/run/secrets/tokens/sa-token" \
-    --api-token "secret-token"
+    --jwt-path "/var/run/secrets/tokens/sa-token"
   MESH_CONTAINERS+=("${node_name}")
 
   mesh_wait_for_log "${node_name}" "SAM Node Online" 20

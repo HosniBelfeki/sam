@@ -11,12 +11,12 @@ You can connect your `sam-node` to [Claude Code](https://claude.com/claude-code)
 ## Prerequisites
 
 - A running `sam-node` with its local control-plane API reachable (default `http://localhost:8080`). See the [Quick Start](../quickstart/).
-- The `--api-token` you launched the node with.
+- The the node API token (`SAM_API_TOKEN` env or `--api-token-path`) you launched the node with.
 - Claude Code installed (the `claude` CLI).
 
 ## Configuration
 
-Register the node as an HTTP MCP server. Replace `<YOUR_TOKEN>` with your `--api-token`:
+Register the node as an HTTP MCP server. Replace `<YOUR_TOKEN>` with your the node API token (`SAM_API_TOKEN` env or `--api-token-path`):
 
 ```bash
 claude mcp add --transport http p2p-mesh-node \
@@ -65,7 +65,7 @@ Claude Code calls the tools `sam-node` exposes like any other tool. The flow mir
 
 ## Troubleshooting
 
-* **Connection shows failed / 401**: verify the `X-Sam-Authentication` header matches the node's `--api-token`.
+* **Connection shows failed / 401**: verify the `X-Sam-Authentication` header matches the node's the node API token (`SAM_API_TOKEN` env or `--api-token-path`).
 * **Server unreachable**: confirm `sam-node` is listening (default `http://localhost:8080`).
 * **Tools not visible**: MCP servers load at session start — restart Claude Code and check `/mcp`.
 * **Remove the server**: `claude mcp remove p2p-mesh-node -s user` (match the scope you used to add it).

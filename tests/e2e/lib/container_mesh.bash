@@ -337,6 +337,8 @@ if [[ -z "${MESH_HELPERS_LOADED:-}" ]]; then
       --network-alias "${name}" \
       ${add_hosts} \
       "${mount_args[@]}" \
+      -e SAM_CLIENT_SECRET="sam-e2e-secret" \
+      -e SAM_API_TOKEN="secret-token" \
       "${MESH_RUNTIME_IMAGE}" \
       /usr/local/bin/sam-node run \
       ${flags} \
@@ -344,12 +346,10 @@ if [[ -z "${MESH_HELPERS_LOADED:-}" ]]; then
       --discovery-interval 2s \
       --control-plane "http://sam-control-plane:8080" \
       --client-id "sam-mesh-audience" \
-      --client-secret "sam-e2e-secret" \
       --oidc-issuer "http://mock-oidc:18080" \
       --listen "/ip4/0.0.0.0/udp/5001/quic-v1" \
       --listen "/ip4/0.0.0.0/tcp/5002" \
       --bind-addr "0.0.0.0:8080" \
-      --api-token "secret-token" \
       --mesh "${MESH_PREFIX}" \
       --dht-provider-addr-ttl 5s \
       --dht-max-record-age 5s \

@@ -83,7 +83,7 @@ func TestSamNodeRunWithStoredIdentity(t *testing.T) {
 		"run", "--listen", "/ip4/127.0.0.1/udp/0/quic-v1",
 		"--listen", "/ip4/127.0.0.1/tcp/0",
 		"--bind-addr", "127.0.0.1:0",
-		"--api-token", "dummy-token",
+		"--api-token-path", tokenPath(t, "dummy-token"),
 		"--data-dir", configDir,
 	)
 	if err != context.DeadlineExceeded {

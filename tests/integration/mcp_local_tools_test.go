@@ -63,7 +63,7 @@ roles: {}
 		"--listen", "/ip4/127.0.0.1/udp/0/quic-v1",
 		"--listen", "/ip4/127.0.0.1/tcp/0",
 		"--bind-addr", "127.0.0.1:0",
-		"--api-token", apiToken,
+		"--api-token-path", tokenPath(t, apiToken),
 		"--jwt", nodeJWT,
 	)
 
@@ -73,7 +73,7 @@ roles: {}
 		"--listen", "/ip4/127.0.0.1/udp/0/quic-v1",
 		"--listen", "/ip4/127.0.0.1/tcp/0",
 		"--bind-addr", "127.0.0.1:0",
-		"--api-token", apiToken,
+		"--api-token-path", tokenPath(t, apiToken),
 		"--jwt", nodeJWT,
 	)
 

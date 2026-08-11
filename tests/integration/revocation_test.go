@@ -65,7 +65,7 @@ roles:
 	// 2. Start Control Plane (PostgreSQL is used in GKE/Kind, but SQLite is completely fine here for in-process integration test speed)
 	cpCmd := exec.Command(cpBin,
 		"--bind-address", fmt.Sprintf("127.0.0.1:%d", cpPort),
-		"--admin-token", "test-admin-token",
+		"--admin-token-path", tokenPath(t, "test-admin-token"),
 		"--db-dsn", filepath.Join(tmpDir, "cp-keys.db"),
 		"--issuer", oidcURL,
 		"--insecure-skip-tls-verify",
@@ -130,7 +130,7 @@ roles:
 		"--listen", "/ip4/127.0.0.1/tcp/0",
 		"--allow-loopback",
 		"--bind-addr", fmt.Sprintf("127.0.0.1:%d", node1ApiPort),
-		"--api-token", "node1-token",
+		"--api-token-path", tokenPath(t, "node1-token"),
 		"--log-level", "debug",
 	)
 	node1Cmd.Env = append(os.Environ(), "HOME="+node1Home, "XDG_CONFIG_HOME="+filepath.Join(node1Home, ".config"))
@@ -160,7 +160,7 @@ roles:
 		"--listen", "/ip4/127.0.0.1/tcp/0",
 		"--allow-loopback",
 		"--bind-addr", fmt.Sprintf("127.0.0.1:%d", node2ApiPort),
-		"--api-token", "node2-token",
+		"--api-token-path", tokenPath(t, "node2-token"),
 		"--log-level", "debug",
 	)
 	node2Cmd.Env = append(os.Environ(), "HOME="+node2Home, "XDG_CONFIG_HOME="+filepath.Join(node2Home, ".config"))

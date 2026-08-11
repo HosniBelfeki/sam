@@ -47,7 +47,7 @@ func TestNodeAuthEnforcementIntegration(t *testing.T) {
 	cmd := exec.Command(nodeBin, "run",
 		"--control-plane", mockRouterAddr,
 		"--data-dir", home,
-		"--api-token", apiToken,
+		"--api-token-path", tokenPath(t, apiToken),
 		"--jwt", "fake-jwt",
 		"--bind-addr", fmt.Sprintf("127.0.0.1:%d", port),
 		"--listen", "/ip4/127.0.0.1/udp/0/quic-v1",

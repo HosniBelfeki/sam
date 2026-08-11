@@ -13,7 +13,7 @@ The `sam-node` acts as a local security gateway and tool proxy for AI agents. Wh
 By default, `sam-node` runs without exposing any local tools to the mesh. To expose local tools or strictly enforce your node's network identity, you must create a Node configuration file and pass it to the daemon using the `--config` flag:
 
 ```bash
-sam-node run --config ./sam-node.yaml --api-token "secret"
+SAM_API_TOKEN="secret" sam-node run --config ./sam-node.yaml
 ```
 
 ### Configuration Schema

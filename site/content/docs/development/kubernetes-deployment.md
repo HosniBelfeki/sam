@@ -230,7 +230,7 @@ If you are using the **Mock OIDC Provider**, the node can fetch the token using 
      --control-plane "http://$CONTROL_PLANE_IP:9090" \
      --oidc-issuer "http://$MOCK_IP:18080" \
      --client-id "sam-mesh-audience" \
-     --client-secret "sam-e2e-secret"
+     # client secret via SAM_CLIENT_SECRET env or --client-secret-path
    ```
 
 If you are using **Google OIDC**, you must obtain a valid Google ID token for your user and pass it via the `--jwt` flag:

@@ -86,7 +86,7 @@ roles: {}
 	// 1. Start Control Plane A temporarily to generate keyring
 	cmdCP_A_temp := exec.Command(cpBin,
 		"--bind-address", fmt.Sprintf("127.0.0.1:%d", portA),
-		"--admin-token", "test-admin-token",
+		"--admin-token-path", tokenPath(t, "test-admin-token"),
 		"--db-dsn", dsnA,
 		"--issuer", oidcURL,
 		"--insecure-skip-tls-verify",
@@ -115,7 +115,7 @@ roles: {}
 	// 3. Start CP A persistently
 	cmdCP_A := exec.Command(cpBin,
 		"--bind-address", fmt.Sprintf("127.0.0.1:%d", portA),
-		"--admin-token", "test-admin-token",
+		"--admin-token-path", tokenPath(t, "test-admin-token"),
 		"--db-dsn", dsnA,
 		"--issuer", oidcURL,
 		"--insecure-skip-tls-verify",
@@ -153,7 +153,7 @@ roles: {}
 	// 5. Start Control Plane B (sharing CP A's keys)
 	cmdCP_B := exec.Command(cpBin,
 		"--bind-address", fmt.Sprintf("127.0.0.1:%d", portB),
-		"--admin-token", "test-admin-token",
+		"--admin-token-path", tokenPath(t, "test-admin-token"),
 		"--db-dsn", dsnB,
 		"--issuer", oidcURL,
 		"--insecure-skip-tls-verify",

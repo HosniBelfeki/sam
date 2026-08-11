@@ -42,12 +42,14 @@ spec:
       containers:
       - name: sam-node
         image: ghcr.io/google/sam-node:${IMAGE_TAG}
+        env:
+        - name: SAM_API_TOKEN
+          value: "secret-token"
         args: 
           - "run"
           - "--config=/etc/sam/sam-node.yaml"
           - "--control-plane=http://sam-control-plane-${ENV_NAME}.${NAMESPACE}.svc.cluster.local:8080"
           - "--jwt-path=/var/run/secrets/tokens/sam-token"
-          - "--api-token=secret-token"
         ports:
         - containerPort: 8080
         resources:

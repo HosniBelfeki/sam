@@ -104,7 +104,7 @@ roles: {}
 	// 1. Start Control Plane A temporarily to generate keyring
 	cmdCP_A_temp := exec.Command(cpBin,
 		"--bind-address", fmt.Sprintf("127.0.0.1:%d", httpPortCP_A),
-		"--admin-token", "test-admin-token",
+		"--admin-token-path", tokenPath(t, "test-admin-token"),
 		"--db-dsn", dsnA,
 		"--issuer", oidcURL,
 		"--insecure-skip-tls-verify",
@@ -129,7 +129,7 @@ roles: {}
 	// 3. Start CP A persistently
 	cmdCP_A := exec.Command(cpBin,
 		"--bind-address", fmt.Sprintf("127.0.0.1:%d", httpPortCP_A),
-		"--admin-token", "test-admin-token",
+		"--admin-token-path", tokenPath(t, "test-admin-token"),
 		"--db-dsn", dsnA,
 		"--issuer", oidcURL,
 		"--insecure-skip-tls-verify",
@@ -161,7 +161,7 @@ roles: {}
 	// 5. Start CP B
 	cmdCP_B := exec.Command(cpBin,
 		"--bind-address", fmt.Sprintf("127.0.0.1:%d", httpPortCP_B),
-		"--admin-token", "test-admin-token",
+		"--admin-token-path", tokenPath(t, "test-admin-token"),
 		"--db-dsn", dsnB,
 		"--issuer", oidcURL,
 		"--insecure-skip-tls-verify",
@@ -205,7 +205,7 @@ roles: {}
 		"--listen", "/ip4/127.0.0.1/tcp/0",
 		"--jwt-path", jwtPath,
 		"--bind-addr", "127.0.0.1:0",
-		"--api-token", "dummy-token",
+		"--api-token-path", tokenPath(t, "dummy-token"),
 		"--allow-loopback",
 		"--monitor-bootstrap", "1s",
 		"--monitor-interval", "1s",

@@ -48,7 +48,7 @@ func TestServiceDiscovery(t *testing.T) {
 		"--listen", "/ip4/127.0.0.1/tcp/0",
 		"--discovery-interval", "100ms",
 		"--bind-addr", "127.0.0.1:0",
-		"--api-token", apiToken,
+		"--api-token-path", tokenPath(t, apiToken),
 	)
 
 	// Start Node B
@@ -58,7 +58,7 @@ func TestServiceDiscovery(t *testing.T) {
 		"--listen", "/ip4/127.0.0.1/tcp/0",
 		"--discovery-interval", "100ms",
 		"--bind-addr", "127.0.0.1:0",
-		"--api-token", apiToken,
+		"--api-token-path", tokenPath(t, apiToken),
 	)
 
 	// Resolve actual addresses from logs
@@ -152,7 +152,7 @@ func TestServiceDiscoveryStreaming(t *testing.T) {
 		"--listen", "/ip4/127.0.0.1/tcp/0",
 		"--discovery-interval", "100ms",
 		"--bind-addr", "127.0.0.1:0",
-		"--api-token", apiToken,
+		"--api-token-path", tokenPath(t, apiToken),
 	)
 
 	// Start Node B
@@ -162,7 +162,7 @@ func TestServiceDiscoveryStreaming(t *testing.T) {
 		"--listen", "/ip4/127.0.0.1/tcp/0",
 		"--discovery-interval", "100ms",
 		"--bind-addr", "127.0.0.1:0",
-		"--api-token", apiToken,
+		"--api-token-path", tokenPath(t, apiToken),
 	)
 
 	// Resolve actual addresses from logs
