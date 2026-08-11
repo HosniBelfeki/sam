@@ -71,7 +71,7 @@ func TestVerifyBiscuit_Expiration(t *testing.T) {
 				"roles": []any{"admin"},
 			}
 
-			biscuitData, _, err := MintBiscuitToken(priv, claims, token, dummyPeer, token.Expiry, []string{"admin"}, nil)
+			biscuitData, _, err := MintBiscuitToken(priv, claims, token, dummyPeer, token.Expiry, []string{"admin"}, nil, "")
 			if err != nil {
 				t.Fatalf("MintBiscuitToken failed: %v", err)
 			}
@@ -112,7 +112,7 @@ func TestMintBiscuitToken_ClaimsTranslation(t *testing.T) {
 		"groups": []any{"beta-testers", "engineering"},
 	}
 
-	biscuitData, _, err := MintBiscuitToken(priv, claims, token, dummyPeer, token.Expiry, nil, nil)
+	biscuitData, _, err := MintBiscuitToken(priv, claims, token, dummyPeer, token.Expiry, nil, nil, "")
 	if err != nil {
 		t.Fatalf("Failed to mint biscuit: %v", err)
 	}
@@ -202,7 +202,7 @@ func TestVerifyBiscuit_Concurrent(t *testing.T) {
 		"roles": []any{"admin"},
 	}
 
-	biscuitData, _, err := MintBiscuitToken(priv, claims, token, dummyPeer, token.Expiry, []string{"admin"}, nil)
+	biscuitData, _, err := MintBiscuitToken(priv, claims, token, dummyPeer, token.Expiry, []string{"admin"}, nil, "")
 	if err != nil {
 		t.Fatalf("MintBiscuitToken failed: %v", err)
 	}
@@ -250,7 +250,7 @@ func TestMintBiscuitToken(t *testing.T) {
 		"groups": []any{"group1", "group2"},
 		"roles":  []any{"admin", "user"},
 	}
-	biscuitData, _, err := MintBiscuitToken(priv, claims, token, dummyPeer, token.Expiry, []string{"admin", "user"}, nil)
+	biscuitData, _, err := MintBiscuitToken(priv, claims, token, dummyPeer, token.Expiry, []string{"admin", "user"}, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -349,7 +349,7 @@ func TestMintBiscuitToken_VariousClaimsTypes(t *testing.T) {
 				claims["groups"] = tt.groupsClaim
 			}
 
-			biscuitData, _, err := MintBiscuitToken(priv, claims, token, dummyPeer, token.Expiry, tt.expectedRoles, nil)
+			biscuitData, _, err := MintBiscuitToken(priv, claims, token, dummyPeer, token.Expiry, tt.expectedRoles, nil, "")
 			if err != nil {
 				t.Fatalf("MintBiscuitToken failed: %v", err)
 			}
@@ -428,7 +428,7 @@ func TestMintBiscuitToken_WithPolicyRoles(t *testing.T) {
 	}
 
 	t.Run("Mint with matching policy role", func(t *testing.T) {
-		biscuitData, _, err := MintBiscuitToken(priv, claims, token, dummyPeer, token.Expiry, []string{"data-scientist"}, policyRoles)
+		biscuitData, _, err := MintBiscuitToken(priv, claims, token, dummyPeer, token.Expiry, []string{"data-scientist"}, policyRoles, "")
 		if err != nil {
 			t.Fatalf("MintBiscuitToken failed: %v", err)
 		}
@@ -457,7 +457,7 @@ func TestMintBiscuitToken_WithPolicyRoles(t *testing.T) {
 	})
 
 	t.Run("Mint with unmapped role when policy exists", func(t *testing.T) {
-		biscuitData, _, err := MintBiscuitToken(priv, claims, token, dummyPeer, token.Expiry, []string{"unmapped-role"}, policyRoles)
+		biscuitData, _, err := MintBiscuitToken(priv, claims, token, dummyPeer, token.Expiry, []string{"unmapped-role"}, policyRoles, "")
 		if err != nil {
 			t.Fatalf("MintBiscuitToken failed: %v", err)
 		}
@@ -484,6 +484,59 @@ func TestMintBiscuitToken_WithPolicyRoles(t *testing.T) {
 	})
 }
 
+func TestMintBiscuitToken_RegionFacts(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dummyPeer := peer.ID("dummy-peer-region")
+
+	biscuitData, err := MintBootstrapBiscuitToken(priv, dummyPeer, api.RoleNode, time.Now().Add(1*time.Hour), nil, "EU-DE-BY")
+	if err != nil {
+		t.Fatalf("MintBootstrapBiscuitToken failed: %v", err)
+	}
+	b, err := biscuit.Unmarshal(biscuitData)
+	if err != nil {
+		t.Fatalf("Unmarshal biscuit failed: %v", err)
+	}
+
+	// Every hierarchy level is present as its own fact.
+	for _, region := range []string{"EU", "EU-DE", "EU-DE-BY"} {
+		authorizer, err := b.Authorizer(pub)
+		if err != nil {
+			t.Fatalf("Authorizer failed: %v", err)
+		}
+		authorizer.AddCheck(biscuit.Check{Queries: []biscuit.Rule{
+			{Body: []biscuit.Predicate{{Name: api.FactRegion, IDs: []biscuit.Term{biscuit.String(region)}}}},
+		}})
+		authorizer.AddPolicy(api.AllowIfTruePolicy)
+		if err := authorizer.Authorize(); err != nil {
+			t.Errorf("expected region(%q) fact, got error: %v", region, err)
+		}
+	}
+
+	// No region facts when minted without a claim.
+	noRegionData, err := MintBootstrapBiscuitToken(priv, dummyPeer, api.RoleNode, time.Now().Add(1*time.Hour), nil, "")
+	if err != nil {
+		t.Fatalf("MintBootstrapBiscuitToken failed: %v", err)
+	}
+	b2, err := biscuit.Unmarshal(noRegionData)
+	if err != nil {
+		t.Fatalf("Unmarshal biscuit failed: %v", err)
+	}
+	authorizer, err := b2.Authorizer(pub)
+	if err != nil {
+		t.Fatalf("Authorizer failed: %v", err)
+	}
+	authorizer.AddCheck(biscuit.Check{Queries: []biscuit.Rule{
+		{Body: []biscuit.Predicate{{Name: api.FactRegion, IDs: []biscuit.Term{biscuit.Variable("r")}}}},
+	}})
+	authorizer.AddPolicy(api.AllowIfTruePolicy)
+	if err := authorizer.Authorize(); err == nil {
+		t.Error("expected no region facts for an unclaimed region, but check passed")
+	}
+}
+
 func TestVerifyAndExtractPeerID_MultipleTrustedKeys(t *testing.T) {
 	pub1, _, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -503,7 +556,7 @@ func TestVerifyAndExtractPeerID_MultipleTrustedKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	biscuitData, err := MintBootstrapBiscuitToken(priv2, dummyPeer, api.RoleNode, time.Now().Add(1*time.Hour), nil)
+	biscuitData, err := MintBootstrapBiscuitToken(priv2, dummyPeer, api.RoleNode, time.Now().Add(1*time.Hour), nil, "")
 	if err != nil {
 		t.Fatalf("MintBootstrapBiscuitToken failed: %v", err)
 	}

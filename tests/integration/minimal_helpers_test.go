@@ -265,7 +265,7 @@ func startMockRouter(t *testing.T) (peer.ID, string) {
 		}
 
 		resp := &api.EnrollResponse{
-			BiscuitToken:          createMockBiscuitToken(t, req.PeerId, priv, api.RoleNode),
+			BiscuitToken:          createMockBiscuitToken(t, req.PeerId, priv, api.RoleNode, req.Region),
 			ControlPlanePublicKey: pub,
 			RouterAddresses:       []string{h.Addrs()[0].String() + "/p2p/" + h.ID().String()},
 		}
@@ -365,7 +365,7 @@ func startMockRouterWithOIDC(t *testing.T, oidcIssuerURL string) (peer.ID, strin
 		}
 
 		resp := &api.EnrollResponse{
-			BiscuitToken:          createMockBiscuitToken(t, req.PeerId, priv, api.RoleNode),
+			BiscuitToken:          createMockBiscuitToken(t, req.PeerId, priv, api.RoleNode, req.Region),
 			ControlPlanePublicKey: pub,
 			RouterAddresses:       []string{h.Addrs()[0].String() + "/p2p/" + h.ID().String()},
 		}
@@ -390,11 +390,19 @@ func startMockRouterWithOIDC(t *testing.T, oidcIssuerURL string) (peer.ID, strin
 	return h.ID(), httpServer.URL
 }
 
-func createMockBiscuitToken(t *testing.T, peerID string, priv ed25519.PrivateKey, role string) []byte {
+func createMockBiscuitToken(t *testing.T, peerID string, priv ed25519.PrivateKey, role string, region ...string) []byte {
 	builder := biscuit.NewBuilder(priv)
 	err := builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{Name: "target_unrestricted"}})
 	if err != nil {
 		t.Fatalf("failed to add target_unrestricted: %v", err)
+	}
+
+	for _, r := range region {
+		for _, fact := range api.RegionFacts(r) {
+			if err := builder.AddAuthorityFact(fact); err != nil {
+				t.Fatalf("failed to add region fact: %v", err)
+			}
+		}
 	}
 
 	err = builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{

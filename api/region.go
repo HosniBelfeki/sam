@@ -114,6 +114,25 @@ func RegionMatches(required, claimed string) bool {
 	return claimed == required || strings.HasPrefix(claimed, required+"-")
 }
 
+// RegionPrefixes returns the hierarchy prefix closure of a region claim in
+// canonical form, coarsest first: "EU-DE-BY" -> ["EU", "EU-DE", "EU-DE-BY"].
+// Materializing every level lets policies match a requirement with a single
+// exact fact lookup (see FactRegion) while keeping RegionMatches semantics:
+// a finer claim carries its coarser prefixes, a coarser claim never gains
+// finer ones. The empty string returns nil.
+func RegionPrefixes(s string) []string {
+	s = NormalizeRegion(s)
+	if s == "" {
+		return nil
+	}
+	parts := strings.Split(s, "-")
+	out := make([]string, 0, len(parts))
+	for i := range parts {
+		out = append(out, strings.Join(parts[:i+1], "-"))
+	}
+	return out
+}
+
 // ContinentCodes returns the valid continent codes, sorted.
 func ContinentCodes() []string {
 	codes := make([]string, 0, len(continentNames))

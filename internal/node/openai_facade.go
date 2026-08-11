@@ -78,6 +78,14 @@ type openAIFacade struct {
 	// Scorer seams (may be nil): revocation check and this node's region.
 	isRevoked   func(peerID string) bool
 	localRegion func() string
+	// peerRegion resolves a peer's gossip-observed region label for providers
+	// discovered via the registry probe, which carries no labels.
+	peerRegion func(peerID string) string
+	// Region gate seam (may be nil = enforcement unavailable, fail closed
+	// when a requirement exists): verifies the provider's
+	// control-plane-attested region facts before any request data is sent
+	// (see region_gate.go).
+	verifyPeerRegions func(ctx context.Context, peerID string, required []string) error
 
 	ttl     time.Duration
 	mu      sync.Mutex
@@ -133,6 +141,19 @@ func newOpenAIFacade(node *SamNode, egress http.Handler) *openAIFacade {
 			return node.revokedPeers != nil && node.revokedPeers.Contains(peerID)
 		},
 		localRegion: func() string { return node.config.Region },
+		peerRegion: func(peerID string) string {
+			if node.Discovery == nil {
+				return ""
+			}
+			return node.Discovery.PeerLabels(peerID)[api.LabelRegion]
+		},
+		verifyPeerRegions: func(ctx context.Context, peerID string, required []string) error {
+			pid, err := peer.Decode(peerID)
+			if err != nil {
+				return fmt.Errorf("invalid peer ID %q: %w", peerID, err)
+			}
+			return node.VerifyPeerRegions(ctx, pid, required)
+		},
 	}
 }
 
@@ -381,6 +402,25 @@ func (f *openAIFacade) handleCompletions(w http.ResponseWriter, r *http.Request)
 		if p.peerID == "" {
 			f.serveLocal(aw, attempt, p.service)
 		} else {
+			// Labels ranked this provider; the region gate is the enforcement
+			// point: the provider's biscuit must attest the requirement before
+			// the request body leaves this node.
+			if len(requiredRegions) > 0 {
+				if f.verifyPeerRegions == nil {
+					recordFacadeRejection(reasonRegionUnattested)
+					writeOpenAIError(w, http.StatusServiceUnavailable, "region_unattested",
+						"region enforcement is unavailable on this node")
+					return
+				}
+				// No backoff on failure: the verdict is requirement-scoped,
+				// the provider stays eligible for unconstrained requests.
+				if err := f.verifyPeerRegions(r.Context(), p.peerID, requiredRegions); err != nil {
+					recordFacadeRejection(reasonRegionUnattested)
+					logger.Warnf("[OpenAIFacade] provider peer=%q service=%q failed region attestation for %v: %v; trying next",
+						p.peerID, p.service, requiredRegions, err)
+					continue
+				}
+			}
 			attempt.URL.Path = fmt.Sprintf("/sam/%s/%s/%s%s", p.peerID, api.ServiceTypeStringInference, p.service, r.URL.Path)
 			attempt.URL.RawPath = ""
 			f.forward.ServeHTTP(aw, attempt)

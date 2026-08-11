@@ -71,6 +71,7 @@ func (n *SamNode) Enroll(ctx context.Context, controlPlaneURL string, jwt string
 		PeerId:        n.Host.ID().String(),
 		PublicKey:     pubBytes,
 		RequestedRole: n.config.RequiredRole,
+		Region:        n.config.Region, // normalized and validated at startup
 	}
 	data, err := proto.Marshal(req)
 	if err != nil {
@@ -197,6 +198,7 @@ func (n *SamNode) EnrollBootstrap(ctx context.Context, controlPlaneURL string, b
 		PeerId:         n.Host.ID().String(),
 		PublicKey:      pubBytes,
 		RequestedRole:  n.config.RequiredRole,
+		Region:         n.config.Region, // normalized and validated at startup
 	}
 	data, err := proto.Marshal(req)
 	if err != nil {
