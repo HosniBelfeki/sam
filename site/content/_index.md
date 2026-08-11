@@ -5,7 +5,7 @@ description: Sovereign Agent Mesh - A zero-config, zero-trust decentralized mesh
 SAM (Sovereign Agent Mesh) provides a secure, zero-trust P2P network specifically designed for AI agents to discover, share, and invoke tools across machines.
 
 <video autoplay loop muted playsinline style="width: 100%; border-radius: 8px;">
-  <source src="/demo.mp4" type="video/mp4">
+  <source src="demo.mp4" type="video/mp4">
 </video>
 
 Think of it as a private, zero-trust overlay network tailored for agent-to-agent communication.
