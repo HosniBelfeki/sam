@@ -51,10 +51,13 @@ type modelLister interface {
 }
 
 // modelProvider locates one service able to serve a model.
-// An empty peerID means the service runs on this node.
+// An empty peerID means the service runs on this node. region and active
+// are known only for gossip-observed providers; zero values mean unknown.
 type modelProvider struct {
 	peerID  string
 	service string
+	region  string
+	active  uint32
 }
 
 // openAIFacade exposes an OpenAI-compatible surface on the sidecar
@@ -72,11 +75,17 @@ type openAIFacade struct {
 	// and interest registration so announcements start flowing for a model.
 	viewProviders  func(model string) []modelProvider
 	ensureInterest func(model string)
+	// Scorer seams (may be nil): revocation check and this node's region.
+	isRevoked   func(peerID string) bool
+	localRegion func() string
 
 	ttl     time.Duration
 	mu      sync.Mutex
 	models  map[string][]modelProvider
 	expires time.Time
+
+	backoffMu sync.Mutex
+	backoff   map[string]time.Time
 }
 
 func newOpenAIFacade(node *SamNode, egress http.Handler) *openAIFacade {
@@ -106,7 +115,12 @@ func newOpenAIFacade(node *SamNode, egress http.Handler) *openAIFacade {
 			}
 			var out []modelProvider
 			for _, p := range node.Discovery.Providers(api.ServiceType_SERVICE_TYPE_INFERENCE, model) {
-				out = append(out, modelProvider{peerID: p.PeerID, service: p.Service})
+				out = append(out, modelProvider{
+					peerID:  p.PeerID,
+					service: p.Service,
+					region:  p.Labels[api.LabelRegion],
+					active:  p.Load.ActiveRequests,
+				})
 			}
 			return out
 		},
@@ -115,6 +129,10 @@ func newOpenAIFacade(node *SamNode, egress http.Handler) *openAIFacade {
 				node.Discovery.Ensure(api.ServiceType_SERVICE_TYPE_INFERENCE, model)
 			}
 		},
+		isRevoked: func(peerID string) bool {
+			return node.revokedPeers != nil && node.revokedPeers.Contains(peerID)
+		},
+		localRegion: func() string { return node.config.Region },
 	}
 }
 
@@ -262,17 +280,8 @@ func (f *openAIFacade) collectModels(ctx context.Context) map[string][]modelProv
 	return models
 }
 
-// facadeRR spreads load across remote providers of the same model.
+// facadeRR spreads load across equally ranked remote providers.
 var facadeRR atomic.Uint64
-
-// pickProvider prefers a local provider (locals sort first in collectModels),
-// otherwise round-robins across remotes.
-func pickProvider(providers []modelProvider) modelProvider {
-	if providers[0].peerID == "" {
-		return providers[0]
-	}
-	return providers[facadeRR.Add(1)%uint64(len(providers))]
-}
 
 func (f *openAIFacade) handleModels(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -335,25 +344,53 @@ func (f *openAIFacade) handleCompletions(w http.ResponseWriter, r *http.Request)
 			fmt.Sprintf("model %q is not served by any provider on the mesh", req.Model))
 		return
 	}
-	p := pickProvider(providers)
-	logger.Debugf("[OpenAIFacade] model %q -> provider peer=%q service=%q (%d candidates)",
-		req.Model, p.peerID, p.service, len(providers))
+
+	requiredRegions := parseRequiredRegions(r.Header.Get(api.HeaderSamRequiredRegion))
+	ranked := f.rankProviders(providers, requiredRegions)
+	if len(ranked) == 0 {
+		recordFacadeRejection(reasonNoEligible)
+		writeOpenAIError(w, http.StatusServiceUnavailable, "no_eligible_provider",
+			fmt.Sprintf("model %q has no provider satisfying the request constraints", req.Model))
+		return
+	}
 
 	// The gate already stripped the credential it consumed; a surviving
 	// Authorization header is the destination backend's own credential and
 	// passes through, mirroring the egress path. X-Sam-Authentication is
-	// local-only and must never travel off-node.
+	// local-only, and the region requirement is an instruction to this
+	// sidecar, not to the provider.
 	r.Header.Del(api.HeaderSamAuthentication)
-	r.Body = io.NopCloser(bytes.NewReader(body))
-	r.ContentLength = int64(len(body))
+	r.Header.Del(api.HeaderSamRequiredRegion)
 
-	if p.peerID == "" {
-		f.serveLocal(w, r, p.service)
-		return
+	maxAttempts := min(3, len(ranked))
+	for i := range maxAttempts {
+		p := ranked[i]
+		logger.Debugf("[OpenAIFacade] model %q attempt %d/%d -> provider peer=%q service=%q (%d eligible)",
+			req.Model, i+1, maxAttempts, p.peerID, p.service, len(ranked))
+
+		attempt := r.Clone(r.Context())
+		attempt.Body = io.NopCloser(bytes.NewReader(body))
+		attempt.ContentLength = int64(len(body))
+		aw := newAttemptWriter(w)
+
+		if p.peerID == "" {
+			f.serveLocal(aw, attempt, p.service)
+		} else {
+			attempt.URL.Path = fmt.Sprintf("/sam/%s/%s/%s%s", p.peerID, api.ServiceTypeStringInference, p.service, r.URL.Path)
+			attempt.URL.RawPath = ""
+			f.forward.ServeHTTP(aw, attempt)
+		}
+		if !aw.retryable {
+			return // response delivered (success or non-retryable error)
+		}
+		recordFacadeRetry()
+		f.recordBackoff(p)
+		logger.Warnf("[OpenAIFacade] provider peer=%q service=%q returned %d for model %q; trying next",
+			p.peerID, p.service, aw.status, req.Model)
 	}
-	r.URL.Path = fmt.Sprintf("/sam/%s/%s/%s%s", p.peerID, api.ServiceTypeStringInference, p.service, r.URL.Path)
-	r.URL.RawPath = ""
-	f.forward.ServeHTTP(w, r)
+	recordFacadeRejection(reasonAttemptsExceeded)
+	writeOpenAIError(w, http.StatusServiceUnavailable, "no_available_provider",
+		fmt.Sprintf("all providers for model %q are currently unavailable", req.Model))
 }
 
 func (f *openAIFacade) serveLocal(w http.ResponseWriter, r *http.Request, serviceName string) {

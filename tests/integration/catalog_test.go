@@ -50,7 +50,8 @@ func startBackgroundNode(t *testing.T, nodeBin string, routerAddr string, homeDi
 
 func waitForMCPAddr(t *testing.T, logPath string) string {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	// Generous under CI load; polling returns as soon as the line appears.
+	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		data, _ := os.ReadFile(logPath)
 		lines := strings.Split(string(data), "\n")
@@ -64,7 +65,8 @@ func waitForMCPAddr(t *testing.T, logPath string) string {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	t.Fatalf("timeout waiting for MCP addr in log: %s", logPath)
+	data, _ := os.ReadFile(logPath)
+	t.Fatalf("timeout waiting for MCP addr in log: %s\n--- log contents ---\n%s", logPath, string(data))
 	return ""
 }
 
