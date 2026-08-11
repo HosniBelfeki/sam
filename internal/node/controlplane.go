@@ -28,14 +28,14 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// FetchHubInfo retrieves the latest configuration from the Hub's /info endpoint.
-func FetchHubInfo(ctx context.Context, hubURL string) (*api.HubInfoResponse, error) {
-	if !strings.HasPrefix(hubURL, "http://") && !strings.HasPrefix(hubURL, "https://") {
-		hubURL = "https://" + hubURL
+// FetchControlPlaneInfo retrieves the latest configuration from the control plane's /info endpoint.
+func FetchControlPlaneInfo(ctx context.Context, controlPlaneURL string) (*api.ControlPlaneInfoResponse, error) {
+	if !strings.HasPrefix(controlPlaneURL, "http://") && !strings.HasPrefix(controlPlaneURL, "https://") {
+		controlPlaneURL = "https://" + controlPlaneURL
 	}
-	hubURL = strings.TrimSuffix(hubURL, "/")
+	controlPlaneURL = strings.TrimSuffix(controlPlaneURL, "/")
 
-	urlStr := hubURL + "/info"
+	urlStr := controlPlaneURL + "/info"
 	req, err := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create HTTP request: %w", err)
@@ -56,10 +56,10 @@ func FetchHubInfo(ctx context.Context, hubURL string) (*api.HubInfoResponse, err
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("hub returned status %s: %s", resp.Status, string(body))
+		return nil, fmt.Errorf("control plane returned status %s: %s", resp.Status, string(body))
 	}
 
-	var info api.HubInfoResponse
+	var info api.ControlPlaneInfoResponse
 	if err := proto.Unmarshal(body, &info); err != nil {
 		return nil, fmt.Errorf("failed to decode /info response: %w", err)
 	}
@@ -67,87 +67,87 @@ func FetchHubInfo(ctx context.Context, hubURL string) (*api.HubInfoResponse, err
 	return &info, nil
 }
 
-// SyncHubConfig loads the hub configuration from the store, attempts to refresh it
-// via HTTP from the hub, and updates the store if successful.
-// It returns the hub public key and the latest multiaddresses.
-func SyncHubConfig(ctx context.Context, s *Store) ([]byte, []multiaddr.Multiaddr, error) {
-	pubKey, storedAddrsStr, err := s.LoadHubConfig()
+// SyncMeshConfig loads the mesh configuration from the store, attempts to refresh it
+// via HTTP from the control plane, and updates the store if successful.
+// It returns the control plane public key and the latest multiaddresses.
+func SyncMeshConfig(ctx context.Context, s *Store) ([]byte, []multiaddr.Multiaddr, error) {
+	pubKey, storedAddrsStr, err := s.LoadMeshConfig()
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to load hub config from store: %w", err)
+		return nil, nil, fmt.Errorf("failed to load mesh config from store: %w", err)
 	}
 
-	hubURL, err := s.LoadHubURL()
+	controlPlaneURL, err := s.LoadControlPlaneURL()
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to load hub URL from store: %w", err)
+		return nil, nil, fmt.Errorf("failed to load control plane URL from store: %w", err)
 	}
-	var hubAddrs []multiaddr.Multiaddr
+	var routerAddrs []multiaddr.Multiaddr
 
 	// Parse stored addresses
 	for _, addrStr := range storedAddrsStr {
 		ma, err := multiaddr.NewMultiaddr(addrStr)
 		if err != nil {
-			logger.Warnf("Failed to parse stored hub address %q: %v", addrStr, err)
+			logger.Warnf("Failed to parse stored router address %q: %v", addrStr, err)
 			continue
 		}
-		hubAddrs = append(hubAddrs, ma)
+		routerAddrs = append(routerAddrs, ma)
 	}
 
 	// Fallback for legacy databases: extract URL from multiaddr
-	if hubURL == "" && len(hubAddrs) > 0 {
-		for _, addr := range hubAddrs {
+	if controlPlaneURL == "" && len(routerAddrs) > 0 {
+		for _, addr := range routerAddrs {
 			if val, err := addr.ValueForProtocol(multiaddr.P_DNS4); err == nil {
-				hubURL = "https://" + val
+				controlPlaneURL = "https://" + val
 				break
 			}
 			if val, err := addr.ValueForProtocol(multiaddr.P_DNSADDR); err == nil {
-				hubURL = "https://" + val
+				controlPlaneURL = "https://" + val
 				break
 			}
 		}
-		if hubURL != "" {
-			logger.Infof("Extracted legacy hub URL from multiaddrs: %s", hubURL)
+		if controlPlaneURL != "" {
+			logger.Infof("Extracted legacy control plane URL from multiaddrs: %s", controlPlaneURL)
 		}
 	}
 
 	// If we have a URL, fetch the latest info
-	if hubURL != "" {
-		logger.Infof("Fetching latest hub addresses via HTTP from %s...", hubURL)
-		info, err := FetchHubInfo(ctx, hubURL)
+	if controlPlaneURL != "" {
+		logger.Infof("Fetching latest router addresses via HTTP from %s...", controlPlaneURL)
+		info, err := FetchControlPlaneInfo(ctx, controlPlaneURL)
 		if err != nil {
 			logger.Warnf("Failed to fetch updated addresses via HTTP (using cached): %v", err)
-		} else if len(info.HubAddresses) > 0 {
-			logger.Infof("Discovered latest hub addresses: %v", info.HubAddresses)
-			var newHubAddrs []multiaddr.Multiaddr
-			for _, addrStr := range info.HubAddresses {
+		} else if len(info.RouterAddresses) > 0 {
+			logger.Infof("Discovered latest router addresses: %v", info.RouterAddresses)
+			var newRouterAddrs []multiaddr.Multiaddr
+			for _, addrStr := range info.RouterAddresses {
 				ma, parseErr := multiaddr.NewMultiaddr(addrStr)
 				if parseErr != nil {
-					logger.Warnf("Failed to parse discovered hub address %q: %v", addrStr, parseErr)
+					logger.Warnf("Failed to parse discovered router address %q: %v", addrStr, parseErr)
 					continue
 				}
-				newHubAddrs = append(newHubAddrs, ma)
+				newRouterAddrs = append(newRouterAddrs, ma)
 			}
-			if len(newHubAddrs) > 0 {
-				hubAddrs = newHubAddrs
+			if len(newRouterAddrs) > 0 {
+				routerAddrs = newRouterAddrs
 				if len(pubKey) > 0 {
-					if saveErr := s.SaveHubConfig(pubKey, info.HubAddresses); saveErr != nil {
-						logger.Errorf("Failed to save updated hub config to store: %v", saveErr)
+					if saveErr := s.SaveMeshConfig(pubKey, info.RouterAddresses); saveErr != nil {
+						logger.Errorf("Failed to save updated mesh config to store: %v", saveErr)
 					}
 				}
 			}
 		}
 	}
 
-	return pubKey, hubAddrs, nil
+	return pubKey, routerAddrs, nil
 }
 
-// FetchMeshPolicy retrieves the latest mesh policy from the Hub's /policies endpoint using a biscuit token.
-func FetchMeshPolicy(ctx context.Context, hubURL string, biscuitToken []byte) (*api.PolicyConfigGetResponse, error) {
-	if !strings.HasPrefix(hubURL, "http://") && !strings.HasPrefix(hubURL, "https://") {
-		hubURL = "https://" + hubURL
+// FetchMeshPolicy retrieves the latest mesh policy from the control plane's /policies endpoint using a biscuit token.
+func FetchMeshPolicy(ctx context.Context, controlPlaneURL string, biscuitToken []byte) (*api.PolicyConfigGetResponse, error) {
+	if !strings.HasPrefix(controlPlaneURL, "http://") && !strings.HasPrefix(controlPlaneURL, "https://") {
+		controlPlaneURL = "https://" + controlPlaneURL
 	}
-	hubURL = strings.TrimSuffix(hubURL, "/")
+	controlPlaneURL = strings.TrimSuffix(controlPlaneURL, "/")
 
-	urlStr := hubURL + "/policies"
+	urlStr := controlPlaneURL + "/policies"
 	req, err := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create HTTP request: %w", err)
@@ -170,7 +170,7 @@ func FetchMeshPolicy(ctx context.Context, hubURL string, biscuitToken []byte) (*
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("hub returned status %s: %s", resp.Status, string(body))
+		return nil, fmt.Errorf("control plane returned status %s: %s", resp.Status, string(body))
 	}
 
 	var policyResp api.PolicyConfigGetResponse

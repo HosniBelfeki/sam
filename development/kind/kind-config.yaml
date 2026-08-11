@@ -2,7 +2,7 @@ kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 nodes:
   - role: control-plane
-    # Expose the hub to the host (via the sam-hub-nodeport NodePort) so a
+    # Expose the control plane and router to the host (via the sam-control-plane-nodeport NodePort) so a
     # locally-built sam-node can enroll: host:9090->HTTP, host:4001->libp2p TCP.
     extraPortMappings:
       - containerPort: 30090
@@ -19,7 +19,7 @@ nodes:
         protocol: TCP
   - role: worker
     labels:
-      sam-role: hub
+      sam-role: control-plane
   - role: worker
     labels:
       sam-role: node-a

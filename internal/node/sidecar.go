@@ -127,7 +127,7 @@ func StartSidecarServer(node *SamNode, addr, token, certFile, keyFile, caFile st
 	return server, nil
 }
 
-func StartUnauthSidecarServer(hubURL, addr, certFile, keyFile string) (*http.Server, error) {
+func StartUnauthSidecarServer(controlPlaneURL, addr, certFile, keyFile string) (*http.Server, error) {
 	mux := http.NewServeMux()
 
 	// Public endpoints
@@ -135,7 +135,7 @@ func StartUnauthSidecarServer(hubURL, addr, certFile, keyFile string) (*http.Ser
 	mux.HandleFunc("/readyz", handleReadyz)
 
 	// Mount Unauthenticated MCP handler
-	mcpHandler := NewUnauthenticatedMCPHandler(hubURL)
+	mcpHandler := NewUnauthenticatedMCPHandler(controlPlaneURL)
 	mux.Handle("/", mcpHandler)
 
 	server := &http.Server{

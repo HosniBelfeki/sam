@@ -102,7 +102,7 @@ func TestConnectionMonitor_CrashesAfterFailures(t *testing.T) {
 		store, _ := NewStore(t.TempDir())
 		node, err := NewSamNode(Options{
 			PrivKey:           priv,
-			HubAddrs:          nil,
+			RouterAddrs:       nil,
 			Store:             store,
 			MeshID:            "test",
 			DiscoveryInterval: "10s",

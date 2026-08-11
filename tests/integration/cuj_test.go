@@ -25,7 +25,7 @@ import (
 
 func TestSamNodeRunWithManualTokenStarts(t *testing.T) {
 	nodeBin := buildBinary(t, "./cmd/sam-node")
-	_, hubAddr := startMockLibp2pHub(t)
+	_, routerAddr := startMockRouter(t)
 	tmpHome := t.TempDir()
 	env := append(os.Environ(),
 		"HOME="+tmpHome,
@@ -39,7 +39,7 @@ func TestSamNodeRunWithManualTokenStarts(t *testing.T) {
 		env,
 		"",
 		nodeBin,
-		"run", "--hub", hubAddr,
+		"run", "--control-plane", routerAddr,
 		"--jwt", "test-jwt",
 		"--listen", "/ip4/127.0.0.1/udp/0/quic-v1",
 		"--listen", "/ip4/127.0.0.1/tcp/0",

@@ -18,7 +18,7 @@ teardown() {
   run mesh_start_mock_oidc
   [[ "$status" -eq 0 ]]
 
-  run mesh_start_hub
+  run mesh_start_router
   [[ "$status" -eq 0 ]]
 
   run mesh_start_node 1 "--log-level debug"

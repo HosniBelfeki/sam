@@ -1,7 +1,7 @@
 version: "v1alpha1"
 attenuation:
   # Receiver-side: allow MCP only when the caller's biscuit was minted by
-  # our hub for some peer (zero-trust narrow than "any valid OIDC token").
+  # our control plane for some peer (zero-trust narrow than "any valid OIDC token").
   policies:
 services:
   - type: "mcp"

@@ -354,11 +354,11 @@ func (s *Server) HandleInfo(w http.ResponseWriter, r *http.Request) {
 		routerAddrs = append(routerAddrs, r.Addresses...)
 	}
 
-	resp := &api.HubInfoResponse{
-		OidcIssuer:   issuer,
-		ClientId:     aud,
-		Audience:     aud,
-		HubAddresses: routerAddrs, // Reused this field for back-compatibility with bootstrap routers list
+	resp := &api.ControlPlaneInfoResponse{
+		OidcIssuer:      issuer,
+		ClientId:        aud,
+		Audience:        aud,
+		RouterAddresses: routerAddrs, // Reused this field for back-compatibility with bootstrap routers list
 	}
 
 	respData, err := proto.Marshal(resp)
@@ -518,10 +518,10 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := &api.EnrollResponse{
-		BiscuitToken: biscuitData,
-		HubPublicKey: pubKey,
-		HubAddresses: routerAddrs, // routers nodes multiaddresses
-		Expiration:   token.Expiry.Unix(),
+		BiscuitToken:          biscuitData,
+		ControlPlanePublicKey: pubKey,
+		RouterAddresses:       routerAddrs, // routers nodes multiaddresses
+		Expiration:            token.Expiry.Unix(),
 	}
 
 	respData, err := proto.Marshal(resp)
@@ -1623,11 +1623,11 @@ func (s *Server) buildApprovedBootstrapEnrollResponse(ctx context.Context, biscu
 	}
 
 	return &api.BootstrapEnrollResponse{
-		Status:       api.EnrollmentStatus_ENROLLMENT_STATUS_APPROVED,
-		BiscuitToken: biscuitToken,
-		HubPublicKey: pubKey,
-		HubAddresses: routerAddrs,
-		Expiration:   expiration,
+		Status:                api.EnrollmentStatus_ENROLLMENT_STATUS_APPROVED,
+		BiscuitToken:          biscuitToken,
+		ControlPlanePublicKey: pubKey,
+		RouterAddresses:       routerAddrs,
+		Expiration:            expiration,
 	}, nil
 }
 

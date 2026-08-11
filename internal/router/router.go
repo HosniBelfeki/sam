@@ -272,7 +272,7 @@ func (r *Router) Start() error {
 	go r.runKeysSyncLoop()
 	go r.runFederationLoop()
 	go r.runBiscuitRenewalLoop()
-	go r.listenForHubEvents(r.ctx)
+	go r.listenForControlPlaneEvents(r.ctx)
 
 	r.isReady.Store(true)
 	logger.Infof("Router Online. PeerID: %s, ListenAddrs: %v", r.Host.ID(), r.Host.Addrs())
@@ -322,10 +322,10 @@ func (r *Router) enroll(peerID peer.ID) error {
 	r.keysMu.Lock()
 	r.biscuitToken = enrollResp.BiscuitToken
 	r.biscuitExpiration = time.Unix(enrollResp.Expiration, 0)
-	r.trustedPublicKeys = []ed25519.PublicKey{enrollResp.HubPublicKey}
+	r.trustedPublicKeys = []ed25519.PublicKey{enrollResp.ControlPlanePublicKey}
 	r.keysMu.Unlock()
 
-	if err := identity.VerifyBiscuitRole(enrollResp.BiscuitToken, enrollResp.HubPublicKey, r.config.RequiredRole); err != nil {
+	if err := identity.VerifyBiscuitRole(enrollResp.BiscuitToken, enrollResp.ControlPlanePublicKey, r.config.RequiredRole); err != nil {
 		return fmt.Errorf("enrolled biscuit token lacks required role %q: %w", r.config.RequiredRole, err)
 	}
 
@@ -444,10 +444,10 @@ func (r *Router) enrollBootstrap(peerID peer.ID) error {
 	r.keysMu.Lock()
 	r.biscuitToken = enrollResp.BiscuitToken
 	r.biscuitExpiration = time.Unix(enrollResp.Expiration, 0)
-	r.trustedPublicKeys = []ed25519.PublicKey{enrollResp.HubPublicKey}
+	r.trustedPublicKeys = []ed25519.PublicKey{enrollResp.ControlPlanePublicKey}
 	r.keysMu.Unlock()
 
-	if err := identity.VerifyBiscuitRole(enrollResp.BiscuitToken, enrollResp.HubPublicKey, r.config.RequiredRole); err != nil {
+	if err := identity.VerifyBiscuitRole(enrollResp.BiscuitToken, enrollResp.ControlPlanePublicKey, r.config.RequiredRole); err != nil {
 		return fmt.Errorf("enrolled biscuit token lacks required role %q: %w", r.config.RequiredRole, err)
 	}
 
@@ -565,7 +565,7 @@ func (r *Router) verifyEvent(event *api.MeshEvent) bool {
 	return false
 }
 
-func (r *Router) listenForHubEvents(ctx context.Context) {
+func (r *Router) listenForControlPlaneEvents(ctx context.Context) {
 	defer r.wg.Done()
 	if r.EventTopic == nil {
 		return
@@ -774,12 +774,12 @@ func (r *Router) connectBootstrapRouters() {
 		return
 	}
 
-	var info api.HubInfoResponse
+	var info api.ControlPlaneInfoResponse
 	if err := proto.Unmarshal(body, &info); err != nil {
 		return
 	}
 
-	for _, addrStr := range info.HubAddresses {
+	for _, addrStr := range info.RouterAddresses {
 		ma, err := multiaddr.NewMultiaddr(addrStr)
 		if err != nil {
 			continue

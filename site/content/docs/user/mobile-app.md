@@ -37,7 +37,7 @@ Exposes capabilities directly to the OS registry, allowing native assistants (li
 
 ## How to Use the Application
 
-1.  **Enrollment**: Enter the **Hub URL** (e.g., `https://bananas.sam-mesh.dev`) and your **Enrollment JWT**.
+1.  **Enrollment**: Enter the **Control plane URL** (e.g., `https://bananas.sam-mesh.dev`) and your **Enrollment JWT**.
 2.  **API Token**: Set a local API token (defaults to `secret-token`) to secure local access.
 3.  **Start Node**: Launches the background Go node runtime.
 4.  **Dashboard**: Monitor connected peers and DHT size.

@@ -87,5 +87,5 @@ Discovered tools:
 
 Calling get_mesh_info tool...
 Result:
-{'known_peers': [...], 'connected_peers': [...], 'dht_size': 1, 'hub_peer_id': '...'}
+{'known_peers': [...], 'connected_peers': [...], 'dht_size': 1, 'router_peer_id': '...'}
 ```

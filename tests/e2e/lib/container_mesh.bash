@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # Shared BATS helpers for containerized SAM mesh tests.
-# Refactored to use Kind-hosted unified OIDC and Hub services.
+# Refactored to use Kind-hosted unified OIDC and control plane services.
 
 if [[ -z "${MESH_HELPERS_LOADED:-}" ]]; then
   MESH_HELPERS_LOADED=1
@@ -180,24 +180,24 @@ if [[ -z "${MESH_HELPERS_LOADED:-}" ]]; then
     local oidc_node_ip
     oidc_node_ip=$(docker inspect -f "{{(index .NetworkSettings.Networks \"${net}\").IPAddress}}" "${oidc_node}")
 
-    # Check if a custom local Hub container exists in this test scope
-    local hub_ip=""
-    local custom_hub="${MESH_PREFIX}-hub"
-    if docker inspect "${custom_hub}" >/dev/null 2>&1; then
-      hub_ip=$(docker inspect -f "{{(index .NetworkSettings.Networks \"${net}\").IPAddress}}" "${custom_hub}")
+    # Check if a custom local router container exists in this test scope
+    local router_ip=""
+    local custom_router="${MESH_PREFIX}-router"
+    if docker inspect "${custom_router}" >/dev/null 2>&1; then
+      router_ip=$(docker inspect -f "{{(index .NetworkSettings.Networks \"${net}\").IPAddress}}" "${custom_router}")
       local cp_ip=""
-      local custom_cp="${MESH_PREFIX}-hub-cp"
+      local custom_cp="${MESH_PREFIX}-control-plane"
       if docker inspect "${custom_cp}" >/dev/null 2>&1; then
         cp_ip=$(docker inspect -f "{{(index .NetworkSettings.Networks \"${net}\").IPAddress}}" "${custom_cp}")
       fi
-      echo "--add-host mock-oidc:${oidc_node_ip} --add-host sam-hub:${hub_ip} --add-host sam-control-plane:${cp_ip}"
+      echo "--add-host mock-oidc:${oidc_node_ip} --add-host sam-router:${router_ip} --add-host sam-control-plane:${cp_ip}"
     else
       # Resolve sam-router-0 node IP
       local router_node
       router_node=$(kubectl --context="${KUBECONTEXT:-kind-sam-wi-test}" get pod sam-router-0 -o jsonpath='{.spec.nodeName}')
       local router_node_ip
       router_node_ip=$(docker inspect -f "{{(index .NetworkSettings.Networks \"${net}\").IPAddress}}" "${router_node}")
-      echo "--add-host mock-oidc:${oidc_node_ip} --add-host sam-hub:${router_node_ip} --add-host sam-router:${router_node_ip} --add-host sam-control-plane:${router_node_ip} --add-host ${router_node}:${router_node_ip}"
+      echo "--add-host mock-oidc:${oidc_node_ip} --add-host sam-router:${router_node_ip} --add-host sam-control-plane:${router_node_ip} --add-host ${router_node}:${router_node_ip}"
     fi
   }
 
@@ -276,7 +276,7 @@ if [[ -z "${MESH_HELPERS_LOADED:-}" ]]; then
       --set fullnameOverride="sam" \
       --set global.imageTag="local" \
       --set controlPlane.oidcIssuer="${ISSUERS//,/\\,}" \
-      --set controlPlane.allowedAudiences="sam-mesh-audience\,sam-hub-audience" \
+      --set controlPlane.allowedAudiences="sam-mesh-audience\,sam-control-plane-audience" \
       --set controlPlane.insecureSkipTlsVerify=true \
       --set controlPlane.replicaCount=2 \
       --set controlPlane.hostPort=8080 \
@@ -295,11 +295,11 @@ if [[ -z "${MESH_HELPERS_LOADED:-}" ]]; then
       fi
       sleep 0.1
     done
-    local hub_peer_id
-    hub_peer_id=$(kubectl --context="${KUBECONTEXT}" logs "sam-router-0" | grep -oE '12D3Koo[a-zA-Z0-9]+' | head -n 1 || true)
-    [[ -n "${hub_peer_id}" ]]
+    local router_peer_id
+    router_peer_id=$(kubectl --context="${KUBECONTEXT}" logs "sam-router-0" | grep -oE '12D3Koo[a-zA-Z0-9]+' | head -n 1 || true)
+    [[ -n "${router_peer_id}" ]]
 
-    echo "${hub_peer_id}" > "/tmp/sam-wi-test-hub-peer-id"
+    echo "${router_peer_id}" > "/tmp/sam-wi-test-router-peer-id"
     return 0
   }
 
@@ -319,8 +319,8 @@ if [[ -z "${MESH_HELPERS_LOADED:-}" ]]; then
     local add_hosts
     add_hosts=$(mesh_get_add_hosts)
 
-    local hub_peer_id
-    hub_peer_id=$(cat "/tmp/${MESH_PREFIX}-hub-peer-id")
+    local router_peer_id
+    router_peer_id=$(cat "/tmp/${MESH_PREFIX}-router-peer-id")
 
     local mount_args=()
     local config_args=()
@@ -342,7 +342,7 @@ if [[ -z "${MESH_HELPERS_LOADED:-}" ]]; then
       ${flags} \
       --log-level debug \
       --discovery-interval 2s \
-      --hub "http://sam-control-plane:8080" \
+      --control-plane "http://sam-control-plane:8080" \
       --client-id "sam-mesh-audience" \
       --client-secret "sam-e2e-secret" \
       --oidc-issuer "http://mock-oidc:18080" \
@@ -363,17 +363,17 @@ if [[ -z "${MESH_HELPERS_LOADED:-}" ]]; then
     return 0
   }
 
-  mesh_start_hub() {
-    # No-op: Hub is running in k8s
+  mesh_start_router() {
+    # No-op: router is running in k8s
     local peer_id
-    peer_id=$(cat "/tmp/sam-wi-test-hub-peer-id")
-    echo "${peer_id}" > "/tmp/${MESH_PREFIX}-hub-peer-id"
+    peer_id=$(cat "/tmp/sam-wi-test-router-peer-id")
+    echo "${peer_id}" > "/tmp/${MESH_PREFIX}-router-peer-id"
     return 0
   }
 
   mesh_assert_container_running() {
     local name="$1"
-    if [[ "${name}" == *"-hub" ]]; then
+    if [[ "${name}" == *"-router" ]]; then
       kubectl --context="${KUBECONTEXT:-kind-sam-wi-test}" get pod sam-router-0 -o jsonpath='{.status.phase}' | grep -q "Running"
       return $?
     fi

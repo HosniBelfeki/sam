@@ -78,7 +78,7 @@ docker run --name sam-control-plane \
   --db-driver sqlite \
   --db-dsn /data/control-plane.db \
   --issuer http://mock-oidc:18080 \
-  --allowed-audiences sam-mesh-audience,sam-hub-audience \
+  --allowed-audiences sam-mesh-audience,sam-control-plane-audience \
   --admin-token secret-admin-token \
   --insecure-skip-tls-verify \
   --log-level debug
@@ -143,7 +143,7 @@ docker run --name host-node \
   sam-node:local \
   run \
   --data-dir /data \
-  --hub http://sam-control-plane:37001 \
+  --control-plane http://sam-control-plane:37001 \
   --jwt "$HOST_JWT" \
   --bind-addr 0.0.0.0:8081 \
   --api-token host-token \

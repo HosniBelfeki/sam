@@ -22,10 +22,10 @@ import (
 )
 
 type Config struct {
-	HubURL     string
-	AdminToken string
-	StaticDir  string
-	BasePath   string
+	ControlPlaneURL string
+	AdminToken      string
+	StaticDir       string
+	BasePath        string
 }
 
 type Server struct {
@@ -36,20 +36,20 @@ type Server struct {
 }
 
 func NewServer(cfg Config) (*Server, error) {
-	if cfg.HubURL == "" {
-		return nil, fmt.Errorf("HubURL is required")
+	if cfg.ControlPlaneURL == "" {
+		return nil, fmt.Errorf("ControlPlaneURL is required")
 	}
 
-	hubURL, err := url.Parse(cfg.HubURL)
+	controlPlaneURL, err := url.Parse(cfg.ControlPlaneURL)
 	if err != nil {
-		return nil, fmt.Errorf("invalid HubURL: %w", err)
+		return nil, fmt.Errorf("invalid ControlPlaneURL: %w", err)
 	}
 
 	var provider *oidc.Provider
 	var clientID string
 
 	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(cfg.HubURL + "/info")
+	resp, err := client.Get(cfg.ControlPlaneURL + "/info")
 	if err != nil {
 		return nil, fmt.Errorf("failed to query control-plane info for OIDC discovery: %w", err)
 	}
@@ -60,9 +60,9 @@ func NewServer(cfg Config) (*Server, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to read control-plane info body: %w", err)
 		}
-		var info api.HubInfoResponse
+		var info api.ControlPlaneInfoResponse
 		if err := proto.Unmarshal(body, &info); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal hub info: %w", err)
+			return nil, fmt.Errorf("failed to unmarshal control plane info: %w", err)
 		}
 
 		if info.OidcIssuer != "" && info.ClientId != "" {
@@ -88,7 +88,7 @@ func NewServer(cfg Config) (*Server, error) {
 	// Create reverse proxy to the control plane
 	proxy := &httputil.ReverseProxy{
 		Rewrite: func(r *httputil.ProxyRequest) {
-			r.SetURL(hubURL)
+			r.SetURL(controlPlaneURL)
 			r.Out.Host = r.In.Host
 			// If Authorization header is not set, inject from sam_session cookie
 			if r.Out.Header.Get("Authorization") == "" {

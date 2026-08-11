@@ -14,7 +14,7 @@ the capability needed to complete the task.
 Start by understanding the local node and mesh state:
 
 - Use `get_mesh_info` with `{}` to inspect `connected_peers`, `dht_size`, and
-  `hub_peer_id`.
+  `router_peer_id`.
 - Use `list_local_services` with `{}` to see services registered on the local
   node.
 

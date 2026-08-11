@@ -301,7 +301,7 @@ func TestBaselineTargetCheck(t *testing.T) {
 	}
 }
 
-func TestHubStaticTimeCheck(t *testing.T) {
+func TestControlPlaneStaticTimeCheck(t *testing.T) {
 	pub, priv := makeKeyPair(t)
 
 	tests := []struct {
@@ -340,7 +340,7 @@ func TestHubStaticTimeCheck(t *testing.T) {
 				IDs:  []biscuit.Term{biscuit.Date(tt.timeNow)},
 			}})
 
-			authorizer.AddCheck(HubStaticTimeCheck)
+			authorizer.AddCheck(ControlPlaneStaticTimeCheck)
 			authorizer.AddPolicy(AllowIfTruePolicy)
 
 			err := authorizer.Authorize()

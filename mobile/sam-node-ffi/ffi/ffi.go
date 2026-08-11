@@ -46,7 +46,7 @@ var (
 // MobileConfig holds simple configuration options for the mobile agent.
 type MobileConfig struct {
 	DataDir           string `json:"dataDir"`
-	HubURL            string `json:"hubURL"`
+	ControlPlaneURL   string `json:"controlPlaneURL"`
 	MeshID            string `json:"meshID"`
 	BindAddr          string `json:"bindAddr"`
 	ApiToken          string `json:"apiToken"`
@@ -102,19 +102,19 @@ func StartNode(configJSON string) error {
 
 	token, _ := store.LoadIdentity()
 	if len(token) == 0 {
-		displayHub := config.HubURL
-		if displayHub == "" {
-			if h, err := store.LoadHubURL(); err == nil && h != "" {
-				displayHub = h
+		displayControlPlane := config.ControlPlaneURL
+		if displayControlPlane == "" {
+			if h, err := store.LoadControlPlaneURL(); err == nil && h != "" {
+				displayControlPlane = h
 			} else {
-				displayHub = "https://bananas.sam-mesh.dev"
+				displayControlPlane = "https://bananas.sam-mesh.dev"
 			}
 		}
 		bindAddr := config.BindAddr
 		if bindAddr == "" {
 			bindAddr = "127.0.0.1:8080"
 		}
-		srv, err := node.StartUnauthSidecarServer(displayHub, bindAddr, "", "")
+		srv, err := node.StartUnauthSidecarServer(displayControlPlane, bindAddr, "", "")
 		if err != nil {
 			_ = store.Close()
 			activeStore = nil
@@ -124,14 +124,14 @@ func StartNode(configJSON string) error {
 		return nil
 	}
 
-	var hubPubKey ed25519.PublicKey
-	var hubAddrs []multiaddr.Multiaddr
+	var controlPlanePubKey ed25519.PublicKey
+	var routerAddrs []multiaddr.Multiaddr
 
 	// Sync config from stored/synced configuration
-	storedPubKey, syncedAddrs, err := node.SyncHubConfig(context.Background(), store)
+	storedPubKey, syncedAddrs, err := node.SyncMeshConfig(context.Background(), store)
 	if err == nil && len(storedPubKey) > 0 {
-		hubPubKey = storedPubKey
-		hubAddrs = syncedAddrs
+		controlPlanePubKey = storedPubKey
+		routerAddrs = syncedAddrs
 	}
 
 	priv := node.GetOrGenerateKey(store)
@@ -157,8 +157,8 @@ func StartNode(configJSON string) error {
 	// Create and initialize the node
 	samNode, err := node.NewSamNode(node.Options{
 		PrivKey:              priv,
-		HubPubKey:            hubPubKey,
-		HubAddrs:             hubAddrs,
+		ControlPlanePubKey:   controlPlanePubKey,
+		RouterAddrs:          routerAddrs,
 		Store:                store,
 		MeshID:               meshID,
 		DiscoveryInterval:    discoveryInterval,
@@ -258,7 +258,7 @@ func GetNodeID() string {
 }
 
 // EnrollNode enrolls a node.
-func EnrollNode(dataDir string, hubURL string, jwt string, allowLoopback bool) error {
+func EnrollNode(dataDir string, controlPlaneURL string, jwt string, allowLoopback bool) error {
 	_ = os.MkdirAll(dataDir, 0700)
 	logFilePath := filepath.Join(dataDir, "node.log")
 	golog.SetupLogging(golog.Config{
@@ -276,11 +276,11 @@ func EnrollNode(dataDir string, hubURL string, jwt string, allowLoopback bool) e
 
 	priv := node.GetOrGenerateKey(store)
 
-	var initHubAddrs []multiaddr.Multiaddr
-	if !strings.HasPrefix(hubURL, "http://") && !strings.HasPrefix(hubURL, "https://") {
-		ma, err := multiaddr.NewMultiaddr(hubURL)
+	var initRouterAddrs []multiaddr.Multiaddr
+	if !strings.HasPrefix(controlPlaneURL, "http://") && !strings.HasPrefix(controlPlaneURL, "https://") {
+		ma, err := multiaddr.NewMultiaddr(controlPlaneURL)
 		if err == nil {
-			initHubAddrs = []multiaddr.Multiaddr{ma}
+			initRouterAddrs = []multiaddr.Multiaddr{ma}
 		}
 	}
 
@@ -296,7 +296,7 @@ func EnrollNode(dataDir string, hubURL string, jwt string, allowLoopback bool) e
 
 	meshNode, err := node.NewSamNode(node.Options{
 		PrivKey:       priv,
-		HubAddrs:      initHubAddrs,
+		RouterAddrs:   initRouterAddrs,
 		Store:         store,
 		AllowLoopback: allowLoopback,
 		ListenAddrs:   listenAddrs,
@@ -312,27 +312,27 @@ func EnrollNode(dataDir string, hubURL string, jwt string, allowLoopback bool) e
 		_ = meshNode.Teardown()
 	}()
 
-	err = meshNode.Enroll(enrollCtx, hubURL, jwt)
+	err = meshNode.Enroll(enrollCtx, controlPlaneURL, jwt)
 	if err != nil {
 		return fmt.Errorf("enrollment failed: %w", err)
 	}
 
-	if err := store.SaveHubURL(hubURL); err != nil {
-		return fmt.Errorf("failed to save hub URL: %w", err)
+	if err := store.SaveControlPlaneURL(controlPlaneURL); err != nil {
+		return fmt.Errorf("failed to save control plane URL: %w", err)
 	}
 
-	_, _, err = node.SyncHubConfig(enrollCtx, store)
+	_, _, err = node.SyncMeshConfig(enrollCtx, store)
 	if err != nil {
-		return fmt.Errorf("failed to sync hub config post-enrollment: %w", err)
+		return fmt.Errorf("failed to sync mesh config post-enrollment: %w", err)
 	}
 
 	return nil
 }
 
-// FetchHubInfoJSON fetches hub info and returns it as a JSON string.
+// FetchControlPlaneInfoJSON fetches control plane info and returns it as a JSON string.
 // If an error occurs, it returns a JSON object with an "error" field.
-func FetchHubInfoJSON(hubURL string) string {
-	info, err := node.FetchHubInfo(context.Background(), hubURL)
+func FetchControlPlaneInfoJSON(controlPlaneURL string) string {
+	info, err := node.FetchControlPlaneInfo(context.Background(), controlPlaneURL)
 	if err != nil {
 		return fmt.Sprintf(`{"error": %q}`, err.Error())
 	}

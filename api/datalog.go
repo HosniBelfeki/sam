@@ -33,7 +33,7 @@ import (
 //
 // 1. Replay Defense Facts:
 //    - client_peer_id: The libp2p PeerID of the node that authenticated with the
-//      Hub to request this token. Embedded in the token authority block.
+//      control plane to request this token. Embedded in the token authority block.
 //    - connection_peer_id: The libp2p PeerID of the caller initiating the connection
 //      to the receiving node. Injected dynamically at runtime by the receiver.
 //    - Replay Check: Verified using the check:
@@ -46,7 +46,7 @@ import (
 //      runtime from OIDC claims or node authentication.
 //    - allow_network_target: Derived fact generated on the receiver node by matching
 //      target_fact against the token's allowed targets (e.g., granted_target_exact).
-//    - target_unrestricted: Fact injected in the token by the Hub indicating that
+//    - target_unrestricted: Fact injected in the token by the control plane indicating that
 //      the client has unrestricted network access and bypasses target constraints.
 //    - Target Check: Verified using the check:
 //      `check if allow_network_target($fact, $val) or target_unrestricted()`
@@ -233,8 +233,8 @@ var (
 	// TargetFactRules maps node and OIDC claims to target_fact datalog facts.
 	TargetFactRules []biscuit.Rule
 
-	// HubStaticTimeCheck is the standard check for verifying OIDC token expiration.
-	HubStaticTimeCheck biscuit.Check
+	// ControlPlaneStaticTimeCheck is the standard check for verifying OIDC token expiration.
+	ControlPlaneStaticTimeCheck biscuit.Check
 
 	// AllowIfTruePolicy is the static policy "allow if true" used during token verification.
 	AllowIfTruePolicy biscuit.Policy
@@ -277,7 +277,7 @@ func init() {
 	}
 
 	// 2. Target Evaluation Rules
-	// These rules satisfy the check if allow_network_target($fact, $val) injected by the Hub.
+	// These rules satisfy the check if allow_network_target($fact, $val) injected by the control plane.
 	ruleStrs := []string{
 		// Exact Match: Derives allow_network_target if the token has a granted_target_exact fact matching a target_fact exactly.
 		fmt.Sprintf(`%s($fact, $val) <- %s($fact, $val), %s($fact, $val)`, FactAllowNetworkTarget, FactTargetFact, FactGrantedTargetExact),
@@ -309,7 +309,7 @@ func init() {
 
 	var err error
 
-	// BaselineReplayCheck prevents token theft/replay by ensuring the client_peer_id fact (embedded by the Hub during issuance)
+	// BaselineReplayCheck prevents token theft/replay by ensuring the client_peer_id fact (embedded by the control plane during issuance)
 	// perfectly matches the connection_peer_id fact (provided by the local node verifying the incoming libp2p connection).
 	BaselineReplayCheck, err = parser.FromStringCheck(fmt.Sprintf(`check if %s($id), %s($id)`, FactClientPeerID, FactConnectionPeerID))
 	if err != nil {
@@ -341,8 +341,8 @@ func init() {
 	}
 	TargetFactRules = append(TargetFactRules, r)
 
-	// HubStaticTimeCheck ensures the token is not expired at the time of evaluation.
-	HubStaticTimeCheck, err = parser.FromStringCheck(fmt.Sprintf(`check if %s($time), %s($exp), $time <= $exp`, FactTime, FactExpiration))
+	// ControlPlaneStaticTimeCheck ensures the token is not expired at the time of evaluation.
+	ControlPlaneStaticTimeCheck, err = parser.FromStringCheck(fmt.Sprintf(`check if %s($time), %s($exp), $time <= $exp`, FactTime, FactExpiration))
 	if err != nil {
 		panic(fmt.Sprintf("failed to parse static time check: %v", err))
 	}
@@ -350,7 +350,7 @@ func init() {
 	// AllowIfTruePolicy is a permissive fallback policy used when explicit local node policies are omitted.
 	// Note that this does NOT mean all requests are automatically allowed. Biscuit requires at least one policy
 	// to evaluate to true AND all checks to pass. This simply satisfies the policy requirement, effectively
-	// deferring entirely to the Hub's checks and granted facts without imposing extra local restrictions.
+	// deferring entirely to the control plane's checks and granted facts without imposing extra local restrictions.
 	AllowIfTruePolicy, err = parser.FromStringPolicy("allow if true")
 	if err != nil {
 		panic(fmt.Sprintf("failed to parse static allow policy: %v", err))

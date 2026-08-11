@@ -46,7 +46,7 @@ spec:
         app: {{ include "sam-mesh.fullname" . }}-dex
     spec:
       nodeSelector:
-        sam-role: hub
+        sam-role: control-plane
       containers:
       - name: dex
         image: "{{ .Values.dex.image.repository }}:{{ .Values.dex.image.tag }}"

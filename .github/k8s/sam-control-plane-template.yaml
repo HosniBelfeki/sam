@@ -122,7 +122,7 @@ spec:
         - "--db-driver=postgres"
         - "--db-dsn=postgres://sam:sam-secret-password@sam-db-${ENV_NAME}:5432/sam_mesh?sslmode=disable"
         - "--issuer=https://auth.sam-mesh.dev,https://container.googleapis.com/v1/projects/${GCP_PROJECT_ID}/locations/${CLUSTER_REGION}/clusters/${CLUSTER_NAME}"
-        - "--allowed-audiences=sam-mesh-audience,sam-hub-audience"
+        - "--allowed-audiences=sam-mesh-audience,sam-control-plane-audience"
         - "--admin-token=$(ADMIN_TOKEN)"
         - "--auto-approve-enrollment"
         - "--key-grace-period=48h"

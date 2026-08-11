@@ -42,13 +42,13 @@ attenuation:
     # 1. Enforce strict TLS certificate expiry limit
     - 'check if time($time), $time < 2026-12-31T23:59:59Z;'
 
-  # local policies can contain deny rules (to restrict Hub grants) or allow rules (to override implicit denies)
+  # local policies can contain deny rules (to restrict control plane grants) or allow rules (to override implicit denies)
   policies:
     # 2. Block db-writer calls during off-hours (9 PM to 6 AM)
     - 'deny if service("mcp", "db-writer"), current_hour($hour), $hour >= 21;'
     - 'deny if service("mcp", "db-writer"), current_hour($hour), $hour < 6;'
     
-    # 3. Restrict contractors from accessing db-writer even if Hub granted it
+    # 3. Restrict contractors from accessing db-writer even if the control plane granted it
     - 'deny if service("mcp", "db-writer"), role("contractor");'
     
     # 4. Explicitly allow local admin bypass

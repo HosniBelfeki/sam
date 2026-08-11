@@ -25,7 +25,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-func startMockLibp2pHub(t *testing.T) (peer.ID, string) {
+func startMockRouter(t *testing.T) (peer.ID, string) {
 	t.Helper()
 	h, err := libp2p.New(libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"))
 	if err != nil {
@@ -34,7 +34,7 @@ func startMockLibp2pHub(t *testing.T) (peer.ID, string) {
 
 	kdht, err := dht.New(h, dht.Mode(dht.ModeServer), dht.ProtocolPrefix("/sam"))
 	if err != nil {
-		t.Fatalf("failed to create DHT on mock hub: %v", err)
+		t.Fatalf("failed to create DHT on mock router: %v", err)
 	}
 
 	// Generate mock control plane keys
@@ -125,9 +125,9 @@ func startMockLibp2pHub(t *testing.T) (peer.ID, string) {
 		}
 
 		resp := &api.EnrollResponse{
-			BiscuitToken: biscuitBytes,
-			HubPublicKey: cpPub,
-			HubAddresses: []string{h.Addrs()[0].String() + "/p2p/" + h.ID().String()},
+			BiscuitToken:          biscuitBytes,
+			ControlPlanePublicKey: cpPub,
+			RouterAddresses:       []string{h.Addrs()[0].String() + "/p2p/" + h.ID().String()},
 		}
 		data, err := proto.Marshal(resp)
 		if err != nil {
@@ -151,8 +151,8 @@ func startMockLibp2pHub(t *testing.T) (peer.ID, string) {
 }
 
 func TestStaticServiceRegistrationRequiresConnection(t *testing.T) {
-	// 1. Setup mock hub
-	_, hubURL := startMockLibp2pHub(t)
+	// 1. Setup mock router
+	_, routerAddr := startMockRouter(t)
 
 	// 2. Create temp store
 	tmpDir := t.TempDir()
@@ -167,10 +167,10 @@ func TestStaticServiceRegistrationRequiresConnection(t *testing.T) {
 		t.Fatalf("failed to generate libp2p key: %v", err)
 	}
 
-	// 4. Create Node with empty hub addrs initially
+	// 4. Create Node with empty router addrs initially
 	node, err := NewSamNode(Options{
 		PrivKey:           priv,
-		HubAddrs:          []multiaddr.Multiaddr{},
+		RouterAddrs:       []multiaddr.Multiaddr{},
 		Store:             store,
 		MeshID:            "test-mesh",
 		DiscoveryInterval: "100ms",
@@ -199,7 +199,7 @@ func TestStaticServiceRegistrationRequiresConnection(t *testing.T) {
 	upstream := httptest.NewServer(newFakeMCPHandler(t, []*mcp.Tool{}))
 	defer upstream.Close()
 
-	// 5. Try to register static services BEFORE connecting to hub
+	// 5. Try to register static services BEFORE connecting to router
 	services := []api.ServiceConfig{
 		{
 			Type:        "mcp",
@@ -213,14 +213,14 @@ func TestStaticServiceRegistrationRequiresConnection(t *testing.T) {
 	defer cancel()
 	err = node.RegisterStaticServices(ctxTimeout, services)
 	if err == nil {
-		t.Fatal("Expected RegisterStaticServices to fail before connecting to hub, but it succeeded")
+		t.Fatal("Expected RegisterStaticServices to fail before connecting to router, but it succeeded")
 	}
 	if !strings.Contains(err.Error(), "timeout waiting for DHT to be ready") && !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("Expected error to indicate timeout or deadline exceeded, got: %v", err)
 	}
 
-	// 6. Now enroll and connect to hub (which sets up DHT and hub connection)
-	err = node.Enroll(ctx, hubURL, "dummy-jwt")
+	// 6. Now enroll and connect to router (which sets up DHT and router connection)
+	err = node.Enroll(ctx, routerAddr, "dummy-jwt")
 	if err != nil {
 		t.Fatalf("failed to enroll: %v", err)
 	}
@@ -238,8 +238,8 @@ func TestStaticServiceRegistrationRequiresConnection(t *testing.T) {
 }
 
 func TestStaticServiceRegistrationCommandFailure(t *testing.T) {
-	// 1. Setup mock hub
-	_, hubURL := startMockLibp2pHub(t)
+	// 1. Setup mock router
+	_, routerAddr := startMockRouter(t)
 
 	// 2. Create temp store
 	tmpDir := t.TempDir()
@@ -254,10 +254,10 @@ func TestStaticServiceRegistrationCommandFailure(t *testing.T) {
 		t.Fatalf("failed to generate libp2p key: %v", err)
 	}
 
-	// 4. Create Node with empty hub addrs initially
+	// 4. Create Node with empty router addrs initially
 	node, err := NewSamNode(Options{
 		PrivKey:           priv,
-		HubAddrs:          []multiaddr.Multiaddr{},
+		RouterAddrs:       []multiaddr.Multiaddr{},
 		Store:             store,
 		MeshID:            "test-mesh",
 		DiscoveryInterval: "100ms",
@@ -282,8 +282,8 @@ func TestStaticServiceRegistrationCommandFailure(t *testing.T) {
 		}
 	}()
 
-	// 5. Enroll and connect to hub (which sets up DHT and hub connection)
-	err = node.Enroll(ctx, hubURL, "dummy-jwt")
+	// 5. Enroll and connect to router (which sets up DHT and router connection)
+	err = node.Enroll(ctx, routerAddr, "dummy-jwt")
 	if err != nil {
 		t.Fatalf("failed to enroll: %v", err)
 	}

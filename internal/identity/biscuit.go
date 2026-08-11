@@ -238,7 +238,7 @@ func VerifyBiscuitAndGetKey(biscuitData []byte, expectedPeer peer.ID, trustedPub
 			},
 		})
 
-		authorizer.AddCheck(api.HubStaticTimeCheck)
+		authorizer.AddCheck(api.ControlPlaneStaticTimeCheck)
 		authorizer.AddPolicy(api.AllowIfTruePolicy)
 
 		if err := authorizer.Authorize(); err == nil {
@@ -408,15 +408,15 @@ func VerifyAndExtractPeerID(trustedPublicKeys []ed25519.PublicKey, biscuitData [
 	return pID, nil
 }
 
-// VerifyBiscuitRole checks that the biscuit is signed by the hub's public key
+// VerifyBiscuitRole checks that the biscuit is signed by the control plane's public key
 // and contains the specified role fact.
-func VerifyBiscuitRole(biscuitData []byte, hubPubKey ed25519.PublicKey, expectedRole string) error {
+func VerifyBiscuitRole(biscuitData []byte, controlPlanePubKey ed25519.PublicKey, expectedRole string) error {
 	b, err := biscuit.Unmarshal(biscuitData)
 	if err != nil {
 		return fmt.Errorf("malformed biscuit: %w", err)
 	}
 
-	authorizer, err := b.Authorizer(hubPubKey)
+	authorizer, err := b.Authorizer(controlPlanePubKey)
 	if err != nil {
 		return fmt.Errorf("failed to create authorizer: %w", err)
 	}

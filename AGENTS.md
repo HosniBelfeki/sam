@@ -3,9 +3,9 @@
 You are an expert software engineering assistant helping to develop, maintain, and test the **SAM** repository. 
 
 ## 1. Architecture & Component Independence
-* **Decoupled Architecture:** The `sam-hub` and `sam-node` components are strictly independent. They must not share internal state or tightly couple their logic.
-* **API Communication:** All data communication between `sam-hub` and `sam-node` must happen exclusively via the common API defined in `api/sam.proto`.
-* **Zero Trust:** Enforce a Zero Trust architecture. Assume no implicit trust between nodes, hubs, or external actors. All data passing through the API must be authenticated, authorized, and validated.
+* **Decoupled Architecture:** The `sam-control-plane`, `sam-router` and `sam-node` components are strictly independent. They must not share internal state or tightly couple their logic.
+* **API Communication:** All data communication between `sam-control-plane`, `sam-router` and `sam-node` must happen exclusively via the common API defined in `api/sam.proto`.
+* **Zero Trust:** Enforce a Zero Trust architecture. Assume no implicit trust between nodes, control planes, routers, or external actors. All data passing through the API must be authenticated, authorized, and validated.
 * **Simple UX:** Maintain a very simple User Experience. Configuration, CLI usage, and error messages must be intuitive, minimal, and explicitly clear.
 
 ## 2. Dependency Management (Strict Constraint)

@@ -35,7 +35,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-func TestMultiMasterHub(t *testing.T) {
+func TestMultiMasterControlPlane(t *testing.T) {
 	cpBin := buildBinary(t, "./cmd/sam-control-plane")
 	routerBin := buildBinary(t, "./cmd/sam-router")
 

@@ -204,7 +204,7 @@ func (n *SamNode) handleGetMeshInfo(ctx context.Context, req *mcp.CallToolReques
 	resData := map[string]any{
 		"connected_peers": connectedPeers,
 		"dht_size":        dhtSize,
-		"hub_peer_id":     n.HubPeerID.String(),
+		"router_peer_id":  n.RouterPeerID.String(),
 	}
 	responseBytes, err := json.Marshal(resData)
 	if err != nil {
@@ -588,13 +588,13 @@ func (n *SamNode) handleCheckConnectivity(ctx context.Context, req *mcp.CallTool
 			stats["ping_error"] = true
 			stats["ping_error_msg"] = "invalid peer id"
 		}
-	} else if n.HubPeerID != "" {
+	} else if n.RouterPeerID != "" {
 		start := time.Now()
-		err := n.Host.Connect(ctx, peer.AddrInfo{ID: n.HubPeerID})
-		stats["hub_latency_ms"] = time.Since(start).Milliseconds()
-		stats["hub_error"] = err != nil
+		err := n.Host.Connect(ctx, peer.AddrInfo{ID: n.RouterPeerID})
+		stats["router_latency_ms"] = time.Since(start).Milliseconds()
+		stats["router_error"] = err != nil
 		if err != nil {
-			stats["hub_error_msg"] = err.Error()
+			stats["router_error_msg"] = err.Error()
 		}
 	}
 

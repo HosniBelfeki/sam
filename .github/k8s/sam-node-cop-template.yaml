@@ -63,7 +63,7 @@ spec:
         args: 
           - "run"
           - "--config=/etc/sam/sam-node.yaml"
-          - "--hub=http://sam-control-plane-${ENV_NAME}.${NAMESPACE}.svc.cluster.local:8080"
+          - "--control-plane=http://sam-control-plane-${ENV_NAME}.${NAMESPACE}.svc.cluster.local:8080"
           - "--jwt-path=/var/run/secrets/tokens/sam-token"
           - "--api-token=secret-token"
           - "--bind-addr=127.0.0.1:8080"
@@ -92,4 +92,4 @@ spec:
           - serviceAccountToken:
               path: sam-token
               expirationSeconds: 3600
-              audience: "sam-hub-audience"
+              audience: "sam-control-plane-audience"

@@ -82,7 +82,7 @@ docker run -it \
   join --data-dir /data --bootstrap-token <your-token> https://bananas.sam-mesh.dev
 ```
 
-*Note: In non-interactive mode, unless the Hub runs with `--auto-approve-enrollment`, the enrollment request remains **PENDING** until approved manually by a network administrator.*
+*Note: In non-interactive mode, unless the control plane runs with `--auto-approve-enrollment`, the enrollment request remains **PENDING** until approved manually by a network administrator.*
 
 ---
 
@@ -96,7 +96,7 @@ sam-node run --bind-addr 127.0.0.1:8080 --api-token my-secret-token
 ```
 You should see in the logs:
 ```text
-INFO  sam-node  [AuthN] Successfully authenticated with hub via libp2p: ...
+INFO  sam-node  [AuthN] Successfully authenticated with router via libp2p: ...
 SAM Node Online.
 PeerID: 12D3KooW...
 ```

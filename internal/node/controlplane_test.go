@@ -26,11 +26,11 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-func TestFetchHubInfo(t *testing.T) {
-	expectedInfo := &api.HubInfoResponse{
-		HubAddresses: []string{"/ip4/127.0.0.1/tcp/4001"},
-		OidcIssuer:   "https://issuer.example.com",
-		ClientId:     "client-id",
+func TestFetchControlPlaneInfo(t *testing.T) {
+	expectedInfo := &api.ControlPlaneInfoResponse{
+		RouterAddresses: []string{"/ip4/127.0.0.1/tcp/4001"},
+		OidcIssuer:      "https://issuer.example.com",
+		ClientId:        "client-id",
 	}
 
 	body, err := proto.Marshal(expectedInfo)
@@ -47,13 +47,13 @@ func TestFetchHubInfo(t *testing.T) {
 	}))
 	defer server.Close()
 
-	info, err := FetchHubInfo(context.Background(), server.URL)
+	info, err := FetchControlPlaneInfo(context.Background(), server.URL)
 	if err != nil {
-		t.Fatalf("FetchHubInfo failed: %v", err)
+		t.Fatalf("FetchControlPlaneInfo failed: %v", err)
 	}
 
-	if !reflect.DeepEqual(info.HubAddresses, expectedInfo.HubAddresses) {
-		t.Errorf("Expected HubAddresses %v, got %v", expectedInfo.HubAddresses, info.HubAddresses)
+	if !reflect.DeepEqual(info.RouterAddresses, expectedInfo.RouterAddresses) {
+		t.Errorf("Expected RouterAddresses %v, got %v", expectedInfo.RouterAddresses, info.RouterAddresses)
 	}
 	if info.OidcIssuer != expectedInfo.OidcIssuer {
 		t.Errorf("Expected OidcIssuer %s, got %s", expectedInfo.OidcIssuer, info.OidcIssuer)
@@ -63,29 +63,29 @@ func TestFetchHubInfo(t *testing.T) {
 	}
 }
 
-func TestFetchHubInfo_HTTPError(t *testing.T) {
+func TestFetchControlPlaneInfo_HTTPError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer server.Close()
 
-	_, err := FetchHubInfo(context.Background(), server.URL)
+	_, err := FetchControlPlaneInfo(context.Background(), server.URL)
 	if err == nil {
 		t.Fatal("Expected error, got nil")
 	}
-	if !strings.Contains(err.Error(), "hub returned status 500 Internal Server Error") {
+	if !strings.Contains(err.Error(), "control plane returned status 500 Internal Server Error") {
 		t.Errorf("Expected error to contain '500 Internal Server Error', got %v", err)
 	}
 }
 
-func TestFetchHubInfo_InvalidProto(t *testing.T) {
+func TestFetchControlPlaneInfo_InvalidProto(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("invalid data"))
 	}))
 	defer server.Close()
 
-	_, err := FetchHubInfo(context.Background(), server.URL)
+	_, err := FetchControlPlaneInfo(context.Background(), server.URL)
 	if err == nil {
 		t.Fatal("Expected error, got nil")
 	}
@@ -94,11 +94,11 @@ func TestFetchHubInfo_InvalidProto(t *testing.T) {
 	}
 }
 
-func TestSyncHubConfig(t *testing.T) {
-	expectedInfo := &api.HubInfoResponse{
-		HubAddresses: []string{"/ip4/127.0.0.1/tcp/4001"},
-		OidcIssuer:   "https://issuer.example.com",
-		ClientId:     "client-id",
+func TestSyncMeshConfig(t *testing.T) {
+	expectedInfo := &api.ControlPlaneInfoResponse{
+		RouterAddresses: []string{"/ip4/127.0.0.1/tcp/4001"},
+		OidcIssuer:      "https://issuer.example.com",
+		ClientId:        "client-id",
 	}
 
 	body, err := proto.Marshal(expectedInfo)
@@ -119,47 +119,47 @@ func TestSyncHubConfig(t *testing.T) {
 	}
 	defer store.Close() //nolint:errcheck
 
-	// Initial store is empty, so SyncHubConfig should just return empty
-	pubKey, addrs, err := SyncHubConfig(context.Background(), store)
+	// Initial store is empty, so SyncMeshConfig should just return empty
+	pubKey, addrs, err := SyncMeshConfig(context.Background(), store)
 	if err != nil {
-		t.Fatalf("SyncHubConfig failed: %v", err)
+		t.Fatalf("SyncMeshConfig failed: %v", err)
 	}
 	if len(pubKey) != 0 || len(addrs) != 0 {
 		t.Errorf("Expected empty result for empty store, got pubKey=%v, addrs=%v", pubKey, addrs)
 	}
 
-	// Save initial config with explicit hub URL
+	// Save initial config with explicit control plane URL
 	testPubKey := []byte("test-pub-key")
-	if err := store.SaveHubConfig(testPubKey, []string{"/ip4/1.2.3.4/tcp/1234"}); err != nil {
-		t.Fatalf("Failed to save hub config: %v", err)
+	if err := store.SaveMeshConfig(testPubKey, []string{"/ip4/1.2.3.4/tcp/1234"}); err != nil {
+		t.Fatalf("Failed to save mesh config: %v", err)
 	}
-	if err := store.SaveHubURL(server.URL); err != nil {
-		t.Fatalf("Failed to save hub url: %v", err)
+	if err := store.SaveControlPlaneURL(server.URL); err != nil {
+		t.Fatalf("Failed to save control plane URL: %v", err)
 	}
 
-	// Call SyncHubConfig, it should fetch new addrs from server
-	pubKey, addrs, err = SyncHubConfig(context.Background(), store)
+	// Call SyncMeshConfig, it should fetch new addrs from server
+	pubKey, addrs, err = SyncMeshConfig(context.Background(), store)
 	if err != nil {
-		t.Fatalf("SyncHubConfig failed: %v", err)
+		t.Fatalf("SyncMeshConfig failed: %v", err)
 	}
 
 	if string(pubKey) != string(testPubKey) {
 		t.Errorf("Expected pubKey %s, got %s", testPubKey, pubKey)
 	}
 
-	if len(addrs) != 1 || addrs[0].String() != expectedInfo.HubAddresses[0] {
-		t.Errorf("Expected addrs %v, got %v", expectedInfo.HubAddresses, addrs)
+	if len(addrs) != 1 || addrs[0].String() != expectedInfo.RouterAddresses[0] {
+		t.Errorf("Expected addrs %v, got %v", expectedInfo.RouterAddresses, addrs)
 	}
 
 	// Verify the new addrs were saved to the store
-	savedPubKey, savedAddrsStr, err := store.LoadHubConfig()
+	savedPubKey, savedAddrsStr, err := store.LoadMeshConfig()
 	if err != nil {
-		t.Fatalf("Failed to load hub config: %v", err)
+		t.Fatalf("Failed to load mesh config: %v", err)
 	}
 	if string(savedPubKey) != string(testPubKey) {
 		t.Errorf("Expected saved pubKey %s, got %s", testPubKey, savedPubKey)
 	}
-	if len(savedAddrsStr) != 1 || savedAddrsStr[0] != expectedInfo.HubAddresses[0] {
-		t.Errorf("Expected saved addrs %v, got %v", expectedInfo.HubAddresses, savedAddrsStr)
+	if len(savedAddrsStr) != 1 || savedAddrsStr[0] != expectedInfo.RouterAddresses[0] {
+		t.Errorf("Expected saved addrs %v, got %v", expectedInfo.RouterAddresses, savedAddrsStr)
 	}
 }

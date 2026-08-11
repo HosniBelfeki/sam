@@ -25,17 +25,17 @@ import (
 )
 
 const (
-	DefaultMeshName          = "public-mesh"
-	DefaultDiscoveryInterval = "30s"
-	DefaultConfigFile        = "sam-node.yaml"
-	DefaultHubConnectTimeout = 5 * time.Second
+	DefaultMeshName             = "public-mesh"
+	DefaultDiscoveryInterval    = "30s"
+	DefaultConfigFile           = "sam-node.yaml"
+	DefaultRouterConnectTimeout = 5 * time.Second
 )
 
 // Options holds all configuration options for a SamNode.
 type Options struct {
 	PrivKey              crypto.PrivKey
-	HubPubKey            ed25519.PublicKey
-	HubAddrs             []multiaddr.Multiaddr
+	ControlPlanePubKey   ed25519.PublicKey
+	RouterAddrs          []multiaddr.Multiaddr
 	Store                *Store
 	MeshID               string
 	DiscoveryInterval    string
@@ -49,8 +49,8 @@ type Options struct {
 	AutoRelayMinInterval time.Duration
 	AutoRelayBootDelay   time.Duration
 	AutoRelayBackoff     time.Duration
-	// HubConnectTimeout bounds each hub address's dial (connect + stream open).
-	HubConnectTimeout time.Duration
+	// RouterConnectTimeout bounds each router address's dial (connect + stream open).
+	RouterConnectTimeout time.Duration
 	// DHT Options
 	DHTProviderAddrTTL   time.Duration
 	DHTMaxRecordAge      time.Duration
@@ -58,7 +58,7 @@ type Options struct {
 	DiscoveryConcurrency int
 	// RequiredRole restricts enrollment and startup to only accept tokens containing this role.
 	RequiredRole string
-	// PolicySyncInterval specifies how often the node syncs the mesh policy from the Hub.
+	// PolicySyncInterval specifies how often the node syncs the mesh policy from the control plane.
 	PolicySyncInterval time.Duration
 	// PolicySyncJitter specifies the maximum jitter delay when scheduling policy syncs on event broadcasts.
 	PolicySyncJitter time.Duration
@@ -87,8 +87,8 @@ func (o *Options) Default() {
 	if o.KeyGracePeriod == 0 {
 		o.KeyGracePeriod = 24 * time.Hour
 	}
-	if o.HubConnectTimeout == 0 {
-		o.HubConnectTimeout = DefaultHubConnectTimeout
+	if o.RouterConnectTimeout == 0 {
+		o.RouterConnectTimeout = DefaultRouterConnectTimeout
 	}
 	if o.DHTLookupLimit <= 0 {
 		o.DHTLookupLimit = 20
