@@ -384,8 +384,8 @@ func TestFacade_EmptyRegistryIsNotCached(t *testing.T) {
 
 func TestRankProviders(t *testing.T) {
 	local := modelProvider{service: "local-llm"}
-	remoteEU := modelProvider{peerID: "peerEU", service: "srv", region: "eu", active: 5}
-	remoteUS := modelProvider{peerID: "peerUS", service: "srv", region: "us", active: 0}
+	remoteEU := modelProvider{peerID: "peerEU", service: "srv", region: "EU-DE", active: 5}
+	remoteUS := modelProvider{peerID: "peerUS", service: "srv", region: "NA-US", active: 0}
 	remoteNoLabel := modelProvider{peerID: "peerX", service: "srv", active: 1}
 
 	t.Run("locals first, remotes by ascending load", func(t *testing.T) {
@@ -396,19 +396,25 @@ func TestRankProviders(t *testing.T) {
 		}
 	})
 
-	t.Run("region requirement is fail-closed", func(t *testing.T) {
+	t.Run("region requirement is fail-closed and hierarchical", func(t *testing.T) {
 		f := newTestFacade()
-		got := f.rankProviders([]modelProvider{remoteEU, remoteUS, remoteNoLabel, local}, []string{"eu"})
-		// Unlabeled remote and unlabeled local must both be excluded.
+		// Requiring the continent matches the finer country claim; the
+		// unlabeled remote and unlabeled local must both be excluded.
+		got := f.rankProviders([]modelProvider{remoteEU, remoteUS, remoteNoLabel, local}, []string{"EU"})
 		if len(got) != 1 || got[0].peerID != "peerEU" {
 			t.Fatalf("unexpected ranking under region requirement: %+v", got)
+		}
+		// A finer requirement never matches a coarser claim.
+		coarse := modelProvider{peerID: "peerEU2", service: "srv", region: "EU"}
+		if got := f.rankProviders([]modelProvider{coarse}, []string{"EU-DE"}); len(got) != 0 {
+			t.Fatalf("coarse claim must not satisfy finer requirement: %+v", got)
 		}
 	})
 
 	t.Run("local matches its declared region", func(t *testing.T) {
 		f := newTestFacade()
-		f.localRegion = func() string { return "eu" }
-		got := f.rankProviders([]modelProvider{local, remoteUS}, []string{"eu"})
+		f.localRegion = func() string { return "EU" }
+		got := f.rankProviders([]modelProvider{local, remoteUS}, []string{"EU"})
 		if len(got) != 1 || got[0].service != "local-llm" {
 			t.Fatalf("local with matching region should survive: %+v", got)
 		}
@@ -452,11 +458,30 @@ func TestRankProviders(t *testing.T) {
 }
 
 func TestParseRequiredRegions(t *testing.T) {
-	if got := parseRequiredRegions(""); got != nil {
-		t.Errorf("empty header: got %v, want nil", got)
+	if got, err := parseRequiredRegions(""); got != nil || err != nil {
+		t.Errorf("empty header: got %v, %v; want nil, nil", got, err)
 	}
-	if got := parseRequiredRegions(" eu , us ,,"); len(got) != 2 || got[0] != "eu" || got[1] != "us" {
-		t.Errorf("parse: got %v", got)
+	got, err := parseRequiredRegions(" eu , na-us ,,")
+	if err != nil || len(got) != 2 || got[0] != "EU" || got[1] != "NA-US" {
+		t.Errorf("parse should normalize regions: got %v, %v", got, err)
+	}
+	if _, err := parseRequiredRegions("mars"); err == nil {
+		t.Error("invalid region code must be rejected")
+	}
+	if _, err := parseRequiredRegions("EU-US"); err == nil {
+		t.Error("country outside its continent must be rejected")
+	}
+}
+
+func TestRankProviders_RegionMatchIsCaseInsensitive(t *testing.T) {
+	f := newTestFacade()
+	provider := modelProvider{peerID: "peerEU", service: "srv", region: "eu-de"}
+	required, err := parseRequiredRegions("Eu")
+	if err != nil {
+		t.Fatalf("parseRequiredRegions: %v", err)
+	}
+	if got := f.rankProviders([]modelProvider{provider}, required); len(got) != 1 {
+		t.Errorf("region match must be canonical (eu-de vs Eu): got %+v", got)
 	}
 }
 
@@ -529,8 +554,8 @@ func TestFacade_Completions_RegionRequirement(t *testing.T) {
 	f := newTestFacade()
 	f.viewProviders = func(model string) []modelProvider {
 		return []modelProvider{
-			{peerID: "peerEU", service: "srvEU", region: "eu"},
-			{peerID: "peerUS", service: "srvUS", region: "us"},
+			{peerID: "peerEU", service: "srvEU", region: "EU-DE"},
+			{peerID: "peerUS", service: "srvUS", region: "NA-US"},
 		}
 	}
 	var gotPath, gotRegionHeader string
@@ -540,7 +565,7 @@ func TestFacade_Completions_RegionRequirement(t *testing.T) {
 	})
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"m1"}`))
-	req.Header.Set(api.HeaderSamRequiredRegion, "eu")
+	req.Header.Set(api.HeaderSamRequiredRegion, "EU")
 	rec := httptest.NewRecorder()
 	f.handleCompletions(rec, req)
 
@@ -551,13 +576,22 @@ func TestFacade_Completions_RegionRequirement(t *testing.T) {
 		t.Errorf("%s must not travel to the provider, got %q", api.HeaderSamRequiredRegion, gotRegionHeader)
 	}
 
-	// No provider satisfies the requirement.
+	// No provider satisfies the requirement (valid code, no claimant).
 	req = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"m1"}`))
-	req.Header.Set(api.HeaderSamRequiredRegion, "mars")
+	req.Header.Set(api.HeaderSamRequiredRegion, "OC")
 	rec = httptest.NewRecorder()
 	f.handleCompletions(rec, req)
 	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "no_eligible_provider") {
 		t.Errorf("unsatisfiable region: got status %d, body %s", rec.Code, rec.Body.String())
+	}
+
+	// Invalid region codes are rejected outright.
+	req = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"m1"}`))
+	req.Header.Set(api.HeaderSamRequiredRegion, "mars")
+	rec = httptest.NewRecorder()
+	f.handleCompletions(rec, req)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "invalid_request") {
+		t.Errorf("invalid region: got status %d, body %s", rec.Code, rec.Body.String())
 	}
 }
 

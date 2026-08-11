@@ -48,7 +48,7 @@ func capKeys(keys []string) []string {
 // inference services announce model IDs, MCP services announce tool names.
 func (n *SamNode) discoverySource() []discovery.Announcement {
 	var labels map[string]string
-	if n.config.Region != "" {
+	if n.config.Region != "" { // normalized and validated at startup
 		labels = map[string]string{api.LabelRegion: n.config.Region}
 	}
 	var out []discovery.Announcement

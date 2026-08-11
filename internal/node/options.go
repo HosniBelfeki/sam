@@ -111,6 +111,7 @@ func (o *Options) Default() {
 	if o.PolicySyncJitter <= 0 {
 		o.PolicySyncJitter = 10 * time.Second
 	}
+	o.Region = api.NormalizeRegion(o.Region)
 }
 
 // Validate verifies that the required options are provided and valid.
@@ -123,6 +124,11 @@ func (o *Options) Validate() error {
 	}
 	if o.RequiredRole == "" {
 		return fmt.Errorf("RequiredRole must be specified")
+	}
+	if o.Region != "" {
+		if err := api.ValidateRegion(o.Region); err != nil {
+			return err
+		}
 	}
 	return nil
 }

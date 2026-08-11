@@ -580,7 +580,7 @@ func main() {
 	joinCmd.Flags().BoolVar(&offlineAccessFlag, "offline-access", false, "Request OIDC offline access/refresh token for automatic renewal")
 	joinCmd.Flags().StringVar(&bootstrapTokenFlag, "bootstrap-token", "", "Pre-shared bootstrap token for enrollment")
 	runCmd.Flags().StringVar(&apiTokenFlag, "api-token", "", "Static Bearer token for API authorization")
-	runCmd.Flags().StringVar(&regionFlag, "region", "", "Operator-declared region of this node (e.g. \"eu\"); empty means no claim")
+	runCmd.Flags().StringVar(&regionFlag, "region", "", "Operator-declared region of this node: CONTINENT[-COUNTRY[-ZONE]] per ISO 3166 (e.g. \"EU\", \"EU-DE\", \"NA-US-CA\"); empty means no claim")
 	runCmd.Flags().StringVar(&tlsCertFlag, "tls-cert", "", "Path to TLS certificate for sidecar API")
 	runCmd.Flags().StringVar(&tlsKeyFlag, "tls-key", "", "Path to TLS key for sidecar API")
 	runCmd.Flags().StringVar(&tlsCAFlag, "tls-ca", "", "Path to TLS CA for sidecar API mTLS")

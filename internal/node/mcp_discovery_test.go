@@ -72,7 +72,8 @@ func (f *fakeToolService) Tools(_ context.Context) ([]string, error) {
 func TestDiscoverySource(t *testing.T) {
 	node := &SamNode{
 		services: NewServiceRegistry(&fakeDHT{}),
-		config:   Options{Region: "eu"},
+		// Region arrives normalized and validated from Options.Default/Validate.
+		config: Options{Region: "EU"},
 	}
 	ctx := context.Background()
 
@@ -106,8 +107,8 @@ func TestDiscoverySource(t *testing.T) {
 		t.Errorf("reviewer announcement: %+v", a)
 	}
 	for name, a := range byName {
-		if a.Labels[api.LabelRegion] != "eu" {
-			t.Errorf("%s labels: got %v, want region=eu", name, a.Labels)
+		if a.Labels[api.LabelRegion] != "EU" {
+			t.Errorf("%s labels: got %v, want region=EU", name, a.Labels)
 		}
 	}
 }

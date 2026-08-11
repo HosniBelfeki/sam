@@ -338,6 +338,12 @@ func (f *openAIFacade) handleCompletions(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	requiredRegions, err := parseRequiredRegions(r.Header.Get(api.HeaderSamRequiredRegion))
+	if err != nil {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+
 	providers := f.providersFor(r.Context(), req.Model)
 	if len(providers) == 0 {
 		writeOpenAIError(w, http.StatusNotFound, "model_not_found",
@@ -345,7 +351,6 @@ func (f *openAIFacade) handleCompletions(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	requiredRegions := parseRequiredRegions(r.Header.Get(api.HeaderSamRequiredRegion))
 	ranked := f.rankProviders(providers, requiredRegions)
 	if len(ranked) == 0 {
 		recordFacadeRejection(reasonNoEligible)

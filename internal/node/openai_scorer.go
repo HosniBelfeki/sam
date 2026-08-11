@@ -16,10 +16,11 @@ package node
 
 import (
 	"net/http"
-	"slices"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/google/sam/api"
 )
 
 // providerBackoff is how long a provider is skipped after a retryable failure.
@@ -34,18 +35,36 @@ const (
 	reasonAttemptsExceeded = "attempts_exceeded"
 )
 
-// parseRequiredRegions splits the X-Sam-Required-Region header value.
-func parseRequiredRegions(h string) []string {
+// parseRequiredRegions splits the X-Sam-Required-Region header value into
+// canonical continent codes; any invalid code rejects the whole request.
+func parseRequiredRegions(h string) ([]string, error) {
 	if h == "" {
-		return nil
+		return nil, nil
 	}
 	var out []string
 	for _, part := range strings.Split(h, ",") {
-		if p := strings.TrimSpace(part); p != "" {
-			out = append(out, p)
+		p := api.NormalizeRegion(part)
+		if p == "" {
+			continue
+		}
+		if err := api.ValidateRegion(p); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, nil
+}
+
+// regionAllowed reports whether a provider's claim satisfies any required
+// region (hierarchical, see api.RegionMatches).
+func regionAllowed(required []string, claimed string) bool {
+	claimed = api.NormalizeRegion(claimed)
+	for _, req := range required {
+		if api.RegionMatches(req, claimed) {
+			return true
 		}
 	}
-	return out
+	return false
 }
 
 // rankProviders applies hard constraints then orders the survivors: eligible
@@ -59,9 +78,10 @@ func (f *openAIFacade) rankProviders(providers []modelProvider, requiredRegions 
 		if p.peerID == "" && f.localRegion != nil {
 			region = f.localRegion()
 		}
-		// Region is fail-closed: a requirement never matches an unlabeled
-		// provider. Labels are routing hints until biscuit-attested.
-		if len(requiredRegions) > 0 && !slices.Contains(requiredRegions, region) {
+		// Region is fail-closed: a requirement never matches an unlabeled or
+		// coarser-scoped provider. Labels are routing hints until
+		// biscuit-attested.
+		if len(requiredRegions) > 0 && !regionAllowed(requiredRegions, region) {
 			recordFacadeRejection(reasonRegionMismatch)
 			continue
 		}
