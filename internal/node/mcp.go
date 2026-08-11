@@ -258,6 +258,12 @@ func (n *SamNode) CallMCPTool(ctx context.Context, targetPeer peer.ID, toolName 
 	return nil, fmt.Errorf("failed after %d retries: %w", maxRetries, err)
 }
 
+// ErrAuthRejected marks a service-level authorization denial from a remote peer,
+// as opposed to a transport/connectivity failure. Callers use errors.Is to tell
+// "you're not allowed" apart from "the service is unreachable" so that discovery
+// (find_remote_tools) can hide forbidden services instead of leaking their names.
+var ErrAuthRejected = errors.New("auth rejected")
+
 func (n *SamNode) ConnectMCPSession(ctx context.Context, targetPeer peer.ID, targetService string) (*mcp.ClientSession, func(), error) {
 	// Open stream
 	logger.Debugf("Dialing %s for MCP...\n", targetPeer)
@@ -344,7 +350,7 @@ func (n *SamNode) ConnectMCPSession(ctx context.Context, targetPeer peer.ID, tar
 
 	if !resp.Success {
 		cleanup()
-		return nil, nil, fmt.Errorf("auth rejected by %s: %s", targetPeer, resp.Error)
+		return nil, nil, fmt.Errorf("%w by %s: %s", ErrAuthRejected, targetPeer, resp.Error)
 	}
 
 	// Handoff to SDK using custom transport

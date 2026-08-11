@@ -462,7 +462,7 @@ func buildAndSaveCustomBiscuit(node *SamNode, rootPriv ed25519.PrivateKey, allow
 	return node.Store.SaveIdentity(biscBytes)
 }
 
-func TestFetchRemoteToolCatalogue_AuthRejected(t *testing.T) {
+func TestFetchRemoteToolCatalogue_AuthRejectedHidden(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -502,22 +502,16 @@ func TestFetchRemoteToolCatalogue_AuthRejected(t *testing.T) {
 		t.Fatalf("RegisterService: %v", err)
 	}
 
-	// Fetching tools from C should succeed for the catalog, but fail auth for "summarizer"
+	// Fetching tools from C should succeed for the catalog, but the unauthorized
+	// "summarizer" service must be hidden entirely rather than leaked as an error
+	// row (issue #176: discovery should only ever show what the caller can call).
 	rows, err := nodeA.fetchRemoteToolCatalogue(ctx, nodeC.Host.ID(), "")
 	if err != nil {
 		t.Fatalf("fetchRemoteToolCatalogue returned unexpected overall error: %v", err)
 	}
 
-	if len(rows) != 1 {
-		t.Fatalf("expected exactly 1 row with error, got %d: %+v", len(rows), rows)
-	}
-
-	row := rows[0]
-	if row.ToolName != "mcp://summarizer" {
-		t.Errorf("expected ToolName 'mcp://summarizer', got %q", row.ToolName)
-	}
-	if !strings.Contains(row.Error, "auth rejected") {
-		t.Errorf("expected Error to contain 'auth rejected', got %q", row.Error)
+	if len(rows) != 0 {
+		t.Fatalf("expected unauthorized service to be hidden (0 rows), got %d: %+v", len(rows), rows)
 	}
 }
 

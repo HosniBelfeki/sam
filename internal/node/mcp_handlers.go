@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -388,6 +389,12 @@ func (n *SamNode) fetchRemoteToolCatalogue(ctx context.Context, targetPeer peer.
 		n.preparePeerAddrs(ctx, targetPeer)
 		session, cleanup, err := n.ConnectMCPSession(ctx, targetPeer, connectService)
 		if err != nil {
+			if errors.Is(err, ErrAuthRejected) {
+				// Not authorized for this service: omit it entirely rather than
+				// leaking its existence ("what you see is what you can do", #176).
+				logger.Debugf("Hiding unauthorized service %s from discovery: %v", targetService, err)
+				continue
+			}
 			logger.Debugf("Failed to connect MCP session for service %s: %v", targetService, err)
 			if serviceNameFilter == "" || connectService == serviceNameFilter || strings.HasPrefix(connectService, serviceNameFilter+".") {
 				rows = append(rows, remoteToolRow{
