@@ -91,9 +91,15 @@
             </nav>
         </aside>
 
+        <!-- Sidebar scrim, shown behind the drawer on mobile -->
+        <div class="sidebar-scrim" id="sidebar-scrim" onclick="closeSidebar()"></div>
+
         <!-- Main Content Area -->
         <main class="main-content">
             <header class="topbar">
+                <button class="sidebar-toggle" id="sidebar-toggle" onclick="toggleSidebar()" aria-label="Toggle navigation">
+                    <svg viewBox="0 0 24 24" width="22" height="22" stroke="currentColor" stroke-width="2" fill="none"><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+                </button>
                 <div class="search-bar">
                     <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
                     <input type="text" placeholder="Search resources...">
@@ -150,6 +156,7 @@
                         <h2>Users</h2>
                     </div>
                     <div class="card">
+                        <div class="table-responsive">
                         <table class="data-table">
                             <thead>
                                 <tr>
@@ -163,6 +170,7 @@
                                 <tr><td colspan="4" class="text-center">Loading...</td></tr>
                             </tbody>
                         </table>
+                        </div>
                     </div>
                 </section>
 
@@ -172,6 +180,7 @@
                         <h2>Enrolled Nodes</h2>
                     </div>
                     <div class="card">
+                        <div class="table-responsive">
                         <table class="data-table">
                             <thead>
                                 <tr>
@@ -185,6 +194,7 @@
                                 <tr><td colspan="4" class="text-center">Loading...</td></tr>
                             </tbody>
                         </table>
+                        </div>
                     </div>
                 </section>
 
@@ -194,6 +204,7 @@
                         <h2>Enrollment Requests</h2>
                     </div>
                     <div class="card">
+                        <div class="table-responsive">
                         <table class="data-table">
                             <thead>
                                 <tr>
@@ -207,6 +218,7 @@
                                 <tr><td colspan="4" class="text-center">Loading...</td></tr>
                             </tbody>
                         </table>
+                        </div>
                     </div>
                 </section>
 
@@ -216,6 +228,7 @@
                         <h2>Active Routers (Leases)</h2>
                     </div>
                     <div class="card">
+                        <div class="table-responsive">
                         <table class="data-table">
                             <thead>
                                 <tr>
@@ -228,6 +241,7 @@
                                 <tr><td colspan="3" class="text-center">Loading...</td></tr>
                             </tbody>
                         </table>
+                        </div>
                     </div>
                 </section>
 
@@ -256,6 +270,10 @@
                                 <input type="number" id="token-usages" value="1" min="1" style="background: rgba(0,0,0,0.2); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 4px; padding: 8px;" required>
                             </div>
                             <div class="input-group" style="display: flex; flex-direction: column; gap: 4px;">
+                                <label for="token-ttl" style="font-size: 0.85rem; color: var(--text-secondary);">TTL (hours)</label>
+                                <input type="number" id="token-ttl" value="24" min="1" style="background: rgba(0,0,0,0.2); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 4px; padding: 8px;" required>
+                            </div>
+                            <div class="input-group" style="display: flex; flex-direction: column; gap: 4px;">
                                 <label for="token-desc" style="font-size: 0.85rem; color: var(--text-secondary);">Description</label>
                                 <input type="text" id="token-desc" placeholder="Token purpose" style="background: rgba(0,0,0,0.2); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 4px; padding: 8px;">
                             </div>
@@ -264,6 +282,7 @@
                     </div>
                     <div class="card">
                         <h3>Active Tokens</h3>
+                        <div class="table-responsive">
                         <table class="data-table">
                             <thead>
                                 <tr>
@@ -278,6 +297,7 @@
                                 <tr><td colspan="5" class="text-center">Loading...</td></tr>
                             </tbody>
                         </table>
+                        </div>
                     </div>
                 </section>
 

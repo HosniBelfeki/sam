@@ -169,7 +169,8 @@ echo "== Deploying SAM Mesh via Helm =="
   --set router.externalAddrs[1]="/ip4/127.0.0.1/tcp/4001" \
   --set console.service.type=NodePort \
   --set console.service.nodePort=30081 \
-  --set dex.enabled=true
+  --set dex.enabled=true \
+  --set controlPlane.insecureSkipTlsVerify=true # ISSUER is the kind cluster's own API server, served with a self-signed cert
 
 echo "== Waiting for database to be ready =="
 kubectl --context "${KCTX}" -n "${NAMESPACE}" wait --for=condition=ready --timeout=180s pod -l app=sam-mesh-db

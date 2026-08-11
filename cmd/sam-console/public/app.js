@@ -17,12 +17,25 @@ document.addEventListener('DOMContentLoaded', () => {
             
             // Optionally fetch data specifically for that view if needed
             // Currently, loadData() fetches everything from the status endpoint.
+
+            // On mobile the sidebar is an overlay drawer; close it after navigating.
+            closeSidebar();
         });
     });
 
     // Check auth status on load
     checkAuthAndLoad();
 });
+
+window.toggleSidebar = function() {
+    document.querySelector('.sidebar').classList.toggle('open');
+    document.getElementById('sidebar-scrim').classList.toggle('active');
+};
+
+window.closeSidebar = function() {
+    document.querySelector('.sidebar').classList.remove('open');
+    document.getElementById('sidebar-scrim').classList.remove('active');
+};
 
 async function checkAuthAndLoad() {
     try {
@@ -456,12 +469,14 @@ window.generateBootstrapToken = async function() {
     const role = document.getElementById('token-role').value;
     const owner_id = document.getElementById('token-owner').value;
     const max_usages = parseInt(document.getElementById('token-usages').value, 10);
+    const ttl_hours = parseInt(document.getElementById('token-ttl').value, 10) || 24;
     const description = document.getElementById('token-desc').value;
 
     const payload = {
         role,
         owner_id,
         max_usages,
+        ttl_hours,
         description
     };
 

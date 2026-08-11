@@ -7,9 +7,13 @@ controlPlane:
   image:
     repository: sam-control-plane
   logLevel: info
-  adminToken: super-secret-admin-token
+  # Leave empty to auto-generate a random admin token on first install (kept
+  # stable across upgrades). Set explicitly (e.g. via --set) to pin a known value.
+  adminToken: ""
   autoApproveEnrollment: true
-  insecureSkipTlsVerify: true
+  # Only skips TLS verification for the OIDC issuer; leave false unless
+  # pointing at a local/dev issuer without a valid certificate.
+  insecureSkipTlsVerify: false
   oidcIssuer: "http://sam-mesh-dex:5556/dex"
   allowedAudiences: "sam-mesh-audience,sam-control-plane-audience"
   resources:
@@ -32,7 +36,9 @@ database:
       repository: postgres
       tag: 16-alpine
     user: sam
-    password: sam-secret-password
+    # Leave empty to auto-generate a random password on first install (kept
+    # stable across upgrades). Set explicitly (e.g. via --set) to pin a known value.
+    password: ""
     database: sam_mesh
     port: 5432
     sslmode: disable

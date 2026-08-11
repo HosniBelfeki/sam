@@ -278,6 +278,7 @@ if [[ -z "${MESH_HELPERS_LOADED:-}" ]]; then
       --set controlPlane.oidcIssuer="${ISSUERS//,/\\,}" \
       --set controlPlane.allowedAudiences="sam-mesh-audience\,sam-control-plane-audience" \
       --set controlPlane.insecureSkipTlsVerify=true \
+      --set controlPlane.adminToken="super-secret-admin-token" \
       --set controlPlane.replicaCount=2 \
       --set controlPlane.hostPort=8080 \
       --set router.useOidcToken=false \
