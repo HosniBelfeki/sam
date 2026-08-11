@@ -58,6 +58,9 @@ type Options struct {
 	DiscoveryConcurrency int
 	// RequiredRole restricts enrollment and startup to only accept tokens containing this role.
 	RequiredRole string
+	// Region is the operator-declared jurisdiction of this node (api.LabelRegion).
+	// Empty means no claim; consumers with a region requirement will not select it.
+	Region string
 	// PolicySyncInterval specifies how often the node syncs the mesh policy from the control plane.
 	PolicySyncInterval time.Duration
 	// PolicySyncJitter specifies the maximum jitter delay when scheduling policy syncs on event broadcasts.
@@ -108,6 +111,7 @@ func (o *Options) Default() {
 	if o.PolicySyncJitter <= 0 {
 		o.PolicySyncJitter = 10 * time.Second
 	}
+	o.Region = api.NormalizeRegion(o.Region)
 }
 
 // Validate verifies that the required options are provided and valid.
@@ -120,6 +124,11 @@ func (o *Options) Validate() error {
 	}
 	if o.RequiredRole == "" {
 		return fmt.Errorf("RequiredRole must be specified")
+	}
+	if o.Region != "" {
+		if err := api.ValidateRegion(o.Region); err != nil {
+			return err
+		}
 	}
 	return nil
 }

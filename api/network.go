@@ -15,6 +15,8 @@
 package api
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"regexp"
 	"strings"
@@ -42,6 +44,11 @@ const (
 
 	// GossipControlPlaneSync is the GossipSub topic used by the control plane to sync cluster state.
 	GossipControlPlaneSync = "/sam/control-plane/sync/v1"
+
+	// DiscoveryTopicPrefix is the GossipSub topic namespace for interest-scoped
+	// service announcements (ServiceAnnounce messages). Full topics are built
+	// with DiscoveryTopic; the version segment allows wire evolution.
+	DiscoveryTopicPrefix = "/sam/discovery/v1"
 
 	// DefaultAudience is the default audience string used in OIDC token validation.
 	DefaultAudience = "sam-mesh-audience"
@@ -100,6 +107,37 @@ const (
 	// This helps backward-compatibility with services that strictly distinguish
 	// between a root path "/" and an empty path "".
 	HeaderSamNoTrailingSlash = "X-Sam-No-Trailing-Slash"
+
+	// HeaderSamRequiredRegion constrains an inference request on the sidecar's
+	// OpenAI-compatible endpoints (/v1/*) to providers whose declared region is
+	// in the comma-separated list of continent codes (see ValidateRegion);
+	// invalid codes are rejected with HTTP 400. It can only narrow what mesh
+	// policy allows, never widen it. Absent means any region permitted by
+	// policy.
+	//
+	// Reserved as part of the sidecar contract; enforced by the provider
+	// scorer. Region declarations are routing hints until attested via the
+	// node's Biscuit (see LabelRegion).
+	HeaderSamRequiredRegion = "X-Sam-Required-Region"
+)
+
+// ============================================================================
+// Well-Known Node Labels
+// ============================================================================
+//
+// Placement rule: anything two nodes must agree on to interoperate (topics,
+// headers, labels, wire caps, canonical value forms) is defined here in api/.
+// Behavioral tuning a node decides alone (intervals, TTLs, table bounds)
+// lives in the package that owns the behavior.
+
+const (
+	// LabelRegion is the operator-declared jurisdiction of a node, as a
+	// continent code validated by ValidateRegion (e.g. "EU"). It is carried in
+	// ServiceAnnounce messages as a routing hint. Absent means the node makes
+	// no region claim, and consumers with a region requirement will never
+	// select it. Operator-declared labels always take precedence over
+	// runtime-derived values.
+	LabelRegion = "region"
 )
 
 // ============================================================================
@@ -157,6 +195,23 @@ func ServiceTypeToString(t ServiceType) (string, error) {
 	default:
 		return "", fmt.Errorf("invalid or unspecified service type")
 	}
+}
+
+// DiscoveryTopic returns the GossipSub topic for announcements about one
+// routing key (a model ID for inference, a tool name for MCP). Keys are
+// hashed so topic names stay bounded; consumers match exact keys from the
+// ServiceAnnounce payload, so hash collisions only merge announcement
+// streams, never routing decisions.
+func DiscoveryTopic(t ServiceType, key string) (string, error) {
+	typeStr, err := ServiceTypeToString(t)
+	if err != nil {
+		return "", err
+	}
+	if key == "" {
+		return "", fmt.Errorf("discovery topic key cannot be empty")
+	}
+	sum := sha256.Sum256([]byte(key))
+	return fmt.Sprintf("%s/%s/%s", DiscoveryTopicPrefix, typeStr, hex.EncodeToString(sum[:8])), nil
 }
 
 // ============================================================================

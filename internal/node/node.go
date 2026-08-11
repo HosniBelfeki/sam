@@ -39,6 +39,7 @@ import (
 	"github.com/biscuit-auth/biscuit-go/v2/datalog"
 	"github.com/google/sam/api"
 	"github.com/google/sam/internal/identity"
+	samdiscovery "github.com/google/sam/internal/node/discovery"
 	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/ipfs/go-cid"
 	golog "github.com/ipfs/go-log/v2"
@@ -125,6 +126,7 @@ type SamNode struct {
 	Host                 host.Host
 	DHT                  *dht.IpfsDHT
 	PubSub               *pubsub.PubSub
+	Discovery            *samdiscovery.Discovery
 	Store                *Store
 	RouterPeerID         peer.ID
 	authenticatedRouters map[peer.ID]bool
@@ -464,6 +466,10 @@ func (n *SamNode) Start(ctx context.Context) error {
 		return err
 	}
 	n.PubSub = ps
+
+	// Interest-scoped service announcements (provider + consumer roles).
+	n.Discovery = samdiscovery.New(ps, h.ID())
+	n.Discovery.Start(ctx, n.discoverySource)
 
 	// Subscribe to local address updates to reprovide services and log
 	sub, err := h.EventBus().Subscribe(new(event.EvtLocalAddressesUpdated))

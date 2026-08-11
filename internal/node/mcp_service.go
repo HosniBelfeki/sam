@@ -16,6 +16,10 @@ package node
 
 import (
 	"context"
+	"fmt"
+	"sort"
+	"sync"
+	"time"
 
 	"github.com/google/sam/api"
 	"github.com/libp2p/go-libp2p/core/network"
@@ -26,6 +30,10 @@ import (
 // MCPService extends baseService to handle MCP protocol proxying.
 type MCPService struct {
 	baseService
+
+	toolsMu      sync.Mutex
+	cachedTools  []string
+	toolsExpires time.Time
 }
 
 // Init initializes the base service.
@@ -36,6 +44,58 @@ func (m *MCPService) Init(ctx context.Context) error {
 // Teardown chains to baseService.Teardown.
 func (m *MCPService) Teardown() error {
 	return m.baseService.Teardown()
+}
+
+// backendTransport builds a fresh MCP transport to this service's backend.
+// Command backends share the stdio bridge, which multiplexes sessions the
+// same way concurrent remote streams already do.
+func (m *MCPService) backendTransport() (mcp.Transport, error) {
+	switch x := m.backend.(type) {
+	case *api.RegisterServiceRequest_TargetUrl:
+		return &mcp.StreamableClientTransport{Endpoint: x.TargetUrl}, nil
+	case *api.RegisterServiceRequest_Command:
+		bridge, ok := m.handler.(*StdioBridge)
+		if !ok {
+			return nil, fmt.Errorf("expected *StdioBridge handler for command-backed MCP service %q, got %T", m.info.GetName(), m.handler)
+		}
+		return newBridgeTransport(bridge), nil
+	default:
+		return nil, fmt.Errorf("unsupported backend type %T for MCP service %q", m.backend, m.info.GetName())
+	}
+}
+
+// Tools lists the backend's tool names (sorted), cached briefly since the
+// discovery announcer polls it on every tick.
+func (m *MCPService) Tools(ctx context.Context) ([]string, error) {
+	m.toolsMu.Lock()
+	defer m.toolsMu.Unlock()
+	if m.cachedTools != nil && time.Now().Before(m.toolsExpires) {
+		return m.cachedTools, nil
+	}
+	transport, err := m.backendTransport()
+	if err != nil {
+		return nil, err
+	}
+	client := mcp.NewClient(&mcp.Implementation{Name: "sam-node-discovery", Version: "0.1.0"}, nil)
+	session, err := client.Connect(ctx, transport, nil)
+	if err != nil {
+		return nil, fmt.Errorf("connect to backend of %q: %w", m.info.GetName(), err)
+	}
+	defer func() { _ = session.Close() }()
+	res, err := session.ListTools(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("list tools of %q: %w", m.info.GetName(), err)
+	}
+	names := make([]string, 0, len(res.Tools))
+	for _, t := range res.Tools {
+		if t != nil && t.Name != "" {
+			names = append(names, t.Name)
+		}
+	}
+	sort.Strings(names)
+	m.cachedTools = names
+	m.toolsExpires = time.Now().Add(backendProbeTTL)
+	return names, nil
 }
 
 // preflightMethodsUnsupportedByPassThrough lists stateless MCP capability
@@ -63,22 +123,12 @@ func (m *MCPService) HandleStreamPassThrough(s network.Stream) {
 	var backendTransport mcp.Transport
 	var closeTransport func()
 
-	switch x := m.backend.(type) {
-	case *api.RegisterServiceRequest_TargetUrl:
-		backendTransport = &mcp.StreamableClientTransport{Endpoint: x.TargetUrl}
-		closeTransport = func() {} // ClientTransport Close is handled by Connect's returned Connection
-	case *api.RegisterServiceRequest_Command:
-		bridge, ok := m.handler.(*StdioBridge)
-		if !ok {
-			logger.Errorf("[MCPService] %s: expected *StdioBridge handler for command-backed MCP service, got %T", m.info.Name, m.handler)
-			return
-		}
-		backendTransport = newBridgeTransport(bridge)
-		closeTransport = func() {} // Do not close the shared bridge
-	default:
-		logger.Errorf("[MCPService] %s: unsupported backend type %T", m.info.Name, m.backend)
+	backendTransport, err := m.backendTransport()
+	if err != nil {
+		logger.Errorf("[MCPService] %s: %v", m.info.Name, err)
 		return
 	}
+	closeTransport = func() {} // fresh per stream for URL; shared bridge is never closed
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
