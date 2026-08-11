@@ -28,6 +28,7 @@ Get a node running on the public testnet (`bananas.sam-mesh.dev`) in minutes:
 - 🚀 **[User Quick Start Guide](site/content/docs/quickstart.md)**: Connect and run a SAM node using binaries or Docker, and query the local MCP server.
 - 🤖 **[Agent Integration Guides](site/content/docs/integrations/_index.md)**: Connect Google Gemini, Claude, and other AI agents to your SAM node to dynamically discover and call tools across the mesh.
 - 📡 **[Testnet Validation Tutorial](site/content/docs/development/testnet-validation.md)**: Real-time verification, remote tool invocation, and HTTP stream proxies.
+- 🎛️ **[Production Kubernetes Deployment](site/content/docs/user/kubernetes-deployment.md)**: Run your own hub (control plane, router, console) via plain manifests, or via the [sam-mesh Helm chart](charts/sam-mesh/README.md) for local/self-hosted setups.
 
 ### For Developers & Contributors
 Compile from source, run local clusters, or execute tests:
