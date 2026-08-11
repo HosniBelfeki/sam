@@ -36,6 +36,7 @@ import (
 type InferenceService struct {
 	baseService
 	backendURL *url.URL
+	engine     InferenceEngine
 }
 
 func (s *InferenceService) Init(ctx context.Context) error {
@@ -46,6 +47,7 @@ func (s *InferenceService) Init(ctx context.Context) error {
 			return fmt.Errorf("invalid inference backend URL %q: %w", x.TargetUrl, err)
 		}
 		s.backendURL = u
+		s.engine = newOpenAIEngine(u, nil)
 		s.handler = s.newInferenceProxy()
 	case *api.RegisterServiceRequest_Command:
 		return fmt.Errorf("command-based backends are not supported for InferenceService")
@@ -53,6 +55,14 @@ func (s *InferenceService) Init(ctx context.Context) error {
 		return fmt.Errorf("unsupported backend type %T for InferenceService", s.backend)
 	}
 	return nil
+}
+
+// Models probes the backend connector for the model IDs it serves.
+func (s *InferenceService) Models(ctx context.Context) ([]string, error) {
+	if s.engine == nil {
+		return nil, fmt.Errorf("inference service %q not initialized", s.info.GetName())
+	}
+	return s.engine.Models(ctx)
 }
 
 func (s *InferenceService) newInferenceProxy() http.Handler {

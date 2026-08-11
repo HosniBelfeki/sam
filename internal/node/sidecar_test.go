@@ -93,6 +93,45 @@ func TestWithAuth(t *testing.T) {
 		}
 	})
 
+	t.Run("Consumed gate header is stripped, other headers survive", func(t *testing.T) {
+		var gotSamAuth, gotAuth string
+		inspect := withAuth(token, true, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotSamAuth = r.Header.Get(api.HeaderSamAuthentication)
+			gotAuth = r.Header.Get("Authorization")
+			w.WriteHeader(http.StatusOK)
+		}))
+
+		req := httptest.NewRequest("GET", "/any", nil)
+		req.Header.Set(api.HeaderSamAuthentication, "Bearer "+token)
+		req.Header.Set("Authorization", "Bearer backend-credential")
+		rr := httptest.NewRecorder()
+		inspect.ServeHTTP(rr, req)
+
+		if gotSamAuth != "" {
+			t.Errorf("consumed %s header must be stripped, got %q", api.HeaderSamAuthentication, gotSamAuth)
+		}
+		if gotAuth != "Bearer backend-credential" {
+			t.Errorf("Authorization must survive when not consumed, got %q", gotAuth)
+		}
+	})
+
+	t.Run("Consumed Authorization fallback is stripped", func(t *testing.T) {
+		var gotAuth string
+		inspect := withAuth(token, true, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotAuth = r.Header.Get("Authorization")
+			w.WriteHeader(http.StatusOK)
+		}))
+
+		req := httptest.NewRequest("GET", "/any", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		rr := httptest.NewRecorder()
+		inspect.ServeHTTP(rr, req)
+
+		if gotAuth != "" {
+			t.Errorf("consumed Authorization header must be stripped, got %q", gotAuth)
+		}
+	})
+
 	t.Run("Authorization fallback rejected in strict mode", func(t *testing.T) {
 		strictHandler := withAuth(token, false, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
