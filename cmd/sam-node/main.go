@@ -79,6 +79,7 @@ var (
 	autoRelayBackoffFlag      time.Duration
 	routerConnectTimeoutFlag  time.Duration
 	apiTokenFlag              string
+	regionFlag                string
 	tlsCertFlag               string
 	tlsKeyFlag                string
 	tlsCAFlag                 string
@@ -229,6 +230,7 @@ func main() {
 					AutoRelayBackoff:     autoRelayBackoffFlag,
 					RouterConnectTimeout: routerConnectTimeoutFlag,
 					RequiredRole:         api.RoleNode,
+					Region:               regionFlag,
 					PolicySyncInterval:   policySyncIntervalFlag,
 					DHTProviderAddrTTL:   dhtProviderAddrTTLFlag,
 					DHTMaxRecordAge:      dhtMaxRecordAgeFlag,
@@ -294,6 +296,7 @@ func main() {
 					AutoRelayBackoff:     autoRelayBackoffFlag,
 					RouterConnectTimeout: routerConnectTimeoutFlag,
 					RequiredRole:         api.RoleNode,
+					Region:               regionFlag,
 					PolicySyncInterval:   policySyncIntervalFlag,
 					DHTProviderAddrTTL:   dhtProviderAddrTTLFlag,
 					DHTMaxRecordAge:      dhtMaxRecordAgeFlag,
@@ -356,6 +359,7 @@ func main() {
 					AutoRelayBackoff:     autoRelayBackoffFlag,
 					RouterConnectTimeout: routerConnectTimeoutFlag,
 					RequiredRole:         api.RoleNode,
+					Region:               regionFlag,
 					PolicySyncInterval:   policySyncIntervalFlag,
 				})
 				if err != nil {
@@ -519,6 +523,7 @@ func main() {
 				AutoRelayBackoff:     3 * time.Second,
 				RouterConnectTimeout: routerConnectTimeoutFlag,
 				RequiredRole:         api.RoleNode,
+				Region:               regionFlag,
 				PolicySyncInterval:   policySyncIntervalFlag,
 			})
 			if err != nil {
@@ -575,6 +580,7 @@ func main() {
 	joinCmd.Flags().BoolVar(&offlineAccessFlag, "offline-access", false, "Request OIDC offline access/refresh token for automatic renewal")
 	joinCmd.Flags().StringVar(&bootstrapTokenFlag, "bootstrap-token", "", "Pre-shared bootstrap token for enrollment")
 	runCmd.Flags().StringVar(&apiTokenFlag, "api-token", "", "Static Bearer token for API authorization")
+	runCmd.Flags().StringVar(&regionFlag, "region", "", "Operator-declared region of this node (e.g. \"eu\"); empty means no claim")
 	runCmd.Flags().StringVar(&tlsCertFlag, "tls-cert", "", "Path to TLS certificate for sidecar API")
 	runCmd.Flags().StringVar(&tlsKeyFlag, "tls-key", "", "Path to TLS key for sidecar API")
 	runCmd.Flags().StringVar(&tlsCAFlag, "tls-ca", "", "Path to TLS CA for sidecar API mTLS")

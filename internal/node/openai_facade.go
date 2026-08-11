@@ -68,6 +68,10 @@ type openAIFacade struct {
 	localServices func() []Service
 	discover      func(ctx context.Context) ([]*api.DiscoveredProvider, error)
 	remoteModels  func(ctx context.Context, peerID, srvName string) ([]string, error)
+	// Gossip seams (may be nil): fresh provider knowledge without a probe,
+	// and interest registration so announcements start flowing for a model.
+	viewProviders  func(model string) []modelProvider
+	ensureInterest func(model string)
 
 	ttl     time.Duration
 	mu      sync.Mutex
@@ -95,6 +99,21 @@ func newOpenAIFacade(node *SamNode, egress http.Handler) *openAIFacade {
 		},
 		remoteModels: func(ctx context.Context, peerID, srvName string) ([]string, error) {
 			return fetchRemoteModels(ctx, node, client, peerID, srvName)
+		},
+		viewProviders: func(model string) []modelProvider {
+			if node.Discovery == nil {
+				return nil
+			}
+			var out []modelProvider
+			for _, p := range node.Discovery.Providers(api.ServiceType_SERVICE_TYPE_INFERENCE, model) {
+				out = append(out, modelProvider{peerID: p.PeerID, service: p.Service})
+			}
+			return out
+		},
+		ensureInterest: func(model string) {
+			if node.Discovery != nil {
+				node.Discovery.Ensure(api.ServiceType_SERVICE_TYPE_INFERENCE, model)
+			}
 		},
 	}
 }
@@ -132,20 +151,38 @@ func fetchRemoteModels(ctx context.Context, node *SamNode, client *http.Client, 
 	return decodeModelIDs(resp.Body)
 }
 
-// providersFor resolves a model to its providers, force-refreshing once on a
-// miss so newly appeared providers are usable before the TTL lapses.
+// providersFor resolves a model to its providers: registry first (locals
+// preferred), then the gossip view (fresh knowledge without a mesh-wide
+// probe), then one forced registry refresh so newly appeared providers are
+// usable before the TTL lapses. Interest is registered so announcements for
+// this model start flowing.
 func (f *openAIFacade) providersFor(ctx context.Context, model string) []modelProvider {
+	if f.ensureInterest != nil {
+		f.ensureInterest(model)
+	}
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	refreshed := false
 	if f.staleLocked() {
 		f.refreshLocked(ctx)
 		refreshed = true
 	}
-	if providers := f.models[model]; len(providers) > 0 || refreshed {
+	if providers := f.models[model]; len(providers) > 0 {
+		f.mu.Unlock()
 		return providers
 	}
-	f.refreshLocked(ctx)
+	f.mu.Unlock()
+
+	if f.viewProviders != nil {
+		if providers := f.viewProviders(model); len(providers) > 0 {
+			return providers
+		}
+	}
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !refreshed {
+		f.refreshLocked(ctx)
+	}
 	return f.models[model]
 }
 

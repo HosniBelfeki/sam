@@ -25,11 +25,18 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/google/sam/api"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/openai/openai-go"
 )
+
+// modelCacheTTL bounds backend /v1/models probes: the announcer ticks more
+// often than models change.
+const modelCacheTTL = 30 * time.Second
 
 // InferenceService provides intelligent LLM gateway features: traffic routing
 // and token usage tracking for OpenAI-compatible endpoints.
@@ -37,6 +44,11 @@ type InferenceService struct {
 	baseService
 	backendURL *url.URL
 	engine     InferenceEngine
+	active     atomic.Int64
+
+	modelsMu      sync.Mutex
+	cachedModels  []string
+	modelsExpires time.Time
 }
 
 func (s *InferenceService) Init(ctx context.Context) error {
@@ -48,7 +60,7 @@ func (s *InferenceService) Init(ctx context.Context) error {
 		}
 		s.backendURL = u
 		s.engine = newOpenAIEngine(u, nil)
-		s.handler = s.newInferenceProxy()
+		s.handler = s.trackActive(s.newInferenceProxy())
 	case *api.RegisterServiceRequest_Command:
 		return fmt.Errorf("command-based backends are not supported for InferenceService")
 	default:
@@ -57,12 +69,41 @@ func (s *InferenceService) Init(ctx context.Context) error {
 	return nil
 }
 
-// Models probes the backend connector for the model IDs it serves.
+// Models returns the model IDs the backend serves, cached briefly since both
+// the discovery announcer and the OpenAI facade call it repeatedly.
 func (s *InferenceService) Models(ctx context.Context) ([]string, error) {
 	if s.engine == nil {
 		return nil, fmt.Errorf("inference service %q not initialized", s.info.GetName())
 	}
-	return s.engine.Models(ctx)
+	s.modelsMu.Lock()
+	defer s.modelsMu.Unlock()
+	if s.cachedModels != nil && time.Now().Before(s.modelsExpires) {
+		return s.cachedModels, nil
+	}
+	models, err := s.engine.Models(ctx)
+	if err != nil {
+		return nil, err
+	}
+	s.cachedModels = models
+	s.modelsExpires = time.Now().Add(modelCacheTTL)
+	return models, nil
+}
+
+// ActiveRequests reports in-flight requests, a load hint for announcements.
+func (s *InferenceService) ActiveRequests() uint32 {
+	n := s.active.Load()
+	if n < 0 {
+		return 0
+	}
+	return uint32(n)
+}
+
+func (s *InferenceService) trackActive(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.active.Add(1)
+		defer s.active.Add(-1)
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *InferenceService) newInferenceProxy() http.Handler {

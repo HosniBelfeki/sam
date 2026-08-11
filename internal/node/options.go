@@ -58,6 +58,9 @@ type Options struct {
 	DiscoveryConcurrency int
 	// RequiredRole restricts enrollment and startup to only accept tokens containing this role.
 	RequiredRole string
+	// Region is the operator-declared jurisdiction of this node (api.LabelRegion).
+	// Empty means no claim; consumers with a region requirement will not select it.
+	Region string
 	// PolicySyncInterval specifies how often the node syncs the mesh policy from the control plane.
 	PolicySyncInterval time.Duration
 	// PolicySyncJitter specifies the maximum jitter delay when scheduling policy syncs on event broadcasts.

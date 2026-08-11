@@ -48,6 +48,7 @@ func TestOpenAIFacadeCUJ(t *testing.T) {
 		"--listen", "/ip4/127.0.0.1/udp/0/quic-v1",
 		"--listen", "/ip4/127.0.0.1/tcp/0",
 		"--discovery-interval", "100ms",
+		"--region", "eu", // exercise the operator region claim end to end
 	)
 	t.Log("Starting Node B (consumer)...")
 	_ = startBackgroundNode(t, nodeBin, hubAddr, homeB,

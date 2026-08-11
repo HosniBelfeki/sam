@@ -302,6 +302,57 @@ func TestFacade_RegistryCacheAndForcedRefresh(t *testing.T) {
 	}
 }
 
+func TestFacade_GossipViewServesRegistryMiss(t *testing.T) {
+	f := newTestFacade()
+	interestCalls := 0
+	f.ensureInterest = func(model string) { interestCalls++ }
+	f.viewProviders = func(model string) []modelProvider {
+		if model == "m-gossip" {
+			return []modelProvider{{peerID: "peerG", service: "srvG"}}
+		}
+		return nil
+	}
+	var gotPath string
+	f.forward = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"m-gossip"}`))
+	f.handleCompletions(httptest.NewRecorder(), req)
+
+	if want := "/sam/peerG/inference/srvG/v1/chat/completions"; gotPath != want {
+		t.Errorf("forwarded path: got %q, want %q", gotPath, want)
+	}
+	if interestCalls != 1 {
+		t.Errorf("ensureInterest calls: got %d, want 1", interestCalls)
+	}
+}
+
+func TestFacade_RegistryHitBeatsGossipView(t *testing.T) {
+	f := newTestFacade()
+	f.discover = func(_ context.Context) ([]*api.DiscoveredProvider, error) {
+		return []*api.DiscoveredProvider{{PeerId: "peerA", SrvName: "srvA"}}, nil
+	}
+	f.remoteModels = func(_ context.Context, _, _ string) ([]string, error) {
+		return []string{"m1"}, nil
+	}
+	f.viewProviders = func(model string) []modelProvider {
+		t.Error("gossip view must not be consulted on a registry hit")
+		return nil
+	}
+	var gotPath string
+	f.forward = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"m1"}`))
+	f.handleCompletions(httptest.NewRecorder(), req)
+
+	if want := "/sam/peerA/inference/srvA/v1/chat/completions"; gotPath != want {
+		t.Errorf("forwarded path: got %q, want %q", gotPath, want)
+	}
+}
+
 func TestFacade_EmptyRegistryIsNotCached(t *testing.T) {
 	f := newTestFacade()
 	discoverCalls := 0
