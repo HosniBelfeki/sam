@@ -54,7 +54,7 @@ export SAM_OIDC_SECRET=sam-secret
 ./bin/sam-router \
   --control-plane=http://localhost:8080 \
   --listen=/ip4/127.0.0.1/tcp/4501 \
-  --api-token=devtoken
+  # api token via SAM_API_TOKEN env or --api-token-path
 ```
 
 ---

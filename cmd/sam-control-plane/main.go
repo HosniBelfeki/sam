@@ -24,6 +24,7 @@ import (
 
 	"github.com/google/sam/api"
 	"github.com/google/sam/internal/controlplane"
+	"github.com/google/sam/internal/secrets"
 	"github.com/google/sam/internal/storage"
 	golog "github.com/ipfs/go-log/v2"
 	"github.com/spf13/cobra"
@@ -38,7 +39,7 @@ var (
 	keyRotationInterval   time.Duration
 	keyGracePeriod        time.Duration
 	leaseDuration         time.Duration
-	adminToken            string
+	adminTokenPath        string
 	insecureSkipTLSVerify bool
 	logLevel              string
 	autoApproveEnrollment bool
@@ -65,6 +66,11 @@ func main() {
 
 			if oidcIssuer == "" {
 				logger.Fatalf("OIDC issuer is required (use --issuer flag)")
+			}
+
+			adminToken, err := secrets.FromPathOrEnv("admin-token", adminTokenPath, "SAM_ADMIN_TOKEN")
+			if err != nil {
+				logger.Fatalf("%v", err)
 			}
 
 			var auds []string
@@ -131,7 +137,7 @@ func main() {
 	rootCmd.Flags().DurationVar(&keyRotationInterval, "key-rotation-interval", 24*time.Hour, "Key rotation interval (e.g. 24h). 0 disables rotation.")
 	rootCmd.Flags().DurationVar(&keyGracePeriod, "key-grace-period", 1*time.Hour, "Key grace period for rotated keys.")
 	rootCmd.Flags().DurationVar(&leaseDuration, "lease-duration", 15*time.Minute, "Router lease registration TTL.")
-	rootCmd.Flags().StringVar(&adminToken, "admin-token", "", "Token for authenticating policy REST API requests")
+	rootCmd.Flags().StringVar(&adminTokenPath, "admin-token-path", "", "Path to file containing the token for authenticating policy REST API requests (or env SAM_ADMIN_TOKEN)")
 	rootCmd.Flags().BoolVar(&insecureSkipTLSVerify, "insecure-skip-tls-verify", false, "Skip TLS verification for OIDC providers")
 	rootCmd.Flags().StringVar(&logLevel, "log-level", "info", "Log level (debug, info, warn, error)")
 	rootCmd.Flags().BoolVar(&autoApproveEnrollment, "auto-approve-enrollment", false, "Auto-approve valid bootstrap token enrollment requests")

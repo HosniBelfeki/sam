@@ -33,7 +33,7 @@ spec:
         image: "{{ .Values.console.image.repository }}:{{ .Values.global.imageTag }}"
         imagePullPolicy: {{ .Values.global.imagePullPolicy }}
         env:
-        - name: ADMIN_TOKEN
+        - name: SAM_ADMIN_TOKEN
           valueFrom:
             secretKeyRef:
               name: {{ include "sam-mesh.fullname" . }}-secrets
@@ -57,6 +57,4 @@ spec:
         args:
         - "--control-plane=http://{{ include "sam-mesh.fullname" . }}-control-plane:{{ .Values.controlPlane.service.port }}"
         - "--bind-addr=:8081"
-        - "--static-dir=/app/public"
-        - "--admin-token=$(ADMIN_TOKEN)"
-{{- end }}
+        - "--static-dir=/app/public"{{- end }}

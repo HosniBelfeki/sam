@@ -10,7 +10,7 @@ Antigravity natively supports Streamable HTTP MCP servers via the `serverUrl` co
 
 ## Prerequisites
 
-- A running `sam-node` (default `http://localhost:8080`) and its `--api-token`.
+- A running `sam-node` (default `http://localhost:8080`) and its the node API token (`SAM_API_TOKEN` env or `--api-token-path`).
 
 ## Configuration
 
@@ -18,7 +18,7 @@ Edit your Antigravity MCP configuration file:
 
 - Path: `~/.gemini/config/mcp_config.json`
 
-Add the node directly using its HTTP endpoint (replace `<YOUR_TOKEN>` with your `--api-token`):
+Add the node directly using its HTTP endpoint (replace `<YOUR_TOKEN>` with your the node API token (`SAM_API_TOKEN` env or `--api-token-path`)):
 
 ```json
 {
@@ -46,5 +46,5 @@ The tool flow for Antigravity is as follows:
 
 ## Troubleshooting
 
-* **Connection errors**: verify `sam-node` is reachable at the configured URL and that the bearer token matches `--api-token`.
+* **Connection errors**: verify `sam-node` is reachable at the configured URL and that the bearer token matches the node API token (`SAM_API_TOKEN` env or `--api-token-path`).
 * **Running `sam-node` in WSL or a container**: the `mcp-remote` bridge runs on the host, so that host must be able to reach the node's bind address. Bind the node to an address the host can reach (e.g. `0.0.0.0`).

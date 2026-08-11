@@ -29,6 +29,7 @@ import (
 	"github.com/google/sam/api"
 	"github.com/google/sam/internal/node"
 	"github.com/google/sam/internal/sambox"
+	"github.com/google/sam/internal/secrets"
 	golog "github.com/ipfs/go-log/v2"
 	"github.com/multiformats/go-multiaddr"
 	madns "github.com/multiformats/go-multiaddr-dns"
@@ -55,8 +56,10 @@ var (
 	jwtFlag                   string
 	jwtPathFlag               string
 	bootstrapTokenFlag        string
+	bootstrapTokenPathFlag    string
 	clientIDFlag              string
 	clientSecretFlag          string
+	clientSecretPathFlag      string
 	controlPlanePublicKeyFlag string
 	meshFlag                  string
 	discoveryIntervalFlag     string
@@ -87,6 +90,30 @@ var (
 
 var logger = golog.Logger("sam-box-cli")
 
+// resolveSecretFlag folds a --<name>-path file variant into its value flag
+// and warns when the secret was passed on the command line, where it leaks
+// via /proc/<pid>/cmdline, shell history, and pod specs.
+func resolveSecretFlag(name, value, path string) string {
+	if value != "" {
+		logger.Warnf("--%s passes a secret on the command line; prefer --%s-path", name, name)
+	}
+	secret, err := secrets.Resolve(name, value, path)
+	if err != nil {
+		logger.Fatalf("%v", err)
+	}
+	return secret
+}
+
+// resolveDaemonSecret resolves a secret that lives for the daemon's whole
+// lifetime: file (recommended) or environment variable, never a flag value.
+func resolveDaemonSecret(name, path, envVar string) string {
+	secret, err := secrets.FromPathOrEnv(name, path, envVar)
+	if err != nil {
+		logger.Fatalf("%v", err)
+	}
+	return secret
+}
+
 func main() {
 	rootCmd := &cobra.Command{
 		Use:   "sam-box",
@@ -109,6 +136,12 @@ func main() {
 			// Suppress noisy DHT logs
 			_ = golog.SetLogLevel("dht", "fatal")
 			_ = golog.SetLogLevel("dht/RtRefreshManager", "fatal")
+
+			bootstrapTokenFlag = resolveSecretFlag("bootstrap-token", bootstrapTokenFlag, bootstrapTokenPathFlag)
+			clientSecretFlag = resolveDaemonSecret("client-secret", clientSecretPathFlag, "SAM_CLIENT_SECRET")
+			if jwtFlag != "" {
+				logger.Warn("--jwt passes a secret on the command line; prefer --jwt-path")
+			}
 
 			if udsPathFlag == "" {
 				logger.Fatal("missing required flag: --uds-path")
@@ -484,8 +517,9 @@ func main() {
 	runCmd.Flags().StringVar(&jwtFlag, "jwt", "", "Pre-fetched JWT token")
 	runCmd.Flags().StringVar(&jwtPathFlag, "jwt-path", "", "Path to file containing JWT token")
 	runCmd.Flags().StringVar(&bootstrapTokenFlag, "bootstrap-token", "", "Pre-shared bootstrap token for enrollment")
+	runCmd.Flags().StringVar(&bootstrapTokenPathFlag, "bootstrap-token-path", "", "Path to file containing the bootstrap token (recommended over --bootstrap-token)")
 	runCmd.Flags().StringVar(&clientIDFlag, "client-id", "", "OIDC Client ID for M2M")
-	runCmd.Flags().StringVar(&clientSecretFlag, "client-secret", "", "OIDC Client Secret for M2M")
+	runCmd.Flags().StringVar(&clientSecretPathFlag, "client-secret-path", "", "Path to file containing the OIDC client secret (or env SAM_CLIENT_SECRET)")
 	runCmd.Flags().StringVar(&controlPlanePublicKeyFlag, "control-plane-public-key", "", "Control plane public key (32-byte Hex)")
 	runCmd.Flags().StringVar(&meshFlag, "mesh", node.DefaultMeshName, "Mesh federation name")
 	runCmd.Flags().StringVar(&discoveryIntervalFlag, "discovery-interval", node.DefaultDiscoveryInterval, "Polling interval for DHT discovery")
@@ -509,6 +543,7 @@ func main() {
 	joinCmd.Flags().DurationVar(&routerConnectTimeoutFlag, "router-connect-timeout", node.DefaultRouterConnectTimeout, "Timeout for dialing each router address")
 	joinCmd.Flags().BoolVar(&offlineAccessFlag, "offline-access", false, "Request OIDC offline access/refresh token for automatic renewal")
 	joinCmd.Flags().StringVar(&bootstrapTokenFlag, "bootstrap-token", "", "Pre-shared bootstrap token for enrollment")
+	joinCmd.Flags().StringVar(&bootstrapTokenPathFlag, "bootstrap-token-path", "", "Path to file containing the bootstrap token (recommended over --bootstrap-token)")
 
 	rootCmd.PersistentFlags().StringVar(&controlPlaneAddr, "control-plane", "", "Control plane URL")
 	rootCmd.PersistentFlags().StringVar(&configFile, "config", node.DefaultConfigFile, "Path to sam-node.yaml configuration file")

@@ -60,7 +60,7 @@ roles:
 	// 2. Start Control Plane with aggressive key rotation
 	cpCmd := exec.Command(cpBin,
 		"--bind-address", fmt.Sprintf("127.0.0.1:%d", cpPort),
-		"--admin-token", "test-admin-token",
+		"--admin-token-path", tokenPath(t, "test-admin-token"),
 		"--db-dsn", filepath.Join(tmpDir, "cp-keys.db"),
 		"--issuer", oidcURL,
 		"--key-rotation-interval", "4s",
@@ -132,7 +132,7 @@ roles:
 		"--listen", "/ip4/127.0.0.1/tcp/0",
 		"--allow-loopback",
 		"--bind-addr", fmt.Sprintf("127.0.0.1:%d", nodeApiPort),
-		"--api-token", "dummy-token",
+		"--api-token-path", tokenPath(t, "dummy-token"),
 		"--log-level", "debug",
 	)
 	nodeCmd.Env = nodeEnv

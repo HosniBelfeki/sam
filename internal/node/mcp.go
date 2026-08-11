@@ -47,7 +47,7 @@ Other useful tools: discover_remote_services browses services by type (e.g. 'MCP
 
 Tools on remote services are identified via the format 'scheme://service-name/tool-name' (where 'scheme://service-name' represents the well-known local address of the service, and 'tool-name' is the individual tool to execute on it. Tool names themselves can contain any characters).
 
-Inference services ('inference://...') are NOT called via call_remote_tool — they are plain OpenAI-compatible HTTP endpoints. Use discover_remote_services with type 'inference' to get each one's local_proxy_url, then send a normal HTTP request (e.g. POST <local_proxy_url>/chat/completions) directly to that URL: add header 'X-Sam-Authentication: Bearer <your local --api-token>' to authenticate to this node, and only add 'Authorization: Bearer <upstream-credential>' if the destination service itself requires its own credential — it passes straight through untouched and is never used to authenticate to this node.`
+Inference services ('inference://...') are NOT called via call_remote_tool — they are plain OpenAI-compatible HTTP endpoints. Use discover_remote_services with type 'inference' to get each one's local_proxy_url, then send a normal HTTP request (e.g. POST <local_proxy_url>/chat/completions) directly to that URL: add header 'X-Sam-Authentication: Bearer <your local node API token>' to authenticate to this node, and only add 'Authorization: Bearer <upstream-credential>' if the destination service itself requires its own credential — it passes straight through untouched and is never used to authenticate to this node.`
 
 // NewMCPServer creates a new MCP server instance with all tools registered.
 func NewMCPServer(node *SamNode) *mcp.Server {

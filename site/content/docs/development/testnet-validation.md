@@ -28,7 +28,7 @@ Before starting, ensure you have:
      run --data-dir /data \
        --control-plane https://bananas.sam-mesh.dev \
        --bind-addr 0.0.0.0:8080 \
-       --api-token secret-token \
+       # api token via SAM_API_TOKEN env or --api-token-path \
        --log-level debug
    ```
 

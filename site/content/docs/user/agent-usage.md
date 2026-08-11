@@ -28,7 +28,7 @@ sequenceDiagram
     Node->>Node: Persist Biscuit in Local Store (agent.db)
 
     Note over User,Agent: Phase 2: Agent Tool Invocation
-    User->>Node: sam-node run --api-token "secret-key"
+    User->>Node: sam-node run (SAM_API_TOKEN="secret-key")
     Node->>Node: Start local MCP server on 127.0.0.1:8080
     Agent->>Node: Connect to local MCP (X-Sam-Authentication: Bearer "secret-key")
     Agent->>Node: Call Remote P2P Tool
@@ -72,12 +72,12 @@ Once authorized, you start the node gateway. The gateway spins up a local Model 
 
 Run the node daemon, securing the local API endpoint with a custom token:
 ```bash
-sam-node run --api-token "my-agent-super-token-123" --bind-addr "127.0.0.1:8080"
+SAM_API_TOKEN="my-agent-super-token-123" sam-node run --bind-addr "127.0.0.1:8080"
 ```
 
 ### Key CLI Parameters
 *   `--bind-addr`: The local TCP address where the node's local HTTP server runs (default: `127.0.0.1:8080`).
-*   `--api-token`: A security token required by any local AI agent attempting to connect to your node.
+*   API token (`SAM_API_TOKEN` env or `--api-token-path` file): a security token required by any local AI agent attempting to connect to your node.
 *   `--data-dir`: Custom path to store configurations and Biscuit tokens (defaults to `~/.config/sam-mesh` or env `SAM_DATA_DIR`).
 
 ---

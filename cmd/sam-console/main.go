@@ -11,25 +11,30 @@ import (
 	"time"
 
 	"github.com/google/sam/internal/console"
+	"github.com/google/sam/internal/secrets"
 )
 
 func main() {
 	var (
 		controlPlaneURL = flag.String("control-plane", "http://localhost:8080", "URL of the SAM control plane")
-		adminToken      = flag.String("admin-token", "", "Admin token for control plane authentication")
+		adminTokenPath  = flag.String("admin-token-path", "", "Path to file containing the admin token (or env SAM_ADMIN_TOKEN)")
 		bindAddr        = flag.String("bind-addr", ":8081", "Address to bind the console server")
 		staticDir       = flag.String("static-dir", "public", "Directory containing static frontend files")
 		basePath        = flag.String("base-path", "", "Base path prefix for the console (e.g. /console)")
 	)
 	flag.Parse()
 
-	if *adminToken == "" {
-		log.Fatal("Admin token is required (via --admin-token)")
+	adminToken, err := secrets.FromPathOrEnv("admin-token", *adminTokenPath, "SAM_ADMIN_TOKEN")
+	if err != nil {
+		log.Fatalf("%v", err)
+	}
+	if adminToken == "" {
+		log.Fatal("Admin token is required (via --admin-token-path or env SAM_ADMIN_TOKEN)")
 	}
 
 	srv, err := console.NewServer(console.Config{
 		ControlPlaneURL: *controlPlaneURL,
-		AdminToken:      *adminToken,
+		AdminToken:      adminToken,
 		StaticDir:       *staticDir,
 		BasePath:        *basePath,
 	})

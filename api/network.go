@@ -89,7 +89,8 @@ const (
 
 	// HeaderSamAuthentication is the custom HTTP header used to authenticate a local
 	// process to this node's sidecar API (the shared secret configured via
-	// "--api-token"). Using a SAM-specific header name — instead of the standard
+	// "--api-token-path" or the SAM_API_TOKEN environment variable). Using a
+	// SAM-specific header name — instead of the standard
 	// "Authorization" header — leaves "Authorization" free to always mean what
 	// every HTTP client expects: the credential for the destination being called.
 	// The sidecar strips this header before forwarding any request off-node, so

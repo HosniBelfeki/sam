@@ -469,7 +469,7 @@ func startControlPlaneAndRouter(t *testing.T, tmpDir string, oidcURL string, min
 		"--db-dsn", filepath.Join(tmpDir, "cp-keys.db"),
 		"--issuer", oidcURL,
 		"--insecure-skip-tls-verify",
-		"--admin-token", "test-admin-token",
+		"--admin-token-path", tokenPath(t, "test-admin-token"),
 	)
 	cpCmd.Stdout = os.Stdout
 	cpCmd.Stderr = os.Stderr

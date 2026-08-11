@@ -29,12 +29,12 @@ JWT="$(kubectl --context "${KCTX}" -n "${NAMESPACE}" create token local-node-sa 
 
 echo "Enrolling local ./bin/sam-node into the mesh control plane at http://127.0.0.1:9090…"
 echo "  MCP/sidecar API on 127.0.0.1:9099"
+export SAM_API_TOKEN=devtoken
 exec ./bin/sam-node run \
   --control-plane http://127.0.0.1:9090 \
   --jwt "${JWT}" \
   --listen /ip4/0.0.0.0/tcp/0 \
   --bind-addr 127.0.0.1:9099 \
-  --api-token devtoken \
   --discovery-interval 200ms \
   --router-connect-timeout 10s \
   "$@"

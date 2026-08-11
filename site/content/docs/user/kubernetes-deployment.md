@@ -301,7 +301,7 @@ spec:
           - "--config=/etc/sam/sam-node.yaml"
           - "--control-plane=http://sam-control-plane.sam.svc.cluster.local:8080"
           - "--jwt-path=/var/run/secrets/tokens/sam-token"
-          - "--api-token=secret-token"
+          - "--api-token-path=/var/run/secrets/sam/api-token"
         volumeMounts:
         - name: config-volume
           mountPath: /etc/sam

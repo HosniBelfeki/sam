@@ -55,5 +55,5 @@ Because these tools are surfaced automatically, no remote tool needs to be regis
 ## Troubleshooting
 
 * Connection Issues: Ensure `sam-node` is reachable at the configured URL (default `http://localhost:8080/mcp`).
-* Authentication: Double-check that the `X-Sam-Authentication` header matches the `--api-token` provided to your `sam-node`.
+* Authentication: Double-check that the `X-Sam-Authentication` header matches the the node API token (`SAM_API_TOKEN` env or `--api-token-path`) provided to your `sam-node`.
 * Gateway Status: Use `openclaw status` to confirm the gateway is running and the MCP bridge is active.

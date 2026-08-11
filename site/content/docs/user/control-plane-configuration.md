@@ -21,7 +21,7 @@ The Control Plane is responsible for bridging user identities from trusted OIDC 
 | `--db-driver` | *None* | `sqlite` | Database driver (`sqlite` or `postgres`). |
 | `--db-dsn` | *None* | `control-plane.db` | Database DSN/Connection URL (e.g. `postgres://user:pass@host:5432/db`). |
 | `--allowed-audiences` | *None* | `sam-mesh-audience` | Comma-separated list of allowed JWT audiences. |
-| `--admin-token` | *None* | *None* | Secret token string required in the HTTP Header `Authorization: Bearer <token>` for admin operations. |
+| `--admin-token-path` (or env `SAM_ADMIN_TOKEN`) | *None* | *None* | File containing the secret token required in the HTTP Header `Authorization: Bearer <token>` for admin operations. |
 | `--insecure-skip-tls-verify` | *None* | `false` | Set to `true` to skip certificate validation for development/testing OIDC providers. |
 | `--key-rotation-interval` | *None* | `24h` | Key rotation interval (e.g. `24h`). `0s` disables rotation. |
 | `--key-grace-period` | *None* | `1h` | Key grace period for rotated keys. |
@@ -124,7 +124,7 @@ Here is a script demonstrating how to boot both services in a secure development
   --issuer "https://accounts.google.com" \
   --allowed-audiences "my-google-client-id.apps.googleusercontent.com" \
   --bind-address "0.0.0.0:8080" \
-  --admin-token "super-secret-admin-token"
+  --admin-token-path /etc/sam/admin-token
 
 # 2. Seed baseline policy via REST API
 curl -X POST \
@@ -170,7 +170,7 @@ Nodes and Routers run a background task that periodically checks the remaining B
 
 Administrators can immediately revoke any active session to disable a node's ability to renew its token.
 * **Endpoint**: `POST /admin/revoke`
-* **Authentication**: Requires the `--admin-token` in the headers.
+* **Authentication**: Requires the admin token in the headers.
 * **Payload**:
   ```json
   {

@@ -151,7 +151,7 @@ services:
 		"--control-plane", fmt.Sprintf("http://127.0.0.1:%d", httpPortCP),
 		"--data-dir", homeB,
 		"--bind-addr", fmt.Sprintf("127.0.0.1:%d", apiPortB),
-		"--api-token", apiTokenB,
+		"--api-token-path", tokenPath(t, apiTokenB),
 		"--jwt", mintToken(map[string]interface{}{
 			"sub":    "bob-subject",
 			"roles":  []string{api.RoleNode},
@@ -247,7 +247,7 @@ services:
 				"--control-plane", fmt.Sprintf("http://127.0.0.1:%d", httpPortCP),
 				"--data-dir", homeA,
 				"--bind-addr", fmt.Sprintf("127.0.0.1:%d", apiPortA),
-				"--api-token", apiTokenA,
+				"--api-token-path", tokenPath(t, apiTokenA),
 				"--jwt", jwtA,
 				"--listen", "/ip4/127.0.0.1/tcp/0",
 				"--listen", "/ip4/127.0.0.1/udp/0/quic-v1",
