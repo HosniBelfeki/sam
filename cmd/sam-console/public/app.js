@@ -17,12 +17,25 @@ document.addEventListener('DOMContentLoaded', () => {
             
             // Optionally fetch data specifically for that view if needed
             // Currently, loadData() fetches everything from the status endpoint.
+
+            // On mobile the sidebar is an overlay drawer; close it after navigating.
+            closeSidebar();
         });
     });
 
     // Check auth status on load
     checkAuthAndLoad();
 });
+
+window.toggleSidebar = function() {
+    document.querySelector('.sidebar').classList.toggle('open');
+    document.getElementById('sidebar-scrim').classList.toggle('active');
+};
+
+window.closeSidebar = function() {
+    document.querySelector('.sidebar').classList.remove('open');
+    document.getElementById('sidebar-scrim').classList.remove('active');
+};
 
 async function checkAuthAndLoad() {
     try {
