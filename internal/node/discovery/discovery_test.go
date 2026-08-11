@@ -17,6 +17,7 @@ package discovery
 import (
 	"context"
 	"crypto/rand"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -117,9 +118,10 @@ func TestProvidersGoStaleWithoutAnnouncements(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	announcing := true
+	var announcing atomic.Bool
+	announcing.Store(true)
 	provider.Start(ctx, func() []Announcement {
-		if !announcing {
+		if !announcing.Load() {
 			return nil
 		}
 		return []Announcement{{
@@ -139,7 +141,7 @@ func TestProvidersGoStaleWithoutAnnouncements(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 
-	announcing = false
+	announcing.Store(false)
 	deadline = time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		if len(consumer.Providers(api.ServiceType_SERVICE_TYPE_INFERENCE, "model-a")) == 0 {
