@@ -9,7 +9,7 @@ SAM is a smart network built for autonomous AI agents:
 *   **Agentic Network:** Formed by lightweight nodes (`sam-node`) that provide self-healing, P2P connectivity, allowing autonomous agents to plug in, communicate, and invoke tools dynamically.
 *   **Portability:** Cryptographic identities are environment-agnostic, allowing seamless node mobility across cloud, local, and edge environments.
 
-<video src="./site/static/demo.mp4" width="100%" autoplay loop muted playsinline controls></video>
+<video src="https://github.com/user-attachments/assets/f1a61b6f-efcd-46d8-a6e6-659fb29dd1ce" width="100%" autoplay loop muted playsinline controls></video>
 
 ---
 
