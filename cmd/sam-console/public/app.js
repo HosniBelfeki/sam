@@ -456,12 +456,14 @@ window.generateBootstrapToken = async function() {
     const role = document.getElementById('token-role').value;
     const owner_id = document.getElementById('token-owner').value;
     const max_usages = parseInt(document.getElementById('token-usages').value, 10);
+    const ttl_hours = parseInt(document.getElementById('token-ttl').value, 10);
     const description = document.getElementById('token-desc').value;
 
     const payload = {
         role,
         owner_id,
         max_usages,
+        ttl_hours,
         description
     };
 
