@@ -302,6 +302,35 @@ func TestFacade_RegistryCacheAndForcedRefresh(t *testing.T) {
 	}
 }
 
+func TestFacade_EmptyRegistryIsNotCached(t *testing.T) {
+	f := newTestFacade()
+	discoverCalls := 0
+	available := false
+	f.discover = func(_ context.Context) ([]*api.DiscoveredProvider, error) {
+		discoverCalls++
+		if !available {
+			return nil, nil
+		}
+		return []*api.DiscoveredProvider{{PeerId: "peerA", SrvName: "srvA"}}, nil
+	}
+	f.remoteModels = func(_ context.Context, _, _ string) ([]string, error) {
+		return []string{"m1"}, nil
+	}
+
+	ctx := context.Background()
+	if got := f.modelsView(ctx); len(got) != 0 {
+		t.Fatalf("modelsView on empty mesh: got %v, want empty", got)
+	}
+	// A provider appears: the empty view must not shadow it until TTL.
+	available = true
+	if got := f.modelsView(ctx); len(got) != 1 {
+		t.Fatalf("modelsView after provider appeared: got %v, want 1 model", got)
+	}
+	if discoverCalls != 2 {
+		t.Fatalf("discover calls: got %d, want 2", discoverCalls)
+	}
+}
+
 func TestPickProvider(t *testing.T) {
 	local := modelProvider{service: "local-llm"}
 	remoteA := modelProvider{peerID: "peerA", service: "srvA"}

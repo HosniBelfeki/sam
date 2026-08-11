@@ -138,7 +138,7 @@ func (f *openAIFacade) providersFor(ctx context.Context, model string) []modelPr
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	refreshed := false
-	if f.models == nil || time.Now().After(f.expires) {
+	if f.staleLocked() {
 		f.refreshLocked(ctx)
 		refreshed = true
 	}
@@ -154,10 +154,16 @@ func (f *openAIFacade) providersFor(ctx context.Context, model string) []modelPr
 func (f *openAIFacade) modelsView(ctx context.Context) map[string][]modelProvider {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.models == nil || time.Now().After(f.expires) {
+	if f.staleLocked() {
 		f.refreshLocked(ctx)
 	}
 	return f.models
+}
+
+// staleLocked reports whether the view needs a refresh. Empty views are never
+// cached: providers may appear at any moment and discovery stays bounded.
+func (f *openAIFacade) staleLocked() bool {
+	return len(f.models) == 0 || time.Now().After(f.expires)
 }
 
 func (f *openAIFacade) refreshLocked(ctx context.Context) {
