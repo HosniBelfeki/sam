@@ -51,7 +51,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Upload Mobile App to Release
-        uses: softprops/action-gh-release@d5382d3e6f2fa7bd53cb749d33091853d4985daf # v2.3.0
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           files: mobile/sam-node-app/build/app/outputs/flutter-apk/app-release.apk
         env:
