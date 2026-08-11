@@ -50,7 +50,7 @@ jobs:
 
     - name: Extract metadata for Control Plane
       id: meta-cp
-      uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+      uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
       with:
         images: ${{ env.REGISTRY }}/google/sam-control-plane
         tags: |
@@ -72,7 +72,7 @@ jobs:
 
     - name: Extract metadata for Router
       id: meta-router
-      uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+      uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
       with:
         images: ${{ env.REGISTRY }}/google/sam-router
         tags: |
@@ -94,7 +94,7 @@ jobs:
 
     - name: Extract metadata for Node
       id: meta-node
-      uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+      uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
       with:
         images: ${{ env.REGISTRY }}/google/sam-node
         tags: |
@@ -116,7 +116,7 @@ jobs:
 
     - name: Extract metadata for nano-init
       id: meta-nano-init
-      uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+      uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
       with:
         images: ${{ env.REGISTRY }}/google/sam-nano-init
         tags: |
@@ -138,7 +138,7 @@ jobs:
 
     - name: Extract metadata for sam-box
       id: meta-sambox
-      uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+      uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
       with:
         images: ${{ env.REGISTRY }}/google/sam-box
         tags: |
@@ -160,7 +160,7 @@ jobs:
 
     - name: Extract metadata for sam-console
       id: meta-console
-      uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+      uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
       with:
         images: ${{ env.REGISTRY }}/google/sam-console
         tags: |
