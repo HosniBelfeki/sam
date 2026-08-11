@@ -233,6 +233,24 @@ func TestProviderTableIsBounded(t *testing.T) {
 	}
 }
 
+func TestPeerLabels(t *testing.T) {
+	d := New(nil, testPeerID(t))
+	signer := testPeerID(t)
+	d.observe(rawMessage(t, signer, &api.ServiceAnnounce{
+		PeerId: signer.String(), Type: api.ServiceType_SERVICE_TYPE_MCP,
+		ServiceName: "reviewer", Keys: []string{"review_pr"},
+		Labels:    map[string]string{api.LabelRegion: "eu"},
+		Timestamp: time.Now().Unix(),
+	}))
+
+	if got := d.PeerLabels(signer.String()); got[api.LabelRegion] != "eu" {
+		t.Errorf("PeerLabels: got %v, want region=eu", got)
+	}
+	if got := d.PeerLabels("unknown-peer"); got != nil {
+		t.Errorf("PeerLabels for unknown peer: got %v, want nil", got)
+	}
+}
+
 func TestValidateServiceAnnounceCaps(t *testing.T) {
 	base := func() *api.ServiceAnnounce {
 		return &api.ServiceAnnounce{

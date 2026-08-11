@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/sam/api"
+	samdiscovery "github.com/google/sam/internal/node/discovery"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/multiformats/go-multiaddr"
@@ -285,6 +286,7 @@ type FindRemoteToolsParams struct {
 	Intent      string `json:"intent,omitempty" jsonschema:"Natural-language description of what the caller is looking for. Reserved for future semantic ranking; currently accepted but ignored."`
 	PeerID      string `json:"peer_id,omitempty" jsonschema:"Restrict the search to a single peer. Empty means search the whole mesh."`
 	ServiceName string `json:"service_name,omitempty" jsonschema:"Restrict results to tools whose name starts with this service prefix (e.g. 'code-reviewer'). Empty means no service filter."`
+	ToolName    string `json:"tool_name,omitempty" jsonschema:"Exact (non-namespaced) tool name to locate across the mesh, e.g. 'review_pr'. Served from gossip announcements when fresh; falls back to a mesh-wide fetch. Empty means list all tools."`
 }
 
 // remoteToolRow is one entry in the find_remote_tools response.
@@ -292,7 +294,10 @@ type remoteToolRow struct {
 	PeerID      string `json:"peer_id"`
 	ToolName    string `json:"tool_name,omitempty"`
 	Description string `json:"description,omitempty"`
-	Error       string `json:"error,omitempty"`
+	// Region is the provider's operator-declared region claim, when known
+	// from gossip. A routing hint, not an enforced attribute.
+	Region string `json:"region,omitempty"`
+	Error  string `json:"error,omitempty"`
 }
 
 // handleFindRemoteTools implements the find_remote_tools tool.
@@ -319,6 +324,18 @@ func (n *SamNode) handleFindRemoteTools(ctx context.Context, req *mcp.CallToolRe
 	}
 
 	var rows []remoteToolRow
+
+	// Exact-name lookup: gossip fast path, avoiding the catalog fan-out
+	// when interested announcements are already flowing.
+	if params.ToolName != "" && params.PeerID == "" && n.Discovery != nil {
+		n.Discovery.Ensure(api.ServiceType_SERVICE_TYPE_MCP, params.ToolName)
+		if provs := n.Discovery.Providers(api.ServiceType_SERVICE_TYPE_MCP, params.ToolName); len(provs) > 0 {
+			rows = gossipToolRows(provs, params.ToolName, params.ServiceName)
+			if len(rows) > 0 {
+				return marshalToolRows(rows)
+			}
+		}
+	}
 
 	if params.PeerID != "" {
 		pid, err := peer.Decode(params.PeerID)
@@ -352,6 +369,15 @@ func (n *SamNode) handleFindRemoteTools(ctx context.Context, req *mcp.CallToolRe
 		rows = n.fanOutFetch(ctx, peerIDs, params.ServiceName)
 	}
 
+	if params.ToolName != "" {
+		rows = filterRowsByToolName(rows, params.ToolName)
+	}
+	n.annotateToolRegions(rows)
+	return marshalToolRows(rows)
+}
+
+// marshalToolRows renders the find_remote_tools response.
+func marshalToolRows(rows []remoteToolRow) (*mcp.CallToolResult, any, error) {
 	if rows == nil {
 		rows = []remoteToolRow{}
 	}
@@ -362,6 +388,57 @@ func (n *SamNode) handleFindRemoteTools(ctx context.Context, req *mcp.CallToolRe
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{&mcp.TextContent{Text: string(respData)}},
 	}, nil, nil
+}
+
+// gossipToolRows builds result rows from gossip-observed providers of a tool.
+func gossipToolRows(provs []samdiscovery.Provider, toolName, serviceNameFilter string) []remoteToolRow {
+	var rows []remoteToolRow
+	for _, p := range provs {
+		if serviceNameFilter != "" && p.Service != serviceNameFilter {
+			continue
+		}
+		name := p.Service
+		if !strings.Contains(name, "://") {
+			name = api.MCPServicePrefix + name
+		}
+		rows = append(rows, remoteToolRow{
+			PeerID:   p.PeerID,
+			ToolName: name + "/" + toolName,
+			Region:   p.Labels[api.LabelRegion],
+		})
+	}
+	return rows
+}
+
+// filterRowsByToolName keeps rows whose namespaced tool name ends in the
+// bare tool name; error rows (no tool listing) are dropped from targeted
+// lookups.
+func filterRowsByToolName(rows []remoteToolRow, toolName string) []remoteToolRow {
+	var out []remoteToolRow
+	for _, row := range rows {
+		if row.Error != "" {
+			continue
+		}
+		if row.ToolName[strings.LastIndex(row.ToolName, "/")+1:] == toolName {
+			out = append(out, row)
+		}
+	}
+	return out
+}
+
+// annotateToolRegions fills the region hint for peers the gossip view knows.
+func (n *SamNode) annotateToolRegions(rows []remoteToolRow) {
+	if n.Discovery == nil {
+		return
+	}
+	for i := range rows {
+		if rows[i].Region != "" {
+			continue
+		}
+		if labels := n.Discovery.PeerLabels(rows[i].PeerID); labels != nil {
+			rows[i].Region = labels[api.LabelRegion]
+		}
+	}
 }
 
 // fetchRemoteToolCatalogue gets the remote node's service catalogue,

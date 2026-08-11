@@ -34,9 +34,9 @@ import (
 	"github.com/openai/openai-go"
 )
 
-// modelCacheTTL bounds backend /v1/models probes: the announcer ticks more
-// often than models change.
-const modelCacheTTL = 30 * time.Second
+// backendProbeTTL bounds backend capability probes (models, tools): the
+// announcer ticks more often than backends change.
+const backendProbeTTL = 30 * time.Second
 
 // InferenceService provides intelligent LLM gateway features: traffic routing
 // and token usage tracking for OpenAI-compatible endpoints.
@@ -85,7 +85,7 @@ func (s *InferenceService) Models(ctx context.Context) ([]string, error) {
 		return nil, err
 	}
 	s.cachedModels = models
-	s.modelsExpires = time.Now().Add(modelCacheTTL)
+	s.modelsExpires = time.Now().Add(backendProbeTTL)
 	return models, nil
 }
 

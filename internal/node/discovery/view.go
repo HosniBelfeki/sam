@@ -75,6 +75,20 @@ func (d *Discovery) Providers(t api.ServiceType, key string) []Provider {
 	return out
 }
 
+// PeerLabels returns the labels last observed for a peer, if any. Labels are
+// node-level claims (e.g. region), so any fresh entry of the peer suffices.
+func (d *Discovery) PeerLabels(peerID string) map[string]string {
+	d.viewMu.Lock()
+	defer d.viewMu.Unlock()
+	cutoff := time.Now().Add(-d.staleAfter)
+	for _, p := range d.providers {
+		if p.PeerID == peerID && p.LastSeen.After(cutoff) && len(p.Labels) > 0 {
+			return p.Labels
+		}
+	}
+	return nil
+}
+
 // readLoop consumes one subscription until it is cancelled or ctx ends.
 func (d *Discovery) readLoop(ctx context.Context, sub *pubsub.Subscription) {
 	for {

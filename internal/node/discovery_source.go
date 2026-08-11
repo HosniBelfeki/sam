@@ -30,33 +30,43 @@ type activeTracker interface {
 	ActiveRequests() uint32
 }
 
-// discoverySource builds gossip announcements from the registered services.
-// Only inference services announce for now; MCP adoption follows.
+// toolLister is implemented by services that report served MCP tool names.
+type toolLister interface {
+	Tools(ctx context.Context) ([]string, error)
+}
+
+// capKeys bounds announced keys to the wire cap; keys are expected sorted so
+// truncation is deterministic across ticks.
+func capKeys(keys []string) []string {
+	if len(keys) > api.MaxAnnounceKeys {
+		return keys[:api.MaxAnnounceKeys]
+	}
+	return keys
+}
+
+// discoverySource builds gossip announcements from the registered services:
+// inference services announce model IDs, MCP services announce tool names.
 func (n *SamNode) discoverySource() []discovery.Announcement {
 	var labels map[string]string
 	if n.config.Region != "" {
 		labels = map[string]string{api.LabelRegion: n.config.Region}
 	}
 	var out []discovery.Announcement
-	for _, info := range n.services.List(api.ServiceType_SERVICE_TYPE_INFERENCE) {
+	for _, info := range n.services.List(api.ServiceType_SERVICE_TYPE_UNSPECIFIED) {
 		svc, ok := n.services.Get(info.GetName())
 		if !ok {
 			continue
 		}
-		lister, ok := svc.(modelLister)
-		if !ok {
-			continue
-		}
 		ctx, cancel := context.WithTimeout(context.Background(), discoverySourceProbeTimeout)
-		models, err := lister.Models(ctx)
+		keys, err := serviceKeys(ctx, svc, info.GetType())
 		cancel()
-		if err != nil || len(models) == 0 {
+		if err != nil || len(keys) == 0 {
 			continue
 		}
 		ann := discovery.Announcement{
-			Type:   api.ServiceType_SERVICE_TYPE_INFERENCE,
+			Type:   info.GetType(),
 			Name:   info.GetName(),
-			Keys:   models,
+			Keys:   capKeys(keys),
 			Labels: labels,
 		}
 		if tracker, ok := svc.(activeTracker); ok {
@@ -65,4 +75,19 @@ func (n *SamNode) discoverySource() []discovery.Announcement {
 		out = append(out, ann)
 	}
 	return out
+}
+
+// serviceKeys returns the routing keys a service serves, per its type.
+func serviceKeys(ctx context.Context, svc Service, t api.ServiceType) ([]string, error) {
+	switch t {
+	case api.ServiceType_SERVICE_TYPE_INFERENCE:
+		if lister, ok := svc.(modelLister); ok {
+			return lister.Models(ctx)
+		}
+	case api.ServiceType_SERVICE_TYPE_MCP:
+		if lister, ok := svc.(toolLister); ok {
+			return lister.Tools(ctx)
+		}
+	}
+	return nil, nil
 }
