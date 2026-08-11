@@ -29,6 +29,8 @@ jobs:
         go-package: ./...
         output-file: govulncheck.txt
     - name: Fail only on vulnerabilities we haven't explicitly accepted
+      env:
+        GOVULNCHECK_OUTCOME: ${{ steps.govulncheck.outcome }}
       run: |
         set -euo pipefail
         cat govulncheck.txt
@@ -60,7 +62,7 @@ jobs:
           exit 1
         fi
 
-        if [ "${{ steps.govulncheck.outcome }}" = "failure" ] && [ -z "$found" ]; then
+        if [ "$GOVULNCHECK_OUTCOME" = "failure" ] && [ -z "$found" ]; then
           echo "::error::govulncheck failed for a reason other than a detected vulnerability; see output above."
           exit 1
         fi
