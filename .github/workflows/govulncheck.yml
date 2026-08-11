@@ -22,7 +22,47 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - id: govulncheck
+      continue-on-error: true
       uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1.1.0
       with:
         go-version-input: ${{ env.GO_VERSION }}
         go-package: ./...
+        output-file: govulncheck.txt
+    - name: Fail only on vulnerabilities we haven't explicitly accepted
+      run: |
+        set -euo pipefail
+        cat govulncheck.txt
+
+        # GO-2024-3218 (CVE-2023-26248): content-censorship risk inherent to
+        # Kademlia DHT routing in github.com/libp2p/go-libp2p-kad-dht.
+        # Upstream advisory lists "no known fixed" version, since it's a
+        # structural property of Kademlia DHTs, not a patchable bug. SAM's
+        # mesh transport depends fundamentally on this module.
+        # See https://pkg.go.dev/vuln/GO-2024-3218. Re-evaluate if this ever
+        # gets a fixed version upstream.
+        accepted=("GO-2024-3218")
+
+        found=$(grep -oE '^Vulnerability #[0-9]+: GO-[0-9]{4}-[0-9]+' govulncheck.txt | awk '{print $3}' | sort -u || true)
+
+        unaccepted=""
+        for id in $found; do
+          skip=false
+          for a in "${accepted[@]}"; do
+            [ "$a" = "$id" ] && skip=true && break
+          done
+          if [ "$skip" = false ]; then
+            unaccepted="$unaccepted $id"
+          fi
+        done
+
+        if [ -n "$unaccepted" ]; then
+          echo "::error::New/unaccepted vulnerabilities found:$unaccepted"
+          exit 1
+        fi
+
+        if [ "${{ steps.govulncheck.outcome }}" = "failure" ] && [ -z "$found" ]; then
+          echo "::error::govulncheck failed for a reason other than a detected vulnerability; see output above."
+          exit 1
+        fi
+
+        echo "OK - vulnerabilities found (all accepted): ${found:-none}"
