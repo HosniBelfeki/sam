@@ -1,0 +1,67 @@
+# sam-mesh Helm chart
+
+Deploys a self-contained SAM mesh (control plane, router, console, and
+optionally an in-cluster Postgres + Dex) for local development, testing, or
+self-hosting your own hub.
+
+> For large-scale production deployments (GKE/EKS/AKS) using externally
+> managed Postgres/DNS/OIDC, see the
+> [Production Kubernetes Deployment guide](https://sam-mesh.dev/docs/user/kubernetes-deployment/),
+> which uses plain manifests instead of this chart.
+
+## Install
+
+```bash
+helm upgrade --install sam-mesh ./charts/sam-mesh --namespace sam --create-namespace
+```
+
+At the end of `helm install`/`helm upgrade`, the chart prints the exact
+`kubectl` command to retrieve your generated secrets (see below) — read the
+NOTES output before doing anything else.
+
+## Secrets: `controlPlane.adminToken` and `database.postgres.password`
+
+Both default to `""` in [values.yaml](values.yaml). When left blank, the chart
+**auto-generates** a random 32-character secret on first install and stores it
+in the `<release>-secrets` Kubernetes Secret; the same value is reused on
+`helm upgrade` (it is not rotated on every upgrade). Retrieve the admin token
+with:
+
+```bash
+kubectl get secret --namespace <namespace> <release>-secrets -o jsonpath='{.data.admin-token}' | base64 -d; echo
+```
+
+You can also pin either value explicitly instead of letting the chart
+generate one, e.g. for reproducible dev environments or to match an
+existing secret:
+
+```bash
+helm upgrade --install sam-mesh ./charts/sam-mesh \
+  --set controlPlane.adminToken="$(openssl rand -hex 32)" \
+  --set database.postgres.password="$(openssl rand -hex 32)"
+```
+
+## `controlPlane.insecureSkipTlsVerify`
+
+Defaults to `false`. Only set this to `true` when `controlPlane.oidcIssuer`
+points at an OIDC issuer served with a self-signed or otherwise untrusted
+certificate — for example the Kubernetes API server's own issuer
+(`https://kubernetes.default.svc.cluster.local`) used for ServiceAccount
+Workload Identity Federation in local `kind` clusters, or a local Dex/mock
+OIDC instance without a real cert. Leave it `false` for any real-world OIDC
+provider (Google, Okta, Dex behind a real TLS certificate, etc.).
+
+## `controlPlane.autoApproveEnrollment`
+
+Defaults to `true` (any node/router presenting a valid identity token is
+enrolled immediately, no manual step). Set to `false` if you want an
+administrator to approve each enrollment via `/admin/enrollments` before a
+node can join — see the
+[Control Plane Configuration guide](https://sam-mesh.dev/docs/user/control-plane-configuration/#6-headless-node-enrollment-bootstrap-token-flow).
+
+## Dex (`dex.enabled`)
+
+Disabled by default. The bundled Dex is only meant for local/dev OIDC login
+(username/password test users); real deployments should point
+`controlPlane.oidcIssuer` at your own identity provider instead of enabling
+this.
