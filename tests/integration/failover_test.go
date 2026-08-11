@@ -78,11 +78,11 @@ roles: {}
 
 	// Dynamic Load Balancer for HTTP discovery
 	var lbMu sync.Mutex
-	activeHubPort := httpPortCP_A
+	activeControlPlanePort := httpPortCP_A
 
 	lb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		lbMu.Lock()
-		targetPort := activeHubPort
+		targetPort := activeControlPlanePort
 		lbMu.Unlock()
 
 		target, _ := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", targetPort))
@@ -104,7 +104,7 @@ roles: {}
 	// 1. Start Control Plane A temporarily to generate keyring
 	cmdCP_A_temp := exec.Command(cpBin,
 		"--bind-address", fmt.Sprintf("127.0.0.1:%d", httpPortCP_A),
-		"--admin-token", "test-admin-token",
+		"--admin-token-path", tokenPath(t, "test-admin-token"),
 		"--db-dsn", dsnA,
 		"--issuer", oidcURL,
 		"--insecure-skip-tls-verify",
@@ -129,7 +129,7 @@ roles: {}
 	// 3. Start CP A persistently
 	cmdCP_A := exec.Command(cpBin,
 		"--bind-address", fmt.Sprintf("127.0.0.1:%d", httpPortCP_A),
-		"--admin-token", "test-admin-token",
+		"--admin-token-path", tokenPath(t, "test-admin-token"),
 		"--db-dsn", dsnA,
 		"--issuer", oidcURL,
 		"--insecure-skip-tls-verify",
@@ -161,7 +161,7 @@ roles: {}
 	// 5. Start CP B
 	cmdCP_B := exec.Command(cpBin,
 		"--bind-address", fmt.Sprintf("127.0.0.1:%d", httpPortCP_B),
-		"--admin-token", "test-admin-token",
+		"--admin-token-path", tokenPath(t, "test-admin-token"),
 		"--db-dsn", dsnB,
 		"--issuer", oidcURL,
 		"--insecure-skip-tls-verify",
@@ -201,11 +201,11 @@ roles: {}
 		"HOME="+nodeHome,
 		"XDG_CONFIG_HOME="+filepath.Join(nodeHome, ".config"),
 	)
-	cmdNode := exec.Command(nodeBin, "run", "--hub", lb.URL,
+	cmdNode := exec.Command(nodeBin, "run", "--control-plane", lb.URL,
 		"--listen", "/ip4/127.0.0.1/tcp/0",
 		"--jwt-path", jwtPath,
 		"--bind-addr", "127.0.0.1:0",
-		"--api-token", "dummy-token",
+		"--api-token-path", tokenPath(t, "dummy-token"),
 		"--allow-loopback",
 		"--monitor-bootstrap", "1s",
 		"--monitor-interval", "1s",
@@ -247,9 +247,9 @@ roles: {}
 	t.Logf("Node started. Node PeerID: %s", nodePeerID)
 
 	// Now FAILOVER: Switch LB to CP B and KILL CP A and Router A
-	t.Logf("Initiating failover to Hub B...")
+	t.Logf("Initiating failover to control plane B...")
 	lbMu.Lock()
-	activeHubPort = httpPortCP_B
+	activeControlPlanePort = httpPortCP_B
 	lbMu.Unlock()
 	_ = cmdCP_A.Process.Kill()
 	_ = cmdRouterA.Process.Kill()
@@ -257,15 +257,15 @@ roles: {}
 	// Wait for Node's AutoRelay to get updated
 	for i := 0; i < 150; i++ {
 		out = stdoutNode.String() + stderrNode.String()
-		if strings.Contains(out, "Successfully reconnected to Hub via HTTP fallback") {
+		if strings.Contains(out, "Successfully reconnected to router via HTTP fallback") {
 			break
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	if !strings.Contains(out, "Successfully reconnected to Hub via HTTP fallback") {
+	if !strings.Contains(out, "Successfully reconnected to router via HTTP fallback") {
 		t.Fatalf("Node failed to detect failover and reconnect.\nOutput:\n%s", out)
 	}
-	t.Log("Node successfully reconnected to Hub B!")
+	t.Log("Node successfully reconnected to router B!")
 
 	// Final verification: Ensure we can actually reach Node B via the Router B relay
 	relayAddrStr := fmt.Sprintf("/ip4/127.0.0.1/tcp/%d/p2p/%s/p2p-circuit/p2p/%s", routerPortB, peerIDB, nodePeerID)
@@ -296,9 +296,9 @@ roles: {}
 	}
 
 	if connectErr != nil {
-		t.Fatalf("Failed to connect to Node B via Hub B relay: %v\nOutput: %s", connectErr, stdoutNode.String()+stderrNode.String())
+		t.Fatalf("Failed to connect to Node B via router B relay: %v\nOutput: %s", connectErr, stdoutNode.String()+stderrNode.String())
 	}
-	t.Log("Successfully connected to Node B via Hub B relay circuit!")
+	t.Log("Successfully connected to Node B via router B relay circuit!")
 }
 
 // waitForActiveRouters polls the control plane's /info endpoint until at
@@ -337,13 +337,13 @@ func fetchActiveRouters(t *testing.T, httpPort int) []string {
 		t.Fatal(err)
 	}
 
-	var info api.HubInfoResponse
+	var info api.ControlPlaneInfoResponse
 	if err := proto.Unmarshal(body, &info); err != nil {
-		t.Fatalf("failed to unmarshal HubInfoResponse: %v", err)
+		t.Fatalf("failed to unmarshal ControlPlaneInfoResponse: %v", err)
 	}
 
 	var peerIDs []string
-	for _, addrStr := range info.HubAddresses {
+	for _, addrStr := range info.RouterAddresses {
 		ma, err := multiaddr.NewMultiaddr(addrStr)
 		if err != nil {
 			continue

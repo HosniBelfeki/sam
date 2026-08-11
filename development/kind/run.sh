@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Kind dev mesh: a hub plus the nodes declared in mesh-config.yaml, each pinned
+# Kind dev mesh: a control plane and router plus the nodes declared in mesh-config.yaml, each pinned
 # to its own k8s node, with live per-pod logs in named tmux panes.
 set -euo pipefail
 
@@ -8,7 +8,7 @@ NAMESPACE="sam-kind"
 SESSION="sam-kind"
 KCTX="kind-${CLUSTER}"
 IMAGE_TAG="local"
-HUB_URL="http://sam-mesh-control-plane:8080"
+CONTROL_PLANE_URL="http://sam-mesh-control-plane:8080"
 HELM="helm"
 
 
@@ -58,8 +58,8 @@ render_and_apply() {
     SIDECAR=$'      - name: '"${name}"$'\n        image: '"${name}:${IMAGE_TAG}"$'\n        imagePullPolicy: IfNotPresent'
     CONFIG_VOLUME=$'      - name: config\n        configMap:\n          name: '"${node}-config"
   fi
-  NODE="$node" HUB_URL="$HUB_URL" CONFIG_ARG="$CONFIG_ARG" CONFIG_MOUNT="$CONFIG_MOUNT" SIDECAR="$SIDECAR" CONFIG_VOLUME="$CONFIG_VOLUME" \
-    envsubst '${NODE} ${NAMESPACE} ${HUB_URL} ${IMAGE_TAG} ${CONFIG_ARG} ${CONFIG_MOUNT} ${SIDECAR} ${CONFIG_VOLUME}' \
+  NODE="$node" CONTROL_PLANE_URL="$CONTROL_PLANE_URL" CONFIG_ARG="$CONFIG_ARG" CONFIG_MOUNT="$CONFIG_MOUNT" SIDECAR="$SIDECAR" CONFIG_VOLUME="$CONFIG_VOLUME" \
+    envsubst '${NODE} ${NAMESPACE} ${CONTROL_PLANE_URL} ${IMAGE_TAG} ${CONFIG_ARG} ${CONFIG_MOUNT} ${SIDECAR} ${CONFIG_VOLUME}' \
     < "${SCRIPT_DIR}/node.template.yaml" | kubectl --context "${KCTX}" apply -f -
 
 }
@@ -144,7 +144,7 @@ if [[ -n "${OIDC_ISSUER}" ]]; then
   CONTROL_PLANE_ISSUERS="${OIDC_ISSUER},${ISSUER}"
 fi
 
-ALLOWED_AUDIENCES="sam-mesh-audience,sam-hub-audience"
+ALLOWED_AUDIENCES="sam-mesh-audience,sam-control-plane-audience"
 if [[ -n "${OIDC_CLIENT_ID}" ]]; then
   ALLOWED_AUDIENCES="${OIDC_CLIENT_ID},${ALLOWED_AUDIENCES}"
 fi

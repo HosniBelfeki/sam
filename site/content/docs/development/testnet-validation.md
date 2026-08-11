@@ -26,9 +26,9 @@ Before starting, ensure you have:
      -p 5001:5001/udp -p 5002:5002 -p 8080:8080 \
      sam-node:local \
      run --data-dir /data \
-       --hub https://bananas.sam-mesh.dev \
+       --control-plane https://bananas.sam-mesh.dev \
        --bind-addr 0.0.0.0:8080 \
-       --api-token secret-token \
+       # api token via SAM_API_TOKEN env or --api-token-path \
        --log-level debug
    ```
 
@@ -38,7 +38,7 @@ Before starting, ensure you have:
 
 Check the logs of your local `sam-node` to ensure it has successfully joined and is online:
 ```text
-INFO  sam-node  [AuthN] Successfully authenticated with hub via libp2p
+INFO  sam-node  [AuthN] Successfully authenticated with router via libp2p
 SAM Node Online.
 PeerID: 12D3KooWKquLDsMiFc5BXsaHmVoJLDDGddqEWbVYYCpUnHR9u6RR
 ```

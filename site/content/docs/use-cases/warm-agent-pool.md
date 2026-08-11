@@ -118,7 +118,7 @@ node-e: code-reviewer-pool/manager      # manager
 
 ```bash
 make build            # builds ./bin/sam-node (once)
-make kind-up          # hub + reviewer pool (node-b/c/d) + manager (node-e)
+make kind-up          # control plane + router + reviewer pool (node-b/c/d) + manager (node-e)
 make kind-local-node  # local sam-node enrolled in the mesh — LEAVE RUNNING
 ```
 

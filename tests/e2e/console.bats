@@ -14,7 +14,7 @@ teardown() {
   run mesh_start_mock_oidc
   [[ "$status" -eq 0 ]]
 
-  run mesh_start_hub
+  run mesh_start_router
   [[ "$status" -eq 0 ]]
 
   local console_name="${MESH_PREFIX}-console"
@@ -24,10 +24,10 @@ teardown() {
     --name "${console_name}" \
     --network "${MESH_NETWORK}" \
     $(mesh_get_add_hosts) \
+    -e SAM_ADMIN_TOKEN="super-secret-admin-token" \
     "sam-console:local" \
-    --hub "http://sam-control-plane:8080" \
-    --bind-addr ":8081" \
-    --admin-token "super-secret-admin-token"
+    --control-plane "http://sam-control-plane:8080" \
+    --bind-addr ":8081"
     
   MESH_CONTAINERS+=("${console_name}")
 

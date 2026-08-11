@@ -26,7 +26,7 @@ import (
 
 func TestPubSubTools(t *testing.T) {
 	nodeBin := buildBinary(t, "./cmd/sam-node")
-	_, hubAddr := startMockLibp2pHub(t)
+	_, routerAddr := startMockRouter(t)
 	tmpHome1, err := os.MkdirTemp("", "pubsub-test-1")
 	if err != nil {
 		t.Fatal(err)
@@ -39,12 +39,12 @@ func TestPubSubTools(t *testing.T) {
 	}
 	t.Logf("Node 2 logs at: %s/node2.log", tmpHome2)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	// Start Node 1
 	env1 := append(os.Environ(), "HOME="+tmpHome1, "XDG_CONFIG_HOME="+filepath.Join(tmpHome1, ".config"))
-	cmd1 := exec.CommandContext(ctx, nodeBin, "run", "--hub", hubAddr, "--bind-addr", "127.0.0.1:0", "--listen", "/ip4/127.0.0.1/udp/5003/quic-v1", "--listen", "/ip4/127.0.0.1/tcp/5004", "--jwt", "dummy-token", "--log-level", "debug", "--discovery-interval", "100ms", "--api-token", "test-token", "--allow-loopback")
+	cmd1 := exec.CommandContext(ctx, nodeBin, "run", "--control-plane", routerAddr, "--bind-addr", "127.0.0.1:0", "--listen", "/ip4/127.0.0.1/udp/5003/quic-v1", "--listen", "/ip4/127.0.0.1/tcp/5004", "--jwt", "dummy-token", "--log-level", "debug", "--discovery-interval", "100ms", "--api-token-path", tokenPath(t, "test-token"), "--allow-loopback")
 	cmd1.Env = env1
 	logFile1, err := os.Create(filepath.Join(tmpHome1, "node1.log"))
 	if err != nil {
@@ -59,7 +59,7 @@ func TestPubSubTools(t *testing.T) {
 
 	// Start Node 2
 	env2 := append(os.Environ(), "HOME="+tmpHome2, "XDG_CONFIG_HOME="+filepath.Join(tmpHome2, ".config"))
-	cmd2 := exec.CommandContext(ctx, nodeBin, "run", "--hub", hubAddr, "--bind-addr", "127.0.0.1:0", "--listen", "/ip4/127.0.0.1/udp/5005/quic-v1", "--listen", "/ip4/127.0.0.1/tcp/5006", "--jwt", "dummy-token", "--log-level", "debug", "--discovery-interval", "100ms", "--api-token", "test-token", "--allow-loopback")
+	cmd2 := exec.CommandContext(ctx, nodeBin, "run", "--control-plane", routerAddr, "--bind-addr", "127.0.0.1:0", "--listen", "/ip4/127.0.0.1/udp/5005/quic-v1", "--listen", "/ip4/127.0.0.1/tcp/5006", "--jwt", "dummy-token", "--log-level", "debug", "--discovery-interval", "100ms", "--api-token-path", tokenPath(t, "test-token"), "--allow-loopback")
 	cmd2.Env = env2
 	logFile2, err := os.Create(filepath.Join(tmpHome2, "node2.log"))
 	if err != nil {
@@ -139,28 +139,27 @@ func TestPubSubTools(t *testing.T) {
 	t.Logf("Node 2 address: %s", addr2)
 	callTool(mcpAddr1, "connect_peer", map[string]any{"peer_addr": addr2})
 
-	// Node 1 broadcasts on topic "test-topic"
-	broadcastResult := callTool(mcpAddr1, "mesh_pubsub_broadcast", map[string]any{
-		"topic":   "test-topic",
-		"payload": "hello from node 1",
+	// Node 1 subscribes to topic "test-topic"
+	subscribeResult1 := callTool(mcpAddr1, "subscribe_topic", map[string]any{
+		"topic": "test-topic",
 	})
-	if !strings.Contains(broadcastResult, "Published") {
-		t.Fatalf("Broadcast failed: %s", broadcastResult)
+	if !strings.Contains(subscribeResult1, "Subscribed") {
+		t.Fatalf("Subscribe node 1 failed: %s", subscribeResult1)
 	}
 
 	// Node 2 subscribes to topic "test-topic"
-	subscribeResult := callTool(mcpAddr2, "subscribe_topic", map[string]any{
+	subscribeResult2 := callTool(mcpAddr2, "subscribe_topic", map[string]any{
 		"topic": "test-topic",
 	})
-	if !strings.Contains(subscribeResult, "Subscribed") {
-		t.Fatalf("Subscribe failed: %s", subscribeResult)
+	if !strings.Contains(subscribeResult2, "Subscribed") {
+		t.Fatalf("Subscribe node 2 failed: %s", subscribeResult2)
 	}
 
 	var pollResult string
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		// Node 1 broadcasts on topic "test-topic" again to ensure delivery after subscription
-		broadcastResult = callTool(mcpAddr1, "mesh_pubsub_broadcast", map[string]any{
+		// Node 1 broadcasts on topic "test-topic"
+		broadcastResult := callTool(mcpAddr1, "mesh_pubsub_broadcast", map[string]any{
 			"topic":   "test-topic",
 			"payload": "hello from node 1",
 		})
@@ -175,7 +174,7 @@ func TestPubSubTools(t *testing.T) {
 		if strings.Contains(pollResult, "hello from node 1") {
 			break
 		}
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond)
 	}
 
 	if !strings.Contains(pollResult, "hello from node 1") {

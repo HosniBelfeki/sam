@@ -61,9 +61,12 @@ type EnrolledNode struct {
 	EnrollmentType string
 	ClaimsJSON     string
 	OwnerID        string
-	EnrolledAt     time.Time
-	ExpiresAt      time.Time
-	Banned         bool
+	// Region is the attested region claim minted into the node's biscuit;
+	// kept on the record so token refreshes re-mint it unchanged.
+	Region     string
+	EnrolledAt time.Time
+	ExpiresAt  time.Time
+	Banned     bool
 }
 
 // BootstrapToken represents a pre-shared token for node enrollment.
@@ -81,11 +84,14 @@ type BootstrapToken struct {
 
 // EnrollmentRequest represents a pending or resolved node registration request (CSR).
 type EnrollmentRequest struct {
-	ID           string
-	PeerID       string
-	PublicKey    []byte
-	TokenID      string
-	Status       api.EnrollmentStatus
+	ID        string
+	PeerID    string
+	PublicKey []byte
+	TokenID   string
+	Status    api.EnrollmentStatus
+	// Region is the operator-declared region claim, surfaced to the
+	// approving admin; approval attests it into the minted biscuit.
+	Region       string
 	BiscuitToken []byte
 	CreatedAt    time.Time
 	ResolvedAt   *time.Time
@@ -94,6 +100,9 @@ type EnrollmentRequest struct {
 
 // Store defines the persistent operations for the SAM control plane.
 type Store interface {
+	// Ping checks the health of the underlying database connection.
+	Ping(ctx context.Context) error
+
 	// GetCurrentKey retrieves the active key pair for biscuit signing.
 	GetCurrentKey(ctx context.Context) (ed25519.PrivateKey, ed25519.PublicKey, error)
 

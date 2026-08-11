@@ -60,10 +60,10 @@ flutter run
 
 Once launched, the app displays a control interface:
 
-1.  **Hub URL / Address**: The address of the SAM Hub (e.g., `https://bananas.sam-mesh.dev`).
+1.  **Control plane URL**: The address of the SAM control plane (e.g., `https://bananas.sam-mesh.dev`).
 2.  **Enrollment JWT**: A valid JWT token retrieved from your OIDC provider to authenticate the node registration.
 3.  **Local API Token**: The secret bearer token used to secure the local sidecar REST APIs (defaults to `secret-token`).
-4.  **Enroll Node**: Click this button first to generate the local Peer Identity and register the node with the Hub.
+4.  **Enroll Node**: Click this button first to generate the local Peer Identity and register the node with the control plane.
 5.  **Start Node**: Launches the Go node runtime in the background. It will bind its local MCP sidecar to `127.0.0.1:5005`.
 6.  **Stop Node**: Gracefully shuts down the background Go mesh client.
 

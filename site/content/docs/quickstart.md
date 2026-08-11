@@ -82,21 +82,21 @@ docker run -it \
   join --data-dir /data --bootstrap-token <your-token> https://bananas.sam-mesh.dev
 ```
 
-*Note: In non-interactive mode, unless the Hub runs with `--auto-approve-enrollment`, the enrollment request remains **PENDING** until approved manually by a network administrator.*
+*Note: In non-interactive mode, unless the control plane runs with `--auto-approve-enrollment`, the enrollment request remains **PENDING** until approved manually by a network administrator.*
 
 ---
 
 ## 3. Run the Node
 
-Start your node in the background. We set a security `--api-token` to protect access to the local control plane API.
+Start your node in the background. We set a security API token (via the `SAM_API_TOKEN` environment variable or `--api-token-path` file) to protect access to the local control plane API. Tokens are never accepted as command-line values: they would be visible in process listings.
 
 ### Using the Binary
 ```bash
-sam-node run --bind-addr 127.0.0.1:8080 --api-token my-secret-token
+SAM_API_TOKEN=my-secret-token sam-node run --bind-addr 127.0.0.1:8080
 ```
 You should see in the logs:
 ```text
-INFO  sam-node  [AuthN] Successfully authenticated with hub via libp2p: ...
+INFO  sam-node  [AuthN] Successfully authenticated with router via libp2p: ...
 SAM Node Online.
 PeerID: 12D3KooW...
 ```
@@ -112,8 +112,9 @@ docker run -d \
   -p 5001:5001/udp \
   -p 5002:5002 \
   -p 8080:8080 \
+  -e SAM_API_TOKEN=my-secret-token \
   ghcr.io/google/sam-node:latest \
-  run --data-dir /data --bind-addr 0.0.0.0:8080 --api-token my-secret-token
+  run --data-dir /data --bind-addr 0.0.0.0:8080
 ```
 Verify the node is running with `docker logs sam-node`.
 

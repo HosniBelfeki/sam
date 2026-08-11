@@ -11,7 +11,7 @@ This guide explains how to deploy the SAM control plane and router in a Kubernet
 
 ## 1. Local Testing with Kind
 
-The repository ships a one-command local mesh under `development/kind/`, driven by `make` targets. This is the fastest way to get a running hub and a few nodes on your machine.
+The repository ships a one-command local mesh under `development/kind/`, driven by `make` targets. This is the fastest way to get a running control plane, router and a few nodes on your machine.
 
 ### Automated Mesh (Recommended)
 
@@ -24,9 +24,9 @@ This creates a `sam-kind` cluster (one control-plane plus workers for the contro
 - The **control plane**, configured to trust the cluster's own OIDC issuer.
 - Five **nodes** declared in `development/kind/mesh-config.yaml` (`node-a` through `node-e`), all **bare** by default — assign services to suit what you're testing.
 
-Nodes authenticate to the hub via **Workload Identity Federation** (projected ServiceAccount tokens), so no static secrets or mock OIDC provider are needed. The hub is exposed to the host on `127.0.0.1:9090` (HTTP enroll) and `127.0.0.1:4001` (libp2p) via a NodePort and the cluster's `extraPortMappings` — `cloud-provider-kind` is not required.
+Nodes authenticate to the control plane via **Workload Identity Federation** (projected ServiceAccount tokens), so no static secrets or mock OIDC provider are needed. The control plane is exposed to the host on `127.0.0.1:9090` (HTTP enroll) and `127.0.0.1:4001` (libp2p) via a NodePort and the cluster's `extraPortMappings` — `cloud-provider-kind` is not required.
 
-Once everything is up, `make kind-up` opens a tmux session with live per-pod logs (hub and each node in its own pane). Manage the mesh with:
+Once everything is up, `make kind-up` opens a tmux session with live per-pod logs (control plane, router and each node in its own pane). Manage the mesh with:
 
 ```bash
 make kind-up ARGS=-s     # bring the mesh up without attaching the log view
@@ -50,7 +50,7 @@ node-d:
 node-e:
 ```
 
-- The key is the node's name. The cluster currently ships with a hub plus these **five** agent nodes, all bare by default; each is pinned to a matching worker via the `sam-role` labels in `kind-config.yaml`.
+- The key is the node's name. The cluster currently ships with a control plane and router plus these **five** agent nodes, all bare by default; each is pinned to a matching worker via the `sam-role` labels in `kind-config.yaml`.
 - A **blank** value is a bare node — a `sam-node` with no local service, useful as a caller/consumer.
 - A **non-blank** value is a folder name under `development/examples/`. That service is built and deployed as a **sidecar** next to the node, and the node is configured to advertise it to the mesh.
 
@@ -104,7 +104,7 @@ make build            # produce ./bin/sam-node
 make kind-local-node
 ```
 
-This mints a ServiceAccount token and runs `./bin/sam-node` against the hub at `127.0.0.1:9090`, exposing its MCP API on `127.0.0.1:9099` with the API token `devtoken`. Extra flags pass through via `ARGS`, e.g. to host an example service:
+This mints a ServiceAccount token and runs `./bin/sam-node` against the control plane at `127.0.0.1:9090`, exposing its MCP API on `127.0.0.1:9099` with the API token `devtoken`. Extra flags pass through via `ARGS`, e.g. to host an example service:
 
 ```bash
 make kind-local-node ARGS="--config development/examples/calc-mcp/sam-node-config.yaml"
@@ -204,18 +204,18 @@ kubectl apply -f sam-router.yaml
 You can use the following command to extract the allocated IP into an environment variable:
 
 ```bash
-HUB_IP=$(kubectl get svc sam-control-plane -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+CONTROL_PLANE_IP=$(kubectl get svc sam-control-plane -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
 ```
 
 ---
 
 ## 3. Connecting an Agent
 
-To connect a `sam-node` to the hub, you just need the hub's external IP and port.
+To connect a `sam-node` to the control plane, you just need its external IP and port.
 
 ### Enrolling the Agent
 
-To connect a `sam-node` to the hub for the first time, you need to enroll it. The node needs to authenticate with the hub using a JWT token.
+To connect a `sam-node` to the control plane for the first time, you need to enroll it. The node needs to authenticate with the control plane using a JWT token.
 
 If you are using the **Mock OIDC Provider**, the node can fetch the token using OIDC Client Credentials flow:
 
@@ -227,16 +227,16 @@ If you are using the **Mock OIDC Provider**, the node can fetch the token using 
 2. **Run the Node to enroll:**
    ```bash
    sam-node run \
-     --hub "http://$HUB_IP:9090" \
+     --control-plane "http://$CONTROL_PLANE_IP:9090" \
      --oidc-issuer "http://$MOCK_IP:18080" \
      --client-id "sam-mesh-audience" \
-     --client-secret "sam-e2e-secret"
+     # client secret via SAM_CLIENT_SECRET env or --client-secret-path
    ```
 
 If you are using **Google OIDC**, you must obtain a valid Google ID token for your user and pass it via the `--jwt` flag:
 ```bash
 sam-node run \
-  --hub "http://$HUB_IP:9090" \
+  --control-plane "http://$CONTROL_PLANE_IP:9090" \
   --jwt "<your-google-id-token>"
 ```
 
@@ -275,7 +275,7 @@ spec:
         image: sam-node:local
         command: ["sam-node", "run"]
         args:
-        - "--hub"
+        - "--control-plane"
         - "http://sam-control-plane:8080"
         - "--oidc-issuer"
         - "http://mock-oidc:18080"
@@ -305,7 +305,7 @@ The SAM project supports three primary flows for acquiring a JWT token to enroll
 *   **Example:**
 ```bash
 sam-node run \
-  --hub "http://hub.example.com:9090" \
+  --control-plane "http://control-plane.example.com:9090" \
   --oidc-issuer "https://accounts.google.com" \
   --client-id "$SAM_OIDC_ID" \
   --client-secret "$SAM_OIDC_SECRET"
@@ -314,11 +314,11 @@ sam-node run \
 #### 2. Native App Authorization Code Flow (Human Intervention)
 *   **Description:** For devices operated by humans, this uses the standard Authorization Code Flow with PKCE for native apps (RFC 8252). The human operator runs `sam-node join` to open a web browser (or get a verification code via `--headless`), completes the login, and obtains a Biscuit token which is stored in the local database (`agent.db`).
 *   **Use Case:** When a human operator is enrolling a node manually via their local terminal.
-*   **How to use:** Run `sam-node join <hub-url>` before running the node daemon. Alternatively, you can obtain a token yourself and pass it via the `--jwt` flag to `sam-node run`.
+*   **How to use:** Run `sam-node join <control-plane-url>` before running the node daemon. Alternatively, you can obtain a token yourself and pass it via the `--jwt` flag to `sam-node run`.
 *   **Example:**
 ```bash
 # First, join interactively:
-sam-node join https://hub.example.com
+sam-node join https://control-plane.example.com
 
 # Then start the node daemon:
 sam-node run
@@ -332,7 +332,7 @@ sam-node run
 *   **Example:**
 ```bash
 sam-node run \
-  --hub "http://hub.example.com:9090" \
+  --control-plane "http://control-plane.example.com:9090" \
   --jwt-path "/var/run/secrets/kubernetes.io/serviceaccount/token"
 ```
 > [!NOTE]
@@ -379,7 +379,7 @@ metadata:
 ```
 
 ### Step 4: Deploy the Node with a Projected Volume
-Deploy the `sam-node` and configure it to use the ServiceAccount. We use a **Projected Volume** to request a token with the specific audience expected by the hub (e.g., the mesh name or a specific client ID).
+Deploy the `sam-node` and configure it to use the ServiceAccount. We use a **Projected Volume** to request a token with the specific audience expected by the control plane (e.g., the mesh name or a specific client ID).
 
 ```yaml
 apiVersion: apps/v1
@@ -402,7 +402,7 @@ spec:
         image: sam-node:local
         command: ["sam-node", "run"]
         args:
-        - "--hub"
+        - "--control-plane"
         - "http://sam-control-plane:8080"
         - "--jwt-path"
         - "/var/run/secrets/tokens/sam-token"
@@ -417,5 +417,5 @@ spec:
           - serviceAccountToken:
               path: sam-token
               expirationSeconds: 3600
-              audience: "sam-hub-audience" # Match this with what the control plane expects
+              audience: "sam-control-plane-audience" # Match this with what the control plane expects
 ```

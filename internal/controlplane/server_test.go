@@ -156,6 +156,27 @@ func TestControlPlaneBasic(t *testing.T) {
 
 	client := &http.Client{Timeout: 5 * time.Second}
 
+	// Test /healthz
+	respHealth, err := client.Get(baseURL + "/healthz")
+	if err != nil || respHealth.StatusCode != http.StatusOK {
+		t.Fatalf("GET /healthz failed: %v, status: %v", err, respHealth.Status)
+	}
+	_ = respHealth.Body.Close()
+
+	// Test /readyz
+	respReady, err := client.Get(baseURL + "/readyz")
+	if err != nil || respReady.StatusCode != http.StatusOK {
+		t.Fatalf("GET /readyz failed: %v, status: %v", err, respReady.Status)
+	}
+	_ = respReady.Body.Close()
+
+	// Test /metrics
+	respMetrics, err := client.Get(baseURL + "/metrics")
+	if err != nil || respMetrics.StatusCode != http.StatusOK {
+		t.Fatalf("GET /metrics failed: %v, status: %v", err, respMetrics.Status)
+	}
+	_ = respMetrics.Body.Close()
+
 	// 1. Test /info (no routers registered yet)
 	resp, err := client.Get(baseURL + "/info")
 	if err != nil {
@@ -170,15 +191,15 @@ func TestControlPlaneBasic(t *testing.T) {
 		t.Fatalf("failed to read /info body: %v", err)
 	}
 
-	var info api.HubInfoResponse
+	var info api.ControlPlaneInfoResponse
 	if err := proto.Unmarshal(body, &info); err != nil {
-		t.Fatalf("failed to unmarshal HubInfoResponse: %v", err)
+		t.Fatalf("failed to unmarshal ControlPlaneInfoResponse: %v", err)
 	}
 	if info.OidcIssuer != issuer || info.ClientId != "sam-mesh-audience" {
 		t.Errorf("unexpected info response claims: %+v", &info)
 	}
-	if len(info.HubAddresses) != 0 {
-		t.Errorf("expected 0 active routers, got %d", len(info.HubAddresses))
+	if len(info.RouterAddresses) != 0 {
+		t.Errorf("expected 0 active routers, got %d", len(info.RouterAddresses))
 	}
 
 	// 2. Test /keys
@@ -358,11 +379,11 @@ func TestNodeAndRouterRegistrationFlow(t *testing.T) {
 	body, _ = io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
 
-	var info api.HubInfoResponse
+	var info api.ControlPlaneInfoResponse
 	_ = proto.Unmarshal(body, &info)
 
-	if !reflect.DeepEqual(info.HubAddresses, routerAddresses) {
-		t.Errorf("expected active routers address list %v, got %v", routerAddresses, info.HubAddresses)
+	if !reflect.DeepEqual(info.RouterAddresses, routerAddresses) {
+		t.Errorf("expected active routers address list %v, got %v", routerAddresses, info.RouterAddresses)
 	}
 
 	// 6. Rogue Node tries to lease as a router (lacks 'router' role)
@@ -620,8 +641,8 @@ func TestEnrollmentWorkflow(t *testing.T) {
 	if len(statusResp.BiscuitToken) == 0 {
 		t.Fatalf("biscuit token is empty")
 	}
-	if len(statusResp.HubPublicKey) == 0 {
-		t.Fatalf("hub public key is empty")
+	if len(statusResp.ControlPlanePublicKey) == 0 {
+		t.Fatalf("control plane public key is empty")
 	}
 
 	// Verify Biscuit router rights
@@ -901,8 +922,8 @@ func TestNodeProactiveTokenRefresh(t *testing.T) {
 	if err := nStore.SaveKey(privKeyBytes); err != nil {
 		t.Fatalf("failed to save private key: %v", err)
 	}
-	if err := nStore.SaveHubURL(cpURL); err != nil {
-		t.Fatalf("failed to save hub URL: %v", err)
+	if err := nStore.SaveControlPlaneURL(cpURL); err != nil {
+		t.Fatalf("failed to save control plane URL: %v", err)
 	}
 	if err := nStore.SaveIdentity(biscuitToken); err != nil {
 		t.Fatalf("failed to save initial identity: %v", err)

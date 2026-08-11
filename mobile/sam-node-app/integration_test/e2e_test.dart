@@ -42,15 +42,15 @@ void main() {
     final jwt = tokenData['access_token'] as String;
     expect(jwt, isNotEmpty);
 
-    // 3. Enroll Node against host Hub
-    const hubURL = 'http://127.0.0.1:37001';
-    final enrollErr = samLib.enroll(dataDir, hubURL, jwt, true);
+    // 3. Enroll Node against the host control plane
+    const controlPlaneURL = 'http://127.0.0.1:37001';
+    final enrollErr = samLib.enroll(dataDir, controlPlaneURL, jwt, true);
     expect(enrollErr, isNull);
 
     // 4. Start Node
     final startErr = samLib.start({
       'dataDir': dataDir,
-      'hubURL': hubURL,
+      'controlPlaneURL': controlPlaneURL,
       'meshID': 'public-mesh',
       'bindAddr': '0.0.0.0:8080', // sidecar HTTP server inside phone
       'apiToken': 'test-token',

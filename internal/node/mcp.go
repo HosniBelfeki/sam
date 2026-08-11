@@ -47,7 +47,7 @@ Other useful tools: discover_remote_services browses services by type (e.g. 'MCP
 
 Tools on remote services are identified via the format 'scheme://service-name/tool-name' (where 'scheme://service-name' represents the well-known local address of the service, and 'tool-name' is the individual tool to execute on it. Tool names themselves can contain any characters).
 
-Inference services ('inference://...') are NOT called via call_remote_tool — they are plain OpenAI-compatible HTTP endpoints. Use discover_remote_services with type 'inference' to get each one's local_proxy_url, then send a normal HTTP request (e.g. POST <local_proxy_url>/chat/completions) directly to that URL: add header 'X-Sam-Authentication: Bearer <your local --api-token>' to authenticate to this node, and only add 'Authorization: Bearer <upstream-credential>' if the destination service itself requires its own credential — it passes straight through untouched and is never used to authenticate to this node.`
+Inference services ('inference://...') are NOT called via call_remote_tool — they are plain OpenAI-compatible HTTP endpoints. Use discover_remote_services with type 'inference' to get each one's local_proxy_url, then send a normal HTTP request (e.g. POST <local_proxy_url>/chat/completions) directly to that URL: add header 'X-Sam-Authentication: Bearer <your local node API token>' to authenticate to this node, and only add 'Authorization: Bearer <upstream-credential>' if the destination service itself requires its own credential — it passes straight through untouched and is never used to authenticate to this node.`
 
 // NewMCPServer creates a new MCP server instance with all tools registered.
 func NewMCPServer(node *SamNode) *mcp.Server {
@@ -113,7 +113,7 @@ func NewMCPServer(node *SamNode) *mcp.Server {
 	// Add the find_remote_tools tool.
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "find_remote_tools",
-		Description: "Discover MCP tools available on hosted services across the mesh. Returns name + description per tool. Optionally narrow by peer_id, service_name, or intent (intent is reserved for future ranking and is accepted-but-ignored).",
+		Description: "Discover MCP tools available on hosted services across the mesh. Returns name + description per tool, plus the provider's region claim when known. Optionally narrow by peer_id, service_name, or tool_name (exact tool name; fastest — served from mesh announcements when available). intent is reserved for future ranking and is accepted-but-ignored.",
 	}, node.handleFindRemoteTools)
 
 	// Add the describe_remote_tool tool.
@@ -125,7 +125,7 @@ func NewMCPServer(node *SamNode) *mcp.Server {
 	// Add the check_connectivity tool.
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "check_connectivity",
-		Description: "Diagnose the node's ability to communicate with the SAM hub and the broader mesh network.",
+		Description: "Diagnose the node's ability to communicate with the SAM routers and the broader mesh network.",
 	}, node.handleCheckConnectivity)
 
 	// Add the get_token_info tool.
@@ -150,7 +150,7 @@ func NewMCPServer(node *SamNode) *mcp.Server {
 }
 
 // NewUnauthenticatedMCPServer creates a minimal MCP server that instructs the client on how to authenticate.
-func NewUnauthenticatedMCPServer(hubURL string) *mcp.Server {
+func NewUnauthenticatedMCPServer(controlPlaneURL string) *mcp.Server {
 	mcpServer := mcp.NewServer(&mcp.Implementation{
 		Name:    "sam-node-mcp-unauth",
 		Version: "0.1.0",
@@ -160,7 +160,7 @@ func NewUnauthenticatedMCPServer(hubURL string) *mcp.Server {
 		Name:        "get_login_instructions",
 		Description: "Get instructions on how to authenticate this node so it can join the SAM mesh.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, params map[string]any) (*mcp.CallToolResult, any, error) {
-		msg := fmt.Sprintf("The node is unauthenticated. Please open a regular terminal and run:\n\n  sam-node join %s\n\nOnce complete, restart this MCP client.", hubURL)
+		msg := fmt.Sprintf("The node is unauthenticated. Please open a regular terminal and run:\n\n  sam-node join %s\n\nOnce complete, restart this MCP client.", controlPlaneURL)
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{
 				&mcp.TextContent{Text: msg},
@@ -178,7 +178,7 @@ func NewUnauthenticatedMCPServer(hubURL string) *mcp.Server {
 				{
 					Role: "user",
 					Content: &mcp.TextContent{
-						Text: fmt.Sprintf("Please open a terminal and run:\n\n`sam-node join %s`\n\nAfter you finish, please restart this MCP connection.", hubURL),
+						Text: fmt.Sprintf("Please open a terminal and run:\n\n`sam-node join %s`\n\nAfter you finish, please restart this MCP connection.", controlPlaneURL),
 					},
 				},
 			},
@@ -189,8 +189,8 @@ func NewUnauthenticatedMCPServer(hubURL string) *mcp.Server {
 }
 
 // NewUnauthenticatedMCPHandler creates an HTTP handler for the unauthenticated MCP server.
-func NewUnauthenticatedMCPHandler(hubURL string) http.Handler {
-	mcpServer := NewUnauthenticatedMCPServer(hubURL)
+func NewUnauthenticatedMCPHandler(controlPlaneURL string) http.Handler {
+	mcpServer := NewUnauthenticatedMCPServer(controlPlaneURL)
 
 	streamableHandler := mcp.NewStreamableHTTPHandler(func(request *http.Request) *mcp.Server {
 		return mcpServer

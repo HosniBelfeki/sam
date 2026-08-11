@@ -16,11 +16,11 @@ teardown() {
   run mesh_start_mock_oidc
   [[ "$status" -eq 0 ]]
 
-  # Start Hub
-  mesh_start_hub
-  local hub_name="${MESH_PREFIX}-hub"
-  local hub_peer_id
-  hub_peer_id=$(cat "/tmp/${MESH_PREFIX}-hub-peer-id")
+  # Start router
+  mesh_start_router
+  local router_name="${MESH_PREFIX}-router"
+  local router_peer_id
+  router_peer_id=$(cat "/tmp/${MESH_PREFIX}-router-peer-id")
 
   # Start Node 1
   echo "[$(date +%T)] Starting Node 1"

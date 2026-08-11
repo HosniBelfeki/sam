@@ -57,11 +57,11 @@ func TestSamNodeRunWithStoredIdentity(t *testing.T) {
 		if err := b.Put([]byte("identity_biscuit"), biscuitBytes); err != nil {
 			return err
 		}
-		if err := b.Put([]byte("hub_public_key"), pub); err != nil {
+		if err := b.Put([]byte("control_plane_public_key"), pub); err != nil {
 			return err
 		}
 		addrsData, _ := json.Marshal([]string{"/ip4/127.0.0.1/tcp/4002/p2p/Qm..."})
-		if err := b.Put([]byte("hub_addresses"), addrsData); err != nil {
+		if err := b.Put([]byte("router_addresses"), addrsData); err != nil {
 			return err
 		}
 		return nil
@@ -83,7 +83,7 @@ func TestSamNodeRunWithStoredIdentity(t *testing.T) {
 		"run", "--listen", "/ip4/127.0.0.1/udp/0/quic-v1",
 		"--listen", "/ip4/127.0.0.1/tcp/0",
 		"--bind-addr", "127.0.0.1:0",
-		"--api-token", "dummy-token",
+		"--api-token-path", tokenPath(t, "dummy-token"),
 		"--data-dir", configDir,
 	)
 	if err != context.DeadlineExceeded {

@@ -28,7 +28,7 @@ import (
 
 func TestNodeAuthEnforcementIntegration(t *testing.T) {
 	nodeBin := buildBinary(t, "./cmd/sam-node")
-	_, mockHubURL := startMockLibp2pHub(t)
+	_, mockRouterAddr := startMockRouter(t)
 
 	home := t.TempDir()
 	logFile, err := os.Create(filepath.Join(home, "node.log"))
@@ -45,9 +45,9 @@ func TestNodeAuthEnforcementIntegration(t *testing.T) {
 	apiToken := "secret-integration-token"
 
 	cmd := exec.Command(nodeBin, "run",
-		"--hub", mockHubURL,
+		"--control-plane", mockRouterAddr,
 		"--data-dir", home,
-		"--api-token", apiToken,
+		"--api-token-path", tokenPath(t, apiToken),
 		"--jwt", "fake-jwt",
 		"--bind-addr", fmt.Sprintf("127.0.0.1:%d", port),
 		"--listen", "/ip4/127.0.0.1/udp/0/quic-v1",

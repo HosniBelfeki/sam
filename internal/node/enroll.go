@@ -59,7 +59,7 @@ func GetOrGenerateKey(s *Store) crypto.PrivKey {
 	return priv
 }
 
-func (n *SamNode) Enroll(ctx context.Context, hubURL string, jwt string) error {
+func (n *SamNode) Enroll(ctx context.Context, controlPlaneURL string, jwt string) error {
 	pubKey := n.Host.Peerstore().PubKey(n.Host.ID())
 	pubBytes, err := crypto.MarshalPublicKey(pubKey)
 	if err != nil {
@@ -71,16 +71,17 @@ func (n *SamNode) Enroll(ctx context.Context, hubURL string, jwt string) error {
 		PeerId:        n.Host.ID().String(),
 		PublicKey:     pubBytes,
 		RequestedRole: n.config.RequiredRole,
+		Region:        n.config.Region, // normalized and validated at startup
 	}
 	data, err := proto.Marshal(req)
 	if err != nil {
 		return fmt.Errorf("failed to marshal enroll request: %v", err)
 	}
 
-	if !strings.HasPrefix(hubURL, "http://") && !strings.HasPrefix(hubURL, "https://") {
-		return fmt.Errorf("hub address must be an HTTP or HTTPS URL for enrollment: %s", hubURL)
+	if !strings.HasPrefix(controlPlaneURL, "http://") && !strings.HasPrefix(controlPlaneURL, "https://") {
+		return fmt.Errorf("control plane address must be an HTTP or HTTPS URL for enrollment: %s", controlPlaneURL)
 	}
-	url := hubURL + "/register"
+	url := controlPlaneURL + "/register"
 	logger.Infof("Enrolling via HTTP at %s", url)
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(data))
@@ -105,7 +106,7 @@ func (n *SamNode) Enroll(ctx context.Context, hubURL string, jwt string) error {
 		return err
 	}
 
-	return n.connectToHubAddresses(ctx, enrollResp.HubAddresses)
+	return n.connectToRouters(ctx, enrollResp.RouterAddresses)
 }
 
 func (n *SamNode) processEnrollResponse(resp *http.Response) (*api.EnrollResponse, error) {
@@ -130,12 +131,12 @@ func (n *SamNode) processEnrollResponse(resp *http.Response) (*api.EnrollRespons
 	if len(enrollResp.BiscuitToken) == 0 {
 		return nil, fmt.Errorf("received empty biscuit token")
 	}
-	if len(enrollResp.HubPublicKey) != ed25519.PublicKeySize {
-		return nil, fmt.Errorf("received invalid hub public key size: %d bytes (expected %d)", len(enrollResp.HubPublicKey), ed25519.PublicKeySize)
+	if len(enrollResp.ControlPlanePublicKey) != ed25519.PublicKeySize {
+		return nil, fmt.Errorf("received invalid control plane public key size: %d bytes (expected %d)", len(enrollResp.ControlPlanePublicKey), ed25519.PublicKeySize)
 	}
 
 	if n.config.RequiredRole != "" {
-		if err := identity.VerifyBiscuitRole(enrollResp.BiscuitToken, ed25519.PublicKey(enrollResp.HubPublicKey), n.config.RequiredRole); err != nil {
+		if err := identity.VerifyBiscuitRole(enrollResp.BiscuitToken, ed25519.PublicKey(enrollResp.ControlPlanePublicKey), n.config.RequiredRole); err != nil {
 			return nil, fmt.Errorf("enrolled biscuit token lacks required role %q: %w", n.config.RequiredRole, err)
 		}
 	}
@@ -148,44 +149,44 @@ func (n *SamNode) processEnrollResponse(resp *http.Response) (*api.EnrollRespons
 	if err := n.Store.SaveIdentityExpiration(enrollResp.Expiration); err != nil {
 		return nil, fmt.Errorf("failed to save identity expiration: %v", err)
 	}
-	if err := n.Store.SaveHubConfig(enrollResp.HubPublicKey, enrollResp.HubAddresses); err != nil {
-		return nil, fmt.Errorf("failed to save hub config: %v", err)
+	if err := n.Store.SaveMeshConfig(enrollResp.ControlPlanePublicKey, enrollResp.RouterAddresses); err != nil {
+		return nil, fmt.Errorf("failed to save mesh config: %v", err)
 	}
 
 	n.keysMu.Lock()
-	n.trustedKeys = append(n.trustedKeys, TrustedKey{Key: ed25519.PublicKey(enrollResp.HubPublicKey), ReceivedAt: time.Now()})
+	n.trustedKeys = append(n.trustedKeys, TrustedKey{Key: ed25519.PublicKey(enrollResp.ControlPlanePublicKey), ReceivedAt: time.Now()})
 	n.keysMu.Unlock()
 
 	return &enrollResp, nil
 }
 
-func (n *SamNode) connectToHubAddresses(ctx context.Context, addrs []string) error {
+func (n *SamNode) connectToRouters(ctx context.Context, addrs []string) error {
 	if len(addrs) == 0 {
-		return fmt.Errorf("failed to connect and authenticate after HTTP enrollment: control plane returned no hub addresses")
+		return fmt.Errorf("failed to connect and authenticate after HTTP enrollment: control plane returned no router addresses")
 	}
 
 	var lastAuthErr error
 	for _, addrStr := range addrs {
 		addr, err := multiaddr.NewMultiaddr(addrStr)
 		if err != nil {
-			logger.Warnf("Failed to parse hub address from response: %v", err)
+			logger.Warnf("Failed to parse router address from response: %v", err)
 			continue
 		}
-		if err := n.ConnectAndAuthWithHub(ctx, addr); err != nil {
-			logger.Warnf("Failed to connect and auth with hub after enrollment: %v", err)
+		if err := n.ConnectAndAuthWithRouter(ctx, addr); err != nil {
+			logger.Warnf("Failed to connect and auth with router after enrollment: %v", err)
 			lastAuthErr = err
 		} else {
-			logger.Info("Successfully enrolled via HTTP and stored identity and hub config.")
+			logger.Info("Successfully enrolled via HTTP and stored identity and mesh config.")
 			return nil
 		}
 	}
 
-	return fmt.Errorf("failed to connect and authenticate with any hub after HTTP enrollment (last error: %v)", lastAuthErr)
+	return fmt.Errorf("failed to connect and authenticate with any router after HTTP enrollment (last error: %v)", lastAuthErr)
 }
 
 // EnrollBootstrap enrolls the node with the control plane using a pre-shared bootstrap token.
 // If the enrollment status is PENDING, it polls the status endpoint until approved or rejected.
-func (n *SamNode) EnrollBootstrap(ctx context.Context, hubURL string, bootstrapToken string) error {
+func (n *SamNode) EnrollBootstrap(ctx context.Context, controlPlaneURL string, bootstrapToken string) error {
 	pubKey := n.Host.Peerstore().PubKey(n.Host.ID())
 	pubBytes, err := crypto.MarshalPublicKey(pubKey)
 	if err != nil {
@@ -197,16 +198,17 @@ func (n *SamNode) EnrollBootstrap(ctx context.Context, hubURL string, bootstrapT
 		PeerId:         n.Host.ID().String(),
 		PublicKey:      pubBytes,
 		RequestedRole:  n.config.RequiredRole,
+		Region:         n.config.Region, // normalized and validated at startup
 	}
 	data, err := proto.Marshal(req)
 	if err != nil {
 		return fmt.Errorf("failed to marshal bootstrap enroll request: %w", err)
 	}
 
-	if !strings.HasPrefix(hubURL, "http://") && !strings.HasPrefix(hubURL, "https://") {
-		return fmt.Errorf("hub address must be an HTTP or HTTPS URL for enrollment: %s", hubURL)
+	if !strings.HasPrefix(controlPlaneURL, "http://") && !strings.HasPrefix(controlPlaneURL, "https://") {
+		return fmt.Errorf("control plane address must be an HTTP or HTTPS URL for enrollment: %s", controlPlaneURL)
 	}
-	url := hubURL + "/enroll"
+	url := controlPlaneURL + "/enroll"
 	logger.Infof("Enrolling via Bootstrap token at %s", url)
 
 	client := &http.Client{Timeout: 30 * time.Second}
@@ -260,7 +262,7 @@ func (n *SamNode) EnrollBootstrap(ctx context.Context, hubURL string, bootstrapT
 			case <-ctx.Done():
 				return ctx.Err()
 			case <-ticker.C:
-				statusURL := hubURL + "/enroll/status"
+				statusURL := controlPlaneURL + "/enroll/status"
 				hReq, err := http.NewRequestWithContext(ctx, "POST", statusURL, bytes.NewReader(statusData))
 				if err != nil {
 					return fmt.Errorf("failed to create status request: %w", err)
@@ -311,11 +313,11 @@ func (n *SamNode) EnrollBootstrap(ctx context.Context, hubURL string, bootstrapT
 		return fmt.Errorf("received empty biscuit token from enrollment response")
 	}
 
-	if len(enrollResp.HubPublicKey) != ed25519.PublicKeySize {
-		return fmt.Errorf("received invalid hub public key size: %d bytes", len(enrollResp.HubPublicKey))
+	if len(enrollResp.ControlPlanePublicKey) != ed25519.PublicKeySize {
+		return fmt.Errorf("received invalid control plane public key size: %d bytes", len(enrollResp.ControlPlanePublicKey))
 	}
 
-	if err := identity.VerifyBiscuitRole(enrollResp.BiscuitToken, ed25519.PublicKey(enrollResp.HubPublicKey), n.config.RequiredRole); err != nil {
+	if err := identity.VerifyBiscuitRole(enrollResp.BiscuitToken, ed25519.PublicKey(enrollResp.ControlPlanePublicKey), n.config.RequiredRole); err != nil {
 		return fmt.Errorf("enrolled biscuit token lacks required role %q: %w", n.config.RequiredRole, err)
 	}
 
@@ -328,29 +330,29 @@ func (n *SamNode) EnrollBootstrap(ctx context.Context, hubURL string, bootstrapT
 		return fmt.Errorf("failed to save identity expiration: %v", err)
 	}
 
-	if err := n.Store.SaveHubConfig(enrollResp.HubPublicKey, enrollResp.HubAddresses); err != nil {
-		return fmt.Errorf("failed to save hub config: %v", err)
+	if err := n.Store.SaveMeshConfig(enrollResp.ControlPlanePublicKey, enrollResp.RouterAddresses); err != nil {
+		return fmt.Errorf("failed to save mesh config: %v", err)
 	}
 
 	n.keysMu.Lock()
-	n.trustedKeys = append(n.trustedKeys, TrustedKey{Key: ed25519.PublicKey(enrollResp.HubPublicKey), ReceivedAt: time.Now()})
+	n.trustedKeys = append(n.trustedKeys, TrustedKey{Key: ed25519.PublicKey(enrollResp.ControlPlanePublicKey), ReceivedAt: time.Now()})
 	n.keysMu.Unlock()
 
-	// Connect and Auth to hub after enrollment to join the mesh
-	if len(enrollResp.HubAddresses) == 0 {
-		return fmt.Errorf("failed to connect and authenticate after bootstrap enrollment: control plane returned no hub addresses")
+	// Connect and Auth to router after enrollment to join the mesh
+	if len(enrollResp.RouterAddresses) == 0 {
+		return fmt.Errorf("failed to connect and authenticate after bootstrap enrollment: control plane returned no router addresses")
 	}
 
 	var lastAuthErr error
 	var authed bool
-	for _, addrStr := range enrollResp.HubAddresses {
+	for _, addrStr := range enrollResp.RouterAddresses {
 		addr, err := multiaddr.NewMultiaddr(addrStr)
 		if err != nil {
-			logger.Warnf("Failed to parse hub address: %v", err)
+			logger.Warnf("Failed to parse router address: %v", err)
 			continue
 		}
-		if err := n.ConnectAndAuthWithHub(ctx, addr); err != nil {
-			logger.Warnf("Failed to connect and auth with hub: %v", err)
+		if err := n.ConnectAndAuthWithRouter(ctx, addr); err != nil {
+			logger.Warnf("Failed to connect and auth with router: %v", err)
 			lastAuthErr = err
 		} else {
 			authed = true
@@ -359,7 +361,7 @@ func (n *SamNode) EnrollBootstrap(ctx context.Context, hubURL string, bootstrapT
 	}
 
 	if !authed {
-		return fmt.Errorf("failed to connect/auth with hub after bootstrap enrollment (last error: %v)", lastAuthErr)
+		return fmt.Errorf("failed to connect/auth with router after bootstrap enrollment (last error: %v)", lastAuthErr)
 	}
 
 	logger.Info("Successfully enrolled via Bootstrap token and joined mesh.")

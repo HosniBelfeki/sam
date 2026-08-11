@@ -72,8 +72,8 @@ func TestSamNodeJoin(t *testing.T) {
 	oidcServer := httptest.NewServer(mux)
 	defer oidcServer.Close()
 
-	// Start mock libp2p hub that knows about our mock OIDC server
-	_, hubAddr := startMockLibp2pHubWithOIDC(t, oidcServer.URL)
+	// Start mock libp2p router that knows about our mock OIDC server
+	_, routerAddr := startMockRouterWithOIDC(t, oidcServer.URL)
 
 	stdout, stderr, err := runCommandWithCallback(
 		t,
@@ -83,7 +83,7 @@ func TestSamNodeJoin(t *testing.T) {
 		"", // No stdin needed
 		nodeBin,
 		"join",
-		hubAddr,
+		routerAddr,
 	)
 	if err != nil {
 		t.Fatalf("join command failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
@@ -102,11 +102,11 @@ func TestSamNodeJoin(t *testing.T) {
 		env,
 		"",
 		nodeBin,
-		"run", "--hub", hubAddr,
+		"run", "--control-plane", routerAddr,
 		"--listen", "/ip4/127.0.0.1/udp/0/quic-v1",
 		"--listen", "/ip4/127.0.0.1/tcp/0",
 		"--bind-addr", "127.0.0.1:0",
-		"--api-token", "dummy-token",
+		"--api-token-path", tokenPath(t, "dummy-token"),
 	)
 	if err != context.DeadlineExceeded {
 		t.Fatalf("expected run command to keep running, got: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)

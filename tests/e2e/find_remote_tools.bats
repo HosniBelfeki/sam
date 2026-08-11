@@ -36,7 +36,7 @@ teardown() {
   run mesh_start_mock_oidc
   [[ "$status" -eq 0 ]]
 
-  mesh_start_hub
+  mesh_start_router
 
   echo "[$(date +%T)] Starting Node 1"
   mesh_start_node 1 "--log-level debug"
@@ -88,7 +88,7 @@ teardown() {
   run mesh_start_mock_oidc
   [[ "$status" -eq 0 ]]
 
-  mesh_start_hub
+  mesh_start_router
 
   echo "[$(date +%T)] Starting Node 1"
   mesh_start_node 1 "--log-level debug"
@@ -137,7 +137,7 @@ teardown() {
   run mesh_start_mock_oidc
   [[ "$status" -eq 0 ]]
 
-  mesh_start_hub
+  mesh_start_router
 
   echo "[$(date +%T)] Starting Node 1"
   mesh_start_node 1 "--log-level debug"
@@ -200,7 +200,7 @@ teardown() {
   run mesh_start_mock_oidc
   [[ "$status" -eq 0 ]]
 
-  mesh_start_hub
+  mesh_start_router
 
   echo "[$(date +%T)] Starting Node 1"
   mesh_start_node 1 "--log-level debug"

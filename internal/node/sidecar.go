@@ -34,6 +34,7 @@ import (
 	libp2phttp "github.com/libp2p/go-libp2p-http"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
@@ -43,6 +44,7 @@ func StartSidecarServer(node *SamNode, addr, token, certFile, keyFile, caFile st
 	// Public endpoints
 	mux.HandleFunc("/healthz", handleHealthz)
 	mux.HandleFunc("/readyz", handleReadyz)
+	mux.Handle("/metrics", promhttp.Handler())
 
 	// Protected endpoints. allowAuthorizationFallback=true is safe here: none of
 	// these ever forward the inbound Authorization header to another service.
@@ -59,7 +61,18 @@ func StartSidecarServer(node *SamNode, addr, token, certFile, keyFile, caFile st
 	// Mount Egress Proxy. allowAuthorizationFallback=false is required here: this
 	// handler forwards Authorization to the destination service, so it must never
 	// also accept it as the local gate credential (would leak the sidecar token off-node).
-	mux.Handle("/sam/", withAuth(token, false, withMeshConnection(node, createEgressProxy(node))))
+	egress := createEgressProxy(node)
+	mux.Handle("/sam/", withAuth(token, false, withMeshConnection(node, egress)))
+
+	// OpenAI-compatible facade: point any OpenAI SDK at the sidecar.
+	// allowAuthorizationFallback=true lets SDKs send the sidecar token as their
+	// api_key; withAuth strips whichever header carried it, so an Authorization
+	// header that survives the gate is the backend's own credential and is
+	// forwarded like on the egress path.
+	facade := newOpenAIFacade(node, egress)
+	mux.Handle("/v1/models", withAuth(token, true, withMeshConnection(node, http.HandlerFunc(facade.handleModels))))
+	mux.Handle("/v1/chat/completions", withAuth(token, true, withMeshConnection(node, http.HandlerFunc(facade.handleCompletions))))
+	mux.Handle("/v1/completions", withAuth(token, true, withMeshConnection(node, http.HandlerFunc(facade.handleCompletions))))
 
 	// Mount MCP handler
 	mcpHandler := NewMCPHandler(node)
@@ -125,7 +138,7 @@ func StartSidecarServer(node *SamNode, addr, token, certFile, keyFile, caFile st
 	return server, nil
 }
 
-func StartUnauthSidecarServer(hubURL, addr, certFile, keyFile string) (*http.Server, error) {
+func StartUnauthSidecarServer(controlPlaneURL, addr, certFile, keyFile string) (*http.Server, error) {
 	mux := http.NewServeMux()
 
 	// Public endpoints
@@ -133,7 +146,7 @@ func StartUnauthSidecarServer(hubURL, addr, certFile, keyFile string) (*http.Ser
 	mux.HandleFunc("/readyz", handleReadyz)
 
 	// Mount Unauthenticated MCP handler
-	mcpHandler := NewUnauthenticatedMCPHandler(hubURL)
+	mcpHandler := NewUnauthenticatedMCPHandler(controlPlaneURL)
 	mux.Handle("/", mcpHandler)
 
 	server := &http.Server{
@@ -239,6 +252,12 @@ func withAuth(token string, allowAuthorizationFallback bool, next http.Handler) 
 			http.Error(w, "Forbidden", http.StatusForbidden)
 			return
 		}
+
+		// The gate credential is local-only: strip exactly the header it came in
+		// on so it can never flow past the gate. Anything left (e.g. Authorization
+		// when the gate was passed via X-Sam-Authentication) is the destination
+		// service's own credential and passes through untouched.
+		r.Header.Del(headerName)
 
 		next.ServeHTTP(w, r)
 	})

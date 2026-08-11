@@ -80,11 +80,11 @@ func main() {
 		if err := b.Put([]byte("identity_biscuit"), biscuitBytes); err != nil {
 			return err
 		}
-		if err := b.Put([]byte("hub_public_key"), pub); err != nil {
+		if err := b.Put([]byte("control_plane_public_key"), pub); err != nil {
 			return err
 		}
 		addrsData, _ := json.Marshal([]string{"/ip4/127.0.0.1/tcp/4002/p2p/QmYyQSo1sn1GjUuQwca9AdvV8Zeyvmxrww8dDnewPrfJs9"})
-		if err := b.Put([]byte("hub_addresses"), addrsData); err != nil {
+		if err := b.Put([]byte("router_addresses"), addrsData); err != nil {
 			return err
 		}
 		return nil

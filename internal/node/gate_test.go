@@ -99,7 +99,7 @@ func TestConnectionGater(t *testing.T) {
 	}
 }
 
-// startBareNode brings up a SamNode without hub/enrollment.
+// startBareNode brings up a SamNode without control plane/enrollment.
 func startBareNode(t *testing.T, ctx context.Context) (*SamNode, func()) {
 	t.Helper()
 	dir := t.TempDir()
@@ -114,7 +114,7 @@ func startBareNode(t *testing.T, ctx context.Context) (*SamNode, func()) {
 	}
 	node, err := NewSamNode(Options{
 		PrivKey:           priv,
-		HubAddrs:          nil,
+		RouterAddrs:       nil,
 		Store:             store,
 		MeshID:            "test-mesh",
 		DiscoveryInterval: "1s",

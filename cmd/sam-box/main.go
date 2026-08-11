@@ -29,6 +29,7 @@ import (
 	"github.com/google/sam/api"
 	"github.com/google/sam/internal/node"
 	"github.com/google/sam/internal/sambox"
+	"github.com/google/sam/internal/secrets"
 	golog "github.com/ipfs/go-log/v2"
 	"github.com/multiformats/go-multiaddr"
 	madns "github.com/multiformats/go-multiaddr-dns"
@@ -51,33 +52,35 @@ func init() {
 }
 
 var (
-	hubAddr                  string
-	jwtFlag                  string
-	jwtPathFlag              string
-	bootstrapTokenFlag       string
-	clientIDFlag             string
-	clientSecretFlag         string
-	hubPublicKeyFlag         string
-	meshFlag                 string
-	discoveryIntervalFlag    string
-	listenAddrs              []string
-	enableRelayFlag          bool
-	configFile               string
-	oidcIssuerFlag           string
-	deviceAuthURLFlag        string
-	audienceFlag             string
-	dataDirFlag              string
-	headlessFlag             bool
-	offlineAccessFlag        bool
-	logLevelFlag             string
-	keyGracePeriodFlag       time.Duration
-	allowLoopbackFlag        bool
-	monitorBootstrapFlag     time.Duration
-	monitorCheckIntervalFlag time.Duration
-	autoRelayMinIntervalFlag time.Duration
-	autoRelayBootDelayFlag   time.Duration
-	autoRelayBackoffFlag     time.Duration
-	hubConnectTimeoutFlag    time.Duration
+	controlPlaneAddr          string
+	jwtFlag                   string
+	jwtPathFlag               string
+	bootstrapTokenFlag        string
+	bootstrapTokenPathFlag    string
+	clientIDFlag              string
+	clientSecretFlag          string
+	clientSecretPathFlag      string
+	controlPlanePublicKeyFlag string
+	meshFlag                  string
+	discoveryIntervalFlag     string
+	listenAddrs               []string
+	enableRelayFlag           bool
+	configFile                string
+	oidcIssuerFlag            string
+	deviceAuthURLFlag         string
+	audienceFlag              string
+	dataDirFlag               string
+	headlessFlag              bool
+	offlineAccessFlag         bool
+	logLevelFlag              string
+	keyGracePeriodFlag        time.Duration
+	allowLoopbackFlag         bool
+	monitorBootstrapFlag      time.Duration
+	monitorCheckIntervalFlag  time.Duration
+	autoRelayMinIntervalFlag  time.Duration
+	autoRelayBootDelayFlag    time.Duration
+	autoRelayBackoffFlag      time.Duration
+	routerConnectTimeoutFlag  time.Duration
 
 	// sam-box specific flags
 	udsPathFlag         string
@@ -86,6 +89,30 @@ var (
 )
 
 var logger = golog.Logger("sam-box-cli")
+
+// resolveSecretFlag folds a --<name>-path file variant into its value flag
+// and warns when the secret was passed on the command line, where it leaks
+// via /proc/<pid>/cmdline, shell history, and pod specs.
+func resolveSecretFlag(name, value, path string) string {
+	if value != "" {
+		logger.Warnf("--%s passes a secret on the command line; prefer --%s-path", name, name)
+	}
+	secret, err := secrets.Resolve(name, value, path)
+	if err != nil {
+		logger.Fatalf("%v", err)
+	}
+	return secret
+}
+
+// resolveDaemonSecret resolves a secret that lives for the daemon's whole
+// lifetime: file (recommended) or environment variable, never a flag value.
+func resolveDaemonSecret(name, path, envVar string) string {
+	secret, err := secrets.FromPathOrEnv(name, path, envVar)
+	if err != nil {
+		logger.Fatalf("%v", err)
+	}
+	return secret
+}
 
 func main() {
 	rootCmd := &cobra.Command{
@@ -110,6 +137,12 @@ func main() {
 			_ = golog.SetLogLevel("dht", "fatal")
 			_ = golog.SetLogLevel("dht/RtRefreshManager", "fatal")
 
+			bootstrapTokenFlag = resolveSecretFlag("bootstrap-token", bootstrapTokenFlag, bootstrapTokenPathFlag)
+			clientSecretFlag = resolveDaemonSecret("client-secret", clientSecretPathFlag, "SAM_CLIENT_SECRET")
+			if jwtFlag != "" {
+				logger.Warn("--jwt passes a secret on the command line; prefer --jwt-path")
+			}
+
 			if udsPathFlag == "" {
 				logger.Fatal("missing required flag: --uds-path")
 			}
@@ -128,24 +161,24 @@ func main() {
 				}
 			}()
 
-			var hubPubKey ed25519.PublicKey
-			var hubAddrs []multiaddr.Multiaddr
+			var controlPlanePubKey ed25519.PublicKey
+			var routerAddrs []multiaddr.Multiaddr
 
-			storedPubKey, syncedAddrs, err := node.SyncHubConfig(ctx, store)
+			storedPubKey, syncedAddrs, err := node.SyncMeshConfig(ctx, store)
 			if err != nil {
-				logger.Warnf("Failed to sync hub config: %v", err)
+				logger.Warnf("Failed to sync mesh config: %v", err)
 			}
 			if len(storedPubKey) > 0 {
-				hubPubKey = storedPubKey
-				hubAddrs = syncedAddrs
+				controlPlanePubKey = storedPubKey
+				routerAddrs = syncedAddrs
 			}
 
-			if hubPublicKeyFlag != "" {
-				pubBytes, err := hex.DecodeString(strings.TrimSpace(hubPublicKeyFlag))
+			if controlPlanePublicKeyFlag != "" {
+				pubBytes, err := hex.DecodeString(strings.TrimSpace(controlPlanePublicKeyFlag))
 				if err != nil {
-					logger.Fatalf("Invalid hub public key: %v", err)
+					logger.Fatalf("Invalid control plane public key: %v", err)
 				}
-				hubPubKey = pubBytes
+				controlPlanePubKey = pubBytes
 			}
 
 			var meshNode *node.SamNode
@@ -176,16 +209,16 @@ func main() {
 			if jwtStr == "" && bootstrapTokenFlag == "" {
 				token, _ := store.LoadIdentity()
 				if len(token) == 0 {
-					displayHub := hubAddr
-					if displayHub == "" {
-						if h, err := store.LoadHubURL(); err == nil && h != "" {
-							displayHub = h
+					displayControlPlane := controlPlaneAddr
+					if displayControlPlane == "" {
+						if h, err := store.LoadControlPlaneURL(); err == nil && h != "" {
+							displayControlPlane = h
 						} else {
-							displayHub = "https://bananas.sam-mesh.dev"
+							displayControlPlane = "https://bananas.sam-mesh.dev"
 						}
 					}
 					logger.Infof("No identity found. Starting unauthenticated sidecar for enrollment over MCP...")
-					unauthSrv, err := node.StartUnauthSidecarServer(displayHub, "127.0.0.1:8080", "", "")
+					unauthSrv, err := node.StartUnauthSidecarServer(displayControlPlane, "127.0.0.1:8080", "", "")
 					if err != nil {
 						logger.Fatalf("Failed to start unauthenticated sidecar: %v", err)
 					}
@@ -197,14 +230,14 @@ func main() {
 				}
 				logger.Infoln("Using stored identity.")
 
-				if len(hubPubKey) == 0 {
-					logger.Fatal("Hub public key not found in store and not provided. Cannot verify peers.")
+				if len(controlPlanePubKey) == 0 {
+					logger.Fatal("Control plane public key not found in store and not provided. Cannot verify peers.")
 				}
 				priv := node.GetOrGenerateKey(store)
 				meshNode, err = node.NewSamNode(node.Options{
 					PrivKey:              priv,
-					HubPubKey:            hubPubKey,
-					HubAddrs:             hubAddrs,
+					ControlPlanePubKey:   controlPlanePubKey,
+					RouterAddrs:          routerAddrs,
 					Store:                store,
 					MeshID:               meshFlag,
 					DiscoveryInterval:    discoveryIntervalFlag,
@@ -218,7 +251,7 @@ func main() {
 					AutoRelayMinInterval: autoRelayMinIntervalFlag,
 					AutoRelayBootDelay:   autoRelayBootDelayFlag,
 					AutoRelayBackoff:     autoRelayBackoffFlag,
-					HubConnectTimeout:    hubConnectTimeoutFlag,
+					RouterConnectTimeout: routerConnectTimeoutFlag,
 					RequiredRole:         api.RoleSamBox,
 				})
 				if err != nil {
@@ -229,13 +262,13 @@ func main() {
 				}
 			} else {
 				// We have a new JWT (from flag or interactive login), need to enroll
-				var initHubAddrs []multiaddr.Multiaddr
-				if !strings.HasPrefix(hubAddr, "http://") && !strings.HasPrefix(hubAddr, "https://") {
-					ma, err := multiaddr.NewMultiaddr(hubAddr)
+				var initRouterAddrs []multiaddr.Multiaddr
+				if !strings.HasPrefix(controlPlaneAddr, "http://") && !strings.HasPrefix(controlPlaneAddr, "https://") {
+					ma, err := multiaddr.NewMultiaddr(controlPlaneAddr)
 					if err == nil {
-						initHubAddrs = []multiaddr.Multiaddr{ma}
+						initRouterAddrs = []multiaddr.Multiaddr{ma}
 					} else {
-						host, port, err := net.SplitHostPort(hubAddr)
+						host, port, err := net.SplitHostPort(controlPlaneAddr)
 						if err == nil {
 							ip := net.ParseIP(host)
 							var maddr multiaddr.Multiaddr
@@ -248,9 +281,9 @@ func main() {
 							if parseErr != nil {
 								logger.Fatalf("Failed to parse multiaddr: %v", parseErr)
 							}
-							initHubAddrs = []multiaddr.Multiaddr{maddr}
+							initRouterAddrs = []multiaddr.Multiaddr{maddr}
 						} else {
-							logger.Fatalf("Invalid hub address: %v", err)
+							logger.Fatalf("Invalid control plane address: %v", err)
 						}
 					}
 				}
@@ -258,7 +291,7 @@ func main() {
 				priv := node.GetOrGenerateKey(store)
 				meshNode, err = node.NewSamNode(node.Options{
 					PrivKey:              priv,
-					HubAddrs:             initHubAddrs,
+					RouterAddrs:          initRouterAddrs,
 					Store:                store,
 					MeshID:               meshFlag,
 					DiscoveryInterval:    discoveryIntervalFlag,
@@ -272,7 +305,7 @@ func main() {
 					AutoRelayMinInterval: autoRelayMinIntervalFlag,
 					AutoRelayBootDelay:   autoRelayBootDelayFlag,
 					AutoRelayBackoff:     autoRelayBackoffFlag,
-					HubConnectTimeout:    hubConnectTimeoutFlag,
+					RouterConnectTimeout: routerConnectTimeoutFlag,
 					RequiredRole:         api.RoleSamBox,
 				})
 				if err != nil {
@@ -283,21 +316,21 @@ func main() {
 				}
 
 				if bootstrapTokenFlag != "" {
-					err = meshNode.EnrollBootstrap(ctx, hubAddr, bootstrapTokenFlag)
+					err = meshNode.EnrollBootstrap(ctx, controlPlaneAddr, bootstrapTokenFlag)
 				} else {
-					err = meshNode.Enroll(ctx, hubAddr, jwtStr)
+					err = meshNode.Enroll(ctx, controlPlaneAddr, jwtStr)
 				}
 				if err != nil {
 					logger.Fatalf("Enrollment failed: %v", err)
 				}
-				if err := store.SaveHubURL(hubAddr); err != nil {
-					logger.Warnf("Failed to save hub URL: %v", err)
+				if err := store.SaveControlPlaneURL(controlPlaneAddr); err != nil {
+					logger.Warnf("Failed to save control plane URL: %v", err)
 				}
-				logger.Infoln("Successfully enrolled with hub!")
+				logger.Infoln("Successfully enrolled with control plane!")
 
-				if len(hubPubKey) == 0 {
-					if syncPubKey, _, err := node.SyncHubConfig(ctx, store); err != nil || len(syncPubKey) == 0 {
-						logger.Fatal("Hub public key not found in store after enrollment.")
+				if len(controlPlanePubKey) == 0 {
+					if syncPubKey, _, err := node.SyncMeshConfig(ctx, store); err != nil || len(syncPubKey) == 0 {
+						logger.Fatal("Control plane public key not found in store after enrollment.")
 					}
 				}
 			}
@@ -357,14 +390,14 @@ func main() {
 		Short: "Join the mesh interactively",
 		Run: func(cmd *cobra.Command, args []string) {
 			ctx := cmd.Context()
-			targetHub := hubAddr
-			if targetHub == "" {
-				targetHub = "https://bananas.sam-mesh.dev"
+			targetControlPlane := controlPlaneAddr
+			if targetControlPlane == "" {
+				targetControlPlane = "https://bananas.sam-mesh.dev"
 			}
-			if !strings.HasPrefix(targetHub, "http://") && !strings.HasPrefix(targetHub, "https://") {
-				targetHub = "https://" + targetHub
+			if !strings.HasPrefix(targetControlPlane, "http://") && !strings.HasPrefix(targetControlPlane, "https://") {
+				targetControlPlane = "https://" + targetControlPlane
 			}
-			targetHub = strings.TrimSuffix(targetHub, "/")
+			targetControlPlane = strings.TrimSuffix(targetControlPlane, "/")
 
 			store, err := node.NewStore(resolveDataDir())
 			if err != nil {
@@ -381,37 +414,37 @@ func main() {
 			}()
 
 			dummyNode := &node.SamNode{Store: store}
-			fmt.Printf("Discovering hub info from %s...\n", targetHub)
-			hubInfo, err := node.FetchHubInfo(ctx, targetHub)
+			fmt.Printf("Discovering control plane info from %s...\n", targetControlPlane)
+			controlPlaneInfo, err := node.FetchControlPlaneInfo(ctx, targetControlPlane)
 			if err != nil {
-				logger.Fatalf("Failed to discover hub info: %v", err)
+				logger.Fatalf("Failed to discover control plane info: %v", err)
 			}
 
 			var jwtStr string
 			if bootstrapTokenFlag == "" {
-				fmt.Printf("OIDC Issuer discovered: %s\n", hubInfo.OidcIssuer)
-				fmt.Printf("Client ID discovered: %s\n", hubInfo.ClientId)
+				fmt.Printf("OIDC Issuer discovered: %s\n", controlPlaneInfo.OidcIssuer)
+				fmt.Printf("Client ID discovered: %s\n", controlPlaneInfo.ClientId)
 
 				logger.Info("Discovering OIDC endpoints...")
-				tokenURL, authURL, err := dummyNode.DiscoverEndpoints(ctx, hubInfo.OidcIssuer)
+				tokenURL, authURL, err := dummyNode.DiscoverEndpoints(ctx, controlPlaneInfo.OidcIssuer)
 				if err != nil {
 					logger.Fatalf("Failed to discover OIDC endpoints: %v", err)
 				}
 
-				jwtStr, err = dummyNode.InteractiveLogin(ctx, authURL, tokenURL, hubInfo.ClientId, hubInfo.Audience, offlineAccessFlag, headlessFlag)
+				jwtStr, err = dummyNode.InteractiveLogin(ctx, authURL, tokenURL, controlPlaneInfo.ClientId, controlPlaneInfo.Audience, offlineAccessFlag, headlessFlag)
 				if err != nil {
 					logger.Fatalf("Failed to get token: %v", err)
 				}
 			}
 
-			hubAddr = targetHub
-			var initHubAddrs []multiaddr.Multiaddr
-			if !strings.HasPrefix(hubAddr, "http://") && !strings.HasPrefix(hubAddr, "https://") {
-				ma, err := multiaddr.NewMultiaddr(hubAddr)
+			controlPlaneAddr = targetControlPlane
+			var initRouterAddrs []multiaddr.Multiaddr
+			if !strings.HasPrefix(controlPlaneAddr, "http://") && !strings.HasPrefix(controlPlaneAddr, "https://") {
+				ma, err := multiaddr.NewMultiaddr(controlPlaneAddr)
 				if err == nil {
-					initHubAddrs = []multiaddr.Multiaddr{ma}
+					initRouterAddrs = []multiaddr.Multiaddr{ma}
 				} else {
-					host, port, err := net.SplitHostPort(hubAddr)
+					host, port, err := net.SplitHostPort(controlPlaneAddr)
 					if err == nil {
 						ip := net.ParseIP(host)
 						var maddr multiaddr.Multiaddr
@@ -424,9 +457,9 @@ func main() {
 						if parseErr != nil {
 							logger.Fatalf("Failed to parse multiaddr: %v", parseErr)
 						}
-						initHubAddrs = []multiaddr.Multiaddr{maddr}
+						initRouterAddrs = []multiaddr.Multiaddr{maddr}
 					} else {
-						logger.Fatalf("Invalid hub address: %v", err)
+						logger.Fatalf("Invalid control plane address: %v", err)
 					}
 				}
 			}
@@ -434,7 +467,7 @@ func main() {
 			priv := node.GetOrGenerateKey(store)
 			meshNode, err := node.NewSamNode(node.Options{
 				PrivKey:              priv,
-				HubAddrs:             initHubAddrs,
+				RouterAddrs:          initRouterAddrs,
 				Store:                store,
 				MeshID:               meshFlag,
 				DiscoveryInterval:    discoveryIntervalFlag,
@@ -448,7 +481,7 @@ func main() {
 				AutoRelayMinInterval: 30 * time.Second,
 				AutoRelayBootDelay:   0 * time.Second,
 				AutoRelayBackoff:     3 * time.Second,
-				HubConnectTimeout:    hubConnectTimeoutFlag,
+				RouterConnectTimeout: routerConnectTimeoutFlag,
 				RequiredRole:         api.RoleSamBox,
 			})
 			if err != nil {
@@ -459,18 +492,18 @@ func main() {
 			}
 
 			if bootstrapTokenFlag != "" {
-				err = meshNode.EnrollBootstrap(ctx, targetHub, bootstrapTokenFlag)
+				err = meshNode.EnrollBootstrap(ctx, targetControlPlane, bootstrapTokenFlag)
 			} else {
-				err = meshNode.Enroll(ctx, targetHub, jwtStr)
+				err = meshNode.Enroll(ctx, targetControlPlane, jwtStr)
 			}
 			if err != nil {
 				logger.Fatalf("Enrollment failed: %v", err)
 			}
-			if err := store.SaveHubURL(targetHub); err != nil {
-				logger.Warnf("Failed to save hub URL: %v", err)
+			if err := store.SaveControlPlaneURL(targetControlPlane); err != nil {
+				logger.Warnf("Failed to save control plane URL: %v", err)
 			}
 			if bootstrapTokenFlag == "" {
-				if err := store.SaveOIDCConfig(hubInfo.OidcIssuer, hubInfo.ClientId, hubInfo.Audience); err != nil {
+				if err := store.SaveOIDCConfig(controlPlaneInfo.OidcIssuer, controlPlaneInfo.ClientId, controlPlaneInfo.Audience); err != nil {
 					logger.Warnf("Failed to save OIDC config: %v", err)
 				}
 			}
@@ -484,17 +517,18 @@ func main() {
 	runCmd.Flags().StringVar(&jwtFlag, "jwt", "", "Pre-fetched JWT token")
 	runCmd.Flags().StringVar(&jwtPathFlag, "jwt-path", "", "Path to file containing JWT token")
 	runCmd.Flags().StringVar(&bootstrapTokenFlag, "bootstrap-token", "", "Pre-shared bootstrap token for enrollment")
+	runCmd.Flags().StringVar(&bootstrapTokenPathFlag, "bootstrap-token-path", "", "Path to file containing the bootstrap token (recommended over --bootstrap-token)")
 	runCmd.Flags().StringVar(&clientIDFlag, "client-id", "", "OIDC Client ID for M2M")
-	runCmd.Flags().StringVar(&clientSecretFlag, "client-secret", "", "OIDC Client Secret for M2M")
-	runCmd.Flags().StringVar(&hubPublicKeyFlag, "hub-public-key", "", "Hub Public Key (32-byte Hex)")
+	runCmd.Flags().StringVar(&clientSecretPathFlag, "client-secret-path", "", "Path to file containing the OIDC client secret (or env SAM_CLIENT_SECRET)")
+	runCmd.Flags().StringVar(&controlPlanePublicKeyFlag, "control-plane-public-key", "", "Control plane public key (32-byte Hex)")
 	runCmd.Flags().StringVar(&meshFlag, "mesh", node.DefaultMeshName, "Mesh federation name")
 	runCmd.Flags().StringVar(&discoveryIntervalFlag, "discovery-interval", node.DefaultDiscoveryInterval, "Polling interval for DHT discovery")
-	runCmd.Flags().DurationVar(&monitorBootstrapFlag, "monitor-bootstrap", 2*time.Minute, "Initial wait before monitoring hub connection")
-	runCmd.Flags().DurationVar(&monitorCheckIntervalFlag, "monitor-interval", 1*time.Minute, "Interval for checking hub connection")
+	runCmd.Flags().DurationVar(&monitorBootstrapFlag, "monitor-bootstrap", 2*time.Minute, "Initial wait before monitoring router connection")
+	runCmd.Flags().DurationVar(&monitorCheckIntervalFlag, "monitor-interval", 1*time.Minute, "Interval for checking router connection")
 	runCmd.Flags().DurationVar(&autoRelayMinIntervalFlag, "autorelay-min-interval", 30*time.Second, "AutoRelay Min Interval")
 	runCmd.Flags().DurationVar(&autoRelayBootDelayFlag, "autorelay-boot-delay", 0*time.Second, "AutoRelay Boot Delay")
 	runCmd.Flags().DurationVar(&autoRelayBackoffFlag, "autorelay-backoff", 3*time.Second, "AutoRelay Backoff")
-	runCmd.Flags().DurationVar(&hubConnectTimeoutFlag, "hub-connect-timeout", node.DefaultHubConnectTimeout, "Timeout for dialing each hub address")
+	runCmd.Flags().DurationVar(&routerConnectTimeoutFlag, "router-connect-timeout", node.DefaultRouterConnectTimeout, "Timeout for dialing each router address")
 	runCmd.Flags().BoolVar(&enableRelayFlag, "enable-relay", false, "Allow this node to serve as a relay for others")
 	runCmd.Flags().StringVar(&logLevelFlag, "log-level", "info", "Log level (debug, info, warn, error)")
 	runCmd.Flags().DurationVar(&keyGracePeriodFlag, "key-grace-period", 24*time.Hour, "Key grace period for old keys (e.g. 24h)")
@@ -506,11 +540,12 @@ func main() {
 	runCmd.Flags().StringVar(&interceptorsDirFlag, "interceptors-dir", "", "Path to the directory containing precompiled libinterceptor.so binaries")
 
 	joinCmd.Flags().BoolVar(&allowLoopbackFlag, "allow-loopback", false, "Allow publishing and connecting to loopback/link-local addresses")
-	joinCmd.Flags().DurationVar(&hubConnectTimeoutFlag, "hub-connect-timeout", node.DefaultHubConnectTimeout, "Timeout for dialing each hub address")
+	joinCmd.Flags().DurationVar(&routerConnectTimeoutFlag, "router-connect-timeout", node.DefaultRouterConnectTimeout, "Timeout for dialing each router address")
 	joinCmd.Flags().BoolVar(&offlineAccessFlag, "offline-access", false, "Request OIDC offline access/refresh token for automatic renewal")
 	joinCmd.Flags().StringVar(&bootstrapTokenFlag, "bootstrap-token", "", "Pre-shared bootstrap token for enrollment")
+	joinCmd.Flags().StringVar(&bootstrapTokenPathFlag, "bootstrap-token-path", "", "Path to file containing the bootstrap token (recommended over --bootstrap-token)")
 
-	rootCmd.PersistentFlags().StringVar(&hubAddr, "hub", "", "Hub URL")
+	rootCmd.PersistentFlags().StringVar(&controlPlaneAddr, "control-plane", "", "Control plane URL")
 	rootCmd.PersistentFlags().StringVar(&configFile, "config", node.DefaultConfigFile, "Path to sam-node.yaml configuration file")
 	rootCmd.PersistentFlags().StringVar(&oidcIssuerFlag, "oidc-issuer", "", "OIDC Issuer URL")
 	rootCmd.PersistentFlags().StringVar(&deviceAuthURLFlag, "device-auth-url", "", "OIDC Device Authorization URL")

@@ -29,6 +29,7 @@ import (
 	"github.com/biscuit-auth/biscuit-go/v2"
 	"github.com/biscuit-auth/biscuit-go/v2/parser"
 	"github.com/google/sam/api"
+	"github.com/google/sam/internal/identity"
 	lru "github.com/hashicorp/golang-lru/v2"
 	golog "github.com/ipfs/go-log/v2"
 	"github.com/libp2p/go-libp2p/core/crypto"
@@ -553,6 +554,93 @@ func TestRevocation(t *testing.T) {
 	if resp.Error != "peer is revoked" {
 		t.Errorf("expected error 'peer is revoked', got %q", resp.Error)
 	}
+}
+
+func TestWithBiscuitAuth_MutualBiscuit(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	clientPeer := peer.ID("dummy-peer-id")
+	serverPeer := peer.ID("server-peer-id")
+
+	// Client token satisfying replay, service and target checks.
+	builder := biscuit.NewBuilder(priv)
+	for _, f := range []biscuit.Fact{
+		{Predicate: biscuit.Predicate{Name: "node", IDs: []biscuit.Term{biscuit.String(clientPeer.String())}}},
+		{Predicate: biscuit.Predicate{Name: "client_peer_id", IDs: []biscuit.Term{biscuit.String(clientPeer.String())}}},
+		{Predicate: biscuit.Predicate{Name: "granted_service_all_types"}},
+		{Predicate: biscuit.Predicate{Name: "target_unrestricted"}},
+	} {
+		if err := builder.AddAuthorityFact(f); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b, err := builder.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tokenBytes, err := b.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Server identity: control-plane-minted with an attested region.
+	serverIdentity, err := identity.MintBootstrapBiscuitToken(priv, serverPeer, api.RoleNode, time.Now().Add(time.Hour), nil, "EU-DE")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rl, _ := NewPeerRateLimiter(100)
+	node := &SamNode{
+		trustedKeys:    []TrustedKey{{Key: pub, ReceivedAt: time.Now()}},
+		rateLimiter:    rl,
+		BiscuitTimeout: 500 * time.Millisecond,
+	}
+	node.SetIdentityCache(serverIdentity)
+
+	pr1, pw1 := io.Pipe()
+	pr2, pw2 := io.Pipe()
+	serverStream := &mockStream{r: pr1, w: pw2, protocol: protocol.ID("/test/proto"), conn: &mockConn{remotePeer: clientPeer}}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		handler := node.WithBiscuitAuth(func(s network.Stream, reqCtx RequestContext) {})
+		handler(serverStream)
+	}()
+
+	writer := msgio.NewVarintWriter(pw1)
+	data, _ := proto.Marshal(&api.AuthFrame{Biscuit: tokenBytes})
+	if err := writer.WriteMsg(data); err != nil {
+		t.Fatal(err)
+	}
+
+	reader := msgio.NewVarintReaderSize(pr2, 1024*64)
+	msg, err := reader.ReadMsg()
+	if err != nil {
+		t.Fatalf("failed to read response: %v", err)
+	}
+	var resp api.AuthResponse
+	if err := proto.Unmarshal(msg, &resp); err != nil {
+		t.Fatal(err)
+	}
+	if !resp.Success {
+		t.Fatalf("handshake failed: %s", resp.Error)
+	}
+	if !bytes.Equal(resp.Biscuit, serverIdentity) {
+		t.Error("mutual auth response must carry the server's identity biscuit")
+	}
+
+	// The returned biscuit satisfies the consumer-side region gate.
+	if err := node.checkPeerRegions(resp.Biscuit, serverPeer, []string{"EU"}); err != nil {
+		t.Errorf("region gate rejected the mutual-auth biscuit: %v", err)
+	}
+	if err := node.checkPeerRegions(resp.Biscuit, serverPeer, []string{"NA"}); err == nil {
+		t.Error("region gate must reject a non-matching requirement")
+	}
+	<-done
 }
 
 func TestVerifyEvent(t *testing.T) {

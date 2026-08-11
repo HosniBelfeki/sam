@@ -34,7 +34,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
-func TestHubFederationAndRelay(t *testing.T) {
+func TestRouterFederationAndRelay(t *testing.T) {
 	cpBin := buildBinary(t, "./cmd/sam-control-plane")
 	routerBin := buildBinary(t, "./cmd/sam-router")
 	nodeBin := buildBinary(t, "./cmd/sam-node")
@@ -63,7 +63,7 @@ roles:
 
 	// Start Fake DNS Server
 	dnsServer, err := NewFakeDNSServer(map[string]string{
-		"test-hub.local": "127.0.0.1",
+		"test-router.local": "127.0.0.1",
 	}, map[string][]string{})
 	if err != nil {
 		t.Fatalf("failed to start fake dns: %v", err)
@@ -118,7 +118,7 @@ roles:
 	// to ensure concurrent node enrollment writes do not trigger SQLITE_BUSY locking failures.
 	cmdCP := exec.Command(cpBin,
 		"--bind-address", fmt.Sprintf("127.0.0.1:%d", cpPort),
-		"--admin-token", "test-admin-token",
+		"--admin-token-path", tokenPath(t, "test-admin-token"),
 		"--db-dsn", filepath.Join(tmpDir, "cp-keys.db")+"?_pragma=journal_mode(DELETE)&_pragma=busy_timeout(5000)",
 		"--issuer", oidcURL,
 		"--insecure-skip-tls-verify",
@@ -139,7 +139,7 @@ roles:
 		"--listen", fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", routerPortA),
 		"--keys-path", routerKeysPathA,
 		"--allow-loopback",
-		"--external-addr", "/dnsaddr/test-hub.local",
+		"--external-addr", "/dnsaddr/test-router.local",
 		"--oidc-token", routerJWT,
 	)
 	var stdoutRouterA, stderrRouterA safeBuffer
@@ -157,7 +157,7 @@ roles:
 		"--listen", fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", routerPortB),
 		"--keys-path", routerKeysPathB,
 		"--allow-loopback",
-		"--external-addr", "/dnsaddr/test-hub.local",
+		"--external-addr", "/dnsaddr/test-router.local",
 		"--oidc-token", routerJWT,
 	)
 	var stdoutRouterB, stderrRouterB safeBuffer
@@ -179,7 +179,7 @@ roles:
 	}
 
 	// Update Fake DNS with Router A and Router B multiaddresses
-	dnsServer.UpdateTXT("_dnsaddr.test-hub.local", []string{
+	dnsServer.UpdateTXT("_dnsaddr.test-router.local", []string{
 		fmt.Sprintf("dnsaddr=/ip4/127.0.0.1/tcp/%d/p2p/%s", routerPortA, peerIDA),
 		fmt.Sprintf("dnsaddr=/ip4/127.0.0.1/tcp/%d/p2p/%s", routerPortB, peerIDB),
 	})
@@ -194,10 +194,10 @@ roles:
 
 	// Node A connects to Router A (via shared CP)
 	apiPortA := getFreePort(t)
-	nodeACmd := exec.Command(nodeBin, "run", "--hub", fmt.Sprintf("http://127.0.0.1:%d", cpPort),
+	nodeACmd := exec.Command(nodeBin, "run", "--control-plane", fmt.Sprintf("http://127.0.0.1:%d", cpPort),
 		"--data-dir", filepath.Join(tmpDir, "nodeA"),
 		"--bind-addr", fmt.Sprintf("127.0.0.1:%d", apiPortA),
-		"--api-token", "tokenA",
+		"--api-token-path", tokenPath(t, "tokenA"),
 		"--jwt", nodeJWT,
 		"--listen", "/ip4/127.0.0.1/tcp/0",
 		"--listen", "/ip4/127.0.0.1/udp/0/quic-v1",
@@ -216,10 +216,10 @@ roles:
 
 	// Node B connects to Router B (via shared CP)
 	apiPortB := getFreePort(t)
-	nodeBCmd := exec.Command(nodeBin, "run", "--hub", fmt.Sprintf("http://127.0.0.1:%d", cpPort),
+	nodeBCmd := exec.Command(nodeBin, "run", "--control-plane", fmt.Sprintf("http://127.0.0.1:%d", cpPort),
 		"--data-dir", filepath.Join(tmpDir, "nodeB"),
 		"--bind-addr", fmt.Sprintf("127.0.0.1:%d", apiPortB),
-		"--api-token", "tokenB",
+		"--api-token-path", tokenPath(t, "tokenB"),
 		"--jwt", nodeJWT,
 		"--listen", "/ip4/127.0.0.1/tcp/0",
 		"--listen", "/ip4/127.0.0.1/udp/0/quic-v1",

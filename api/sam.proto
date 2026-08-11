@@ -49,13 +49,18 @@ message EnrollRequest {
   string peer_id = 2;
   bytes public_key = 3;
   string requested_role = 4;
+  // Operator-declared region claim (CONTINENT[-COUNTRY[-ZONE]], see
+  // api/region.go). Validated fail-closed by the control plane and, once
+  // attested by the enrollment flow's gates, minted as signed region()
+  // facts in the biscuit. Empty means no claim.
+  string region = 5;
 }
 
 message EnrollResponse {
   bytes biscuit_token = 1;
   string error_message = 2;
-  bytes hub_public_key = 3;
-  repeated string hub_addresses = 4;
+  bytes control_plane_public_key = 3;
+  repeated string router_addresses = 4;
   int64 expiration = 5;
 }
 
@@ -75,6 +80,9 @@ message BootstrapEnrollRequest {
   string peer_id = 2;
   bytes public_key = 3;
   string requested_role = 4;
+  // Operator-declared region claim; the admin approving the enrollment
+  // attests it (see EnrollRequest.region).
+  string region = 5;
 }
 
 message BootstrapEnrollResponse {
@@ -82,8 +90,8 @@ message BootstrapEnrollResponse {
   bytes biscuit_token = 2;         // Populated only if APPROVED
   int32 poll_interval_seconds = 3; // Recommended polling wait time
   string error_message = 4;
-  bytes hub_public_key = 5;         // Populated only if APPROVED
-  repeated string hub_addresses = 6; // Populated only if APPROVED
+  bytes control_plane_public_key = 5;   // Populated only if APPROVED
+  repeated string router_addresses = 6; // Populated only if APPROVED
   int64 expiration = 7;             // Populated only if APPROVED
 }
 
@@ -121,11 +129,31 @@ message DiscoveredProvider {
   string srv_description = 4;
 }
 
-message HubInfoResponse {
+// ServiceAnnounce is gossiped by a node on per-key topics (see
+// DiscoveryTopic) while those topics have subscribers. It is a routing
+// hint signed at the pubsub layer by the announcing peer: consumers use
+// it for freshness and load awareness, never for authorization.
+message ServiceAnnounce {
+  string peer_id = 1;
+  ServiceType type = 2;
+  string service_name = 3;
+  // Routing keys served by this service: model IDs for inference,
+  // tool names for MCP.
+  repeated string keys = 4;
+  // Operator-declared labels (e.g. LabelRegion). Operator claims always
+  // take precedence over runtime-derived values.
+  map<string, string> labels = 5;
+  // Runtime load hints; zero values mean unknown.
+  uint32 active_requests = 6;
+  double latency_ewma_ms = 7;
+  int64 timestamp = 8;
+}
+
+message ControlPlaneInfoResponse {
   string oidc_issuer = 1;
   string client_id = 2;
   string audience = 3;
-  repeated string hub_addresses = 4;
+  repeated string router_addresses = 4;
 }
 
 message RouterLeaseRequest {

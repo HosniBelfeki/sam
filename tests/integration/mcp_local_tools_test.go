@@ -41,12 +41,12 @@ roles: {}
 	}
 
 	oidcURL, mintToken := startCustomMockOIDC(t)
-	httpPortHub, cleanupHub := startControlPlaneAndRouter(t, tmpDir, oidcURL, mintToken, policyFile)
-	defer cleanupHub()
+	httpPortCP, cleanupCP := startControlPlaneAndRouter(t, tmpDir, oidcURL, mintToken, policyFile)
+	defer cleanupCP()
 
-	fetchPeerID(t, httpPortHub)
+	fetchPeerID(t, httpPortCP)
 
-	hubURL := fmt.Sprintf("http://127.0.0.1:%d", httpPortHub)
+	controlPlaneURL := fmt.Sprintf("http://127.0.0.1:%d", httpPortCP)
 	apiToken := "test-token"
 
 	homeA := t.TempDir()
@@ -59,21 +59,21 @@ roles: {}
 
 	// Start Node A
 	t.Log("Starting Node A...")
-	_ = startBackgroundNode(t, nodeBin, hubURL, homeA,
+	_ = startBackgroundNode(t, nodeBin, controlPlaneURL, homeA,
 		"--listen", "/ip4/127.0.0.1/udp/0/quic-v1",
 		"--listen", "/ip4/127.0.0.1/tcp/0",
 		"--bind-addr", "127.0.0.1:0",
-		"--api-token", apiToken,
+		"--api-token-path", tokenPath(t, apiToken),
 		"--jwt", nodeJWT,
 	)
 
 	// Start Node B
 	t.Log("Starting Node B...")
-	_ = startBackgroundNode(t, nodeBin, hubURL, homeB,
+	_ = startBackgroundNode(t, nodeBin, controlPlaneURL, homeB,
 		"--listen", "/ip4/127.0.0.1/udp/0/quic-v1",
 		"--listen", "/ip4/127.0.0.1/tcp/0",
 		"--bind-addr", "127.0.0.1:0",
-		"--api-token", apiToken,
+		"--api-token-path", tokenPath(t, apiToken),
 		"--jwt", nodeJWT,
 	)
 
@@ -122,13 +122,13 @@ roles: {}
 		if err := json.Unmarshal([]byte(resp), &info); err != nil {
 			t.Fatalf("failed to unmarshal JSON: %v", err)
 		}
-		if hubLatency, ok := info["hub_latency_ms"].(float64); !ok || hubLatency < 0 {
-			t.Errorf("expected valid hub_latency_ms float64, got %v", info)
+		if routerLatency, ok := info["router_latency_ms"].(float64); !ok || routerLatency < 0 {
+			t.Errorf("expected valid router_latency_ms float64, got %v", info)
 		}
 
 		connectedPeers, ok := info["connected_peers"].(float64)
 		if !ok || connectedPeers < 2 {
-			t.Errorf("expected at least 2 connected peers (hub + node B), got %v", info)
+			t.Errorf("expected at least 2 connected peers (router + node B), got %v", info)
 		}
 	})
 

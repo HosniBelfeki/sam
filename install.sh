@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -e
+set -euo pipefail
 
 REPO="google/sam"
 INSTALL_DIR="/usr/local/bin"
@@ -40,12 +40,12 @@ DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${VERSION}/${TAR_NAME
 
 # Create a temporary directory
 TMP_DIR=$(mktemp -d)
+trap 'rm -rf "$TMP_DIR"' EXIT
 cd "$TMP_DIR"
 
 echo "Downloading ${DOWNLOAD_URL}..."
 if ! curl -sfL -o "${TAR_NAME}" "${DOWNLOAD_URL}"; then
     echo "Error: Failed to download ${DOWNLOAD_URL}"
-    rm -rf "$TMP_DIR"
     exit 1
 fi
 
@@ -53,11 +53,22 @@ echo "Extracting..."
 tar -xzf "${TAR_NAME}"
 
 echo "Installing to ${INSTALL_DIR} (may require sudo)..."
-# In some environments, sudo might not be available or required
+INSTALLED_BINS=()
+for b in sam-node sam-control-plane sam-router mcp-client sam-box sam-console nano-init; do
+    if [ -f "$b" ]; then
+        INSTALLED_BINS+=("$b")
+    fi
+done
+
+if [ ${#INSTALLED_BINS[@]} -eq 0 ]; then
+    echo "Error: No SAM binaries found in release archive."
+    exit 1
+fi
+
 if [ -w "$INSTALL_DIR" ]; then
-    mv sam-node sam-control-plane sam-router mcp-client "$INSTALL_DIR/" 2>/dev/null || true
+    mv "${INSTALLED_BINS[@]}" "$INSTALL_DIR/"
 else
-    sudo mv sam-node sam-control-plane sam-router mcp-client "$INSTALL_DIR/" 2>/dev/null || true
+    sudo mv "${INSTALLED_BINS[@]}" "$INSTALL_DIR/"
 fi
 
 # Cleanup

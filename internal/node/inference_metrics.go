@@ -27,7 +27,31 @@ var (
 		},
 		[]string{"peer_id", "model", "token_type"},
 	)
+
+	facadeRejectionsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "sam_node_facade_rejections_total",
+			Help: "Providers excluded by the OpenAI facade scorer, by reason",
+		},
+		[]string{"reason"},
+	)
+
+	facadeRetriesTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "sam_node_facade_retries_total",
+			Help: "Completion attempts retried on another provider after a retryable failure",
+		},
+	)
 )
+
+// recordFacadeRejection accounts one excluded provider by reason.
+func recordFacadeRejection(reason string) {
+	facadeRejectionsTotal.WithLabelValues(reason).Inc()
+}
+
+func recordFacadeRetry() {
+	facadeRetriesTotal.Inc()
+}
 
 // recordTokens increments the prompt and completion token metrics.
 func recordTokens(peerID, model string, promptTokens, completionTokens int) {

@@ -55,9 +55,9 @@ import (
 var logger = golog.Logger("sam-router")
 
 const (
-	LowWaterMark    = 100
-	HighWaterMark   = 400
-	ConnGracePeriod = 1 * time.Minute
+	DefaultLowWaterMark  = 1000
+	DefaultHighWaterMark = 4000
+	ConnGracePeriod      = 1 * time.Minute
 )
 
 type relayACL struct {
@@ -148,35 +148,11 @@ func (r *Router) Start() error {
 		return err
 	}
 
-	if r.config.BootstrapToken == "" && r.config.BootstrapTokenPath != "" {
-		tokenData, err := os.ReadFile(r.config.BootstrapTokenPath)
-		if err != nil {
-			return fmt.Errorf("failed to read bootstrap token from path %s: %w", r.config.BootstrapTokenPath, err)
-		}
-		r.config.BootstrapToken = strings.TrimSpace(string(tokenData))
-	}
-
-	if r.config.BootstrapToken != "" {
-		logger.Infof("Enrolling router %s with Control Plane at %s using Bootstrap Token...", peerID, r.config.ControlPlaneURL)
-		if err := r.enrollBootstrap(peerID); err != nil {
-			return fmt.Errorf("failed router bootstrap enrollment: %w", err)
-		}
-	} else {
-		if r.config.OIDCToken == "" && r.config.JWTPath != "" {
-			tokenData, err := os.ReadFile(r.config.JWTPath)
-			if err != nil {
-				return fmt.Errorf("failed to read JWT from path %s: %w", r.config.JWTPath, err)
-			}
-			r.config.OIDCToken = strings.TrimSpace(string(tokenData))
-		}
-
-		if r.config.OIDCToken != "" {
-			logger.Infof("Enrolling router %s with Control Plane at %s using OIDC Token...", peerID, r.config.ControlPlaneURL)
-			if err := r.enroll(peerID); err != nil {
-				return fmt.Errorf("failed router enrollment: %w", err)
-			}
-		} else {
+	if err := r.enrollWithTokens(peerID); err != nil {
+		if strings.Contains(err.Error(), "no enrollment token available") {
 			logger.Warn("Router started without OIDCToken or BootstrapToken. Enrollment bypassed. Expecting local keys sync.")
+		} else {
+			return err
 		}
 	}
 
@@ -186,7 +162,15 @@ func (r *Router) Start() error {
 	}
 
 	// 4. Initialize libp2p host
-	cm, err := connmgr.NewConnManager(LowWaterMark, HighWaterMark, connmgr.WithGracePeriod(ConnGracePeriod))
+	low := r.config.LowWaterMark
+	if low <= 0 {
+		low = DefaultLowWaterMark
+	}
+	high := r.config.HighWaterMark
+	if high <= 0 {
+		high = DefaultHighWaterMark
+	}
+	cm, err := connmgr.NewConnManager(low, high, connmgr.WithGracePeriod(ConnGracePeriod))
 	if err != nil {
 		return fmt.Errorf("failed to create connection manager: %w", err)
 	}
@@ -288,7 +272,7 @@ func (r *Router) Start() error {
 	go r.runKeysSyncLoop()
 	go r.runFederationLoop()
 	go r.runBiscuitRenewalLoop()
-	go r.listenForHubEvents(r.ctx)
+	go r.listenForControlPlaneEvents(r.ctx)
 
 	r.isReady.Store(true)
 	logger.Infof("Router Online. PeerID: %s, ListenAddrs: %v", r.Host.ID(), r.Host.Addrs())
@@ -338,10 +322,10 @@ func (r *Router) enroll(peerID peer.ID) error {
 	r.keysMu.Lock()
 	r.biscuitToken = enrollResp.BiscuitToken
 	r.biscuitExpiration = time.Unix(enrollResp.Expiration, 0)
-	r.trustedPublicKeys = []ed25519.PublicKey{enrollResp.HubPublicKey}
+	r.trustedPublicKeys = []ed25519.PublicKey{enrollResp.ControlPlanePublicKey}
 	r.keysMu.Unlock()
 
-	if err := identity.VerifyBiscuitRole(enrollResp.BiscuitToken, enrollResp.HubPublicKey, r.config.RequiredRole); err != nil {
+	if err := identity.VerifyBiscuitRole(enrollResp.BiscuitToken, enrollResp.ControlPlanePublicKey, r.config.RequiredRole); err != nil {
 		return fmt.Errorf("enrolled biscuit token lacks required role %q: %w", r.config.RequiredRole, err)
 	}
 
@@ -460,15 +444,53 @@ func (r *Router) enrollBootstrap(peerID peer.ID) error {
 	r.keysMu.Lock()
 	r.biscuitToken = enrollResp.BiscuitToken
 	r.biscuitExpiration = time.Unix(enrollResp.Expiration, 0)
-	r.trustedPublicKeys = []ed25519.PublicKey{enrollResp.HubPublicKey}
+	r.trustedPublicKeys = []ed25519.PublicKey{enrollResp.ControlPlanePublicKey}
 	r.keysMu.Unlock()
 
-	if err := identity.VerifyBiscuitRole(enrollResp.BiscuitToken, enrollResp.HubPublicKey, r.config.RequiredRole); err != nil {
+	if err := identity.VerifyBiscuitRole(enrollResp.BiscuitToken, enrollResp.ControlPlanePublicKey, r.config.RequiredRole); err != nil {
 		return fmt.Errorf("enrolled biscuit token lacks required role %q: %w", r.config.RequiredRole, err)
 	}
 
 	logger.Infof("Router bootstrap enrollment approved! Biscuit received.")
 	return nil
+}
+
+func (r *Router) enrollWithTokens(peerID peer.ID) error {
+	// Always read the token from disk if a path is specified to handle rotation
+	if r.config.BootstrapTokenPath != "" {
+		tokenData, err := os.ReadFile(r.config.BootstrapTokenPath)
+		if err != nil {
+			return fmt.Errorf("failed to read bootstrap token from path %s: %w", r.config.BootstrapTokenPath, err)
+		}
+		r.config.BootstrapToken = strings.TrimSpace(string(tokenData))
+	}
+
+	if r.config.BootstrapToken != "" {
+		logger.Infof("Enrolling router %s with Control Plane at %s using Bootstrap Token...", peerID, r.config.ControlPlaneURL)
+		if err := r.enrollBootstrap(peerID); err != nil {
+			return fmt.Errorf("failed router bootstrap enrollment: %w", err)
+		}
+		return nil
+	}
+
+	// Fallback to OIDC token
+	if r.config.JWTPath != "" {
+		tokenData, err := os.ReadFile(r.config.JWTPath)
+		if err != nil {
+			return fmt.Errorf("failed to read JWT from path %s: %w", r.config.JWTPath, err)
+		}
+		r.config.OIDCToken = strings.TrimSpace(string(tokenData))
+	}
+
+	if r.config.OIDCToken != "" {
+		logger.Infof("Enrolling router %s with Control Plane at %s using OIDC Token...", peerID, r.config.ControlPlaneURL)
+		if err := r.enroll(peerID); err != nil {
+			return fmt.Errorf("failed router enrollment: %w", err)
+		}
+		return nil
+	}
+
+	return fmt.Errorf("no enrollment token available")
 }
 
 func (r *Router) reEnroll() error {
@@ -479,12 +501,7 @@ func (r *Router) reEnroll() error {
 		return fmt.Errorf("cannot re-enroll: router host is not initialized")
 	}
 
-	if r.config.BootstrapToken != "" {
-		return r.enrollBootstrap(r.Host.ID())
-	} else if r.config.OIDCToken != "" {
-		return r.enroll(r.Host.ID())
-	}
-	return fmt.Errorf("no enrollment token available for re-enrollment")
+	return r.enrollWithTokens(r.Host.ID())
 }
 
 func (r *Router) syncKeys() error {
@@ -548,7 +565,7 @@ func (r *Router) verifyEvent(event *api.MeshEvent) bool {
 	return false
 }
 
-func (r *Router) listenForHubEvents(ctx context.Context) {
+func (r *Router) listenForControlPlaneEvents(ctx context.Context) {
 	defer r.wg.Done()
 	if r.EventTopic == nil {
 		return
@@ -640,83 +657,84 @@ func (r *Router) runLeaseRenewalLoop() {
 }
 
 func (r *Router) renewLease() {
-	r.keysMu.RLock()
-	biscuit := r.biscuitToken
-	r.keysMu.RUnlock()
+	for attempt := 0; attempt < 2; attempt++ {
+		r.keysMu.RLock()
+		biscuit := r.biscuitToken
+		r.keysMu.RUnlock()
 
-	if len(biscuit) == 0 {
-		logger.Warn("Cannot renew lease: router is not enrolled (no biscuit)")
-		return
-	}
-
-	var addrs []string
-	if len(r.config.ExternalAddrs) > 0 {
-		for _, addr := range r.config.ExternalAddrs {
-			addrs = append(addrs, addr+"/p2p/"+r.Host.ID().String())
-		}
-	} else {
-		for _, addr := range r.Host.Addrs() {
-			addrs = append(addrs, addr.String()+"/p2p/"+r.Host.ID().String())
-		}
-	}
-
-	var connectedPeers []string
-	if r.Host != nil && r.Host.Network() != nil {
-		for _, p := range r.Host.Network().Peers() {
-			connectedPeers = append(connectedPeers, p.String())
-		}
-	}
-	var dhtSize int32
-	if r.DHT != nil && r.DHT.RoutingTable() != nil {
-		dhtSize = int32(r.DHT.RoutingTable().Size())
-	}
-
-	req := &api.RouterLeaseRequest{
-		PeerId:         r.Host.ID().String(),
-		Addresses:      addrs,
-		Biscuit:        biscuit,
-		ConnectedPeers: connectedPeers,
-		DhtSize:        dhtSize,
-	}
-	data, _ := proto.Marshal(req)
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Post(r.config.ControlPlaneURL+"/routers/lease", "application/x-protobuf", bytes.NewReader(data))
-	if err != nil {
-		logger.Errorf("Failed to renew lease with control plane: %v", err)
-		return
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode == http.StatusUnauthorized {
-		body, _ := io.ReadAll(resp.Body)
-		logger.Warnf("Control plane lease renewal rejected (401 Unauthorized: %s), attempting re-enrollment...", string(body))
-		if err := r.reEnroll(); err != nil {
-			logger.Errorf("Re-enrollment failed after 401 Unauthorized lease renewal: %v", err)
+		if len(biscuit) == 0 {
+			logger.Warn("Cannot renew lease: router is not enrolled (no biscuit)")
 			return
 		}
-		logger.Info("Successfully re-enrolled after 401 Unauthorized lease renewal, retrying lease renewal...")
-		r.renewLease()
-		return
-	}
 
-	if resp.StatusCode != http.StatusOK {
+		var addrs []string
+		if len(r.config.ExternalAddrs) > 0 {
+			for _, addr := range r.config.ExternalAddrs {
+				addrs = append(addrs, addr+"/p2p/"+r.Host.ID().String())
+			}
+		} else {
+			for _, addr := range r.Host.Addrs() {
+				addrs = append(addrs, addr.String()+"/p2p/"+r.Host.ID().String())
+			}
+		}
+
+		var connectedPeers []string
+		if r.Host != nil && r.Host.Network() != nil {
+			for _, p := range r.Host.Network().Peers() {
+				connectedPeers = append(connectedPeers, p.String())
+			}
+		}
+		var dhtSize int32
+		if r.DHT != nil && r.DHT.RoutingTable() != nil {
+			dhtSize = int32(r.DHT.RoutingTable().Size())
+		}
+
+		req := &api.RouterLeaseRequest{
+			PeerId:         r.Host.ID().String(),
+			Addresses:      addrs,
+			Biscuit:        biscuit,
+			ConnectedPeers: connectedPeers,
+			DhtSize:        dhtSize,
+		}
+		data, _ := proto.Marshal(req)
+
+		client := &http.Client{Timeout: 10 * time.Second}
+		resp, err := client.Post(r.config.ControlPlaneURL+"/routers/lease", "application/x-protobuf", bytes.NewReader(data))
+		if err != nil {
+			logger.Errorf("Failed to renew lease with control plane: %v", err)
+			return
+		}
+
 		body, _ := io.ReadAll(resp.Body)
-		logger.Errorf("Control plane lease renewal rejected, status %s: %s", resp.Status, string(body))
-		return
-	}
+		_ = resp.Body.Close()
 
-	var leaseResp api.RouterLeaseResponse
-	body, _ := io.ReadAll(resp.Body)
-	if err := proto.Unmarshal(body, &leaseResp); err != nil {
-		logger.Errorf("Failed to parse lease response: %v", err)
-		return
-	}
+		if resp.StatusCode == http.StatusUnauthorized && attempt == 0 {
+			logger.Warnf("Control plane lease renewal rejected (401 Unauthorized: %s), attempting re-enrollment...", string(body))
+			if err := r.reEnroll(); err != nil {
+				logger.Errorf("Re-enrollment failed after 401 Unauthorized lease renewal: %v", err)
+				return
+			}
+			logger.Info("Successfully re-enrolled after 401 Unauthorized lease renewal, retrying lease renewal...")
+			continue
+		}
 
-	if !leaseResp.Success {
-		logger.Errorf("Lease renewal failed: %s", leaseResp.Error)
-	} else {
-		logger.Debugf("Lease renewed successfully. Expires at: %s", time.Unix(leaseResp.ExpiresAt, 0))
+		if resp.StatusCode != http.StatusOK {
+			logger.Errorf("Control plane lease renewal rejected, status %s: %s", resp.Status, string(body))
+			return
+		}
+
+		var leaseResp api.RouterLeaseResponse
+		if err := proto.Unmarshal(body, &leaseResp); err != nil {
+			logger.Errorf("Failed to parse lease response: %v", err)
+			return
+		}
+
+		if !leaseResp.Success {
+			logger.Errorf("Lease renewal failed: %s", leaseResp.Error)
+		} else {
+			logger.Debugf("Lease renewed successfully. Expires at: %s", time.Unix(leaseResp.ExpiresAt, 0))
+		}
+		return
 	}
 }
 
@@ -756,12 +774,12 @@ func (r *Router) connectBootstrapRouters() {
 		return
 	}
 
-	var info api.HubInfoResponse
+	var info api.ControlPlaneInfoResponse
 	if err := proto.Unmarshal(body, &info); err != nil {
 		return
 	}
 
-	for _, addrStr := range info.HubAddresses {
+	for _, addrStr := range info.RouterAddresses {
 		ma, err := multiaddr.NewMultiaddr(addrStr)
 		if err != nil {
 			continue

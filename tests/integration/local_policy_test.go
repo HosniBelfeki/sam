@@ -17,9 +17,9 @@ func TestLocalPolicyCanGrantPermissions(t *testing.T) {
 
 	oidcURL, mintToken := startCustomMockOIDC(t)
 
-	// Hub Policy that grants NOTHING.
-	hubPolicyFile := filepath.Join(tmpDir, "policies.yaml")
-	hubPolicyYAML := `version: "v1alpha1"
+	// Control plane policy that grants NOTHING.
+	controlPlanePolicyFile := filepath.Join(tmpDir, "policies.yaml")
+	controlPlanePolicyYAML := `version: "v1alpha1"
 roles:
   none:
     allowed_services: []
@@ -30,12 +30,12 @@ bindings:
   - role: none
     members: ["user:nodeB-user"]
 `
-	if err := os.WriteFile(hubPolicyFile, []byte(hubPolicyYAML), 0644); err != nil {
+	if err := os.WriteFile(controlPlanePolicyFile, []byte(controlPlanePolicyYAML), 0644); err != nil {
 		t.Fatal(err)
 	}
 
-	httpPortHub, cleanupHub := startControlPlaneAndRouter(t, tmpDir, oidcURL, mintToken, hubPolicyFile)
-	defer cleanupHub()
+	httpPortCP, cleanupCP := startControlPlaneAndRouter(t, tmpDir, oidcURL, mintToken, controlPlanePolicyFile)
+	defer cleanupCP()
 
 	// Node B Config with a permissive local policy
 	nodeBPolicyFile := filepath.Join(tmpDir, "nodeB_config.yaml")
@@ -57,10 +57,10 @@ attenuation:
 	apiPortB := getFreePort(t)
 
 	cmdB := exec.Command(nodeBin, "run",
-		"--hub", fmt.Sprintf("http://127.0.0.1:%d", httpPortHub),
+		"--control-plane", fmt.Sprintf("http://127.0.0.1:%d", httpPortCP),
 		"--data-dir", homeB,
 		"--bind-addr", fmt.Sprintf("127.0.0.1:%d", apiPortB),
-		"--api-token", apiTokenB,
+		"--api-token-path", tokenPath(t, apiTokenB),
 		"--jwt", mintToken(map[string]interface{}{
 			"sub":   "nodeB-user",
 			"roles": []string{api.RoleNode},
@@ -101,10 +101,10 @@ attenuation:
 	apiPortA := getFreePort(t)
 
 	cmdA := exec.Command(nodeBin, "run",
-		"--hub", fmt.Sprintf("http://127.0.0.1:%d", httpPortHub),
+		"--control-plane", fmt.Sprintf("http://127.0.0.1:%d", httpPortCP),
 		"--data-dir", homeA,
 		"--bind-addr", fmt.Sprintf("127.0.0.1:%d", apiPortA),
-		"--api-token", apiTokenA,
+		"--api-token-path", tokenPath(t, apiTokenA),
 		"--jwt", mintToken(map[string]interface{}{
 			"sub":   "unprivileged-user",
 			"roles": []string{api.RoleNode},
@@ -132,7 +132,7 @@ attenuation:
 	waitForAPI(t, actualApiAddrA)
 
 	// Make request from Node A to Node B
-	// Even though Node A has no Hub permissions, Node B's local policy "allow if true;" should permit it.
+	// Even though Node A has no control plane permissions, Node B's local policy "allow if true;" should permit it.
 	resp, callErr := callMCPAllowError(t, actualApiAddrA, apiTokenA, "call_remote_tool", map[string]any{
 		"peer_id":   peerIDB,
 		"tool_name": "mcp://test-tool/test_tool",
@@ -155,15 +155,15 @@ attenuation:
 	}
 }
 
-func TestLocalPolicyCannotBypassHubTargetConstraint(t *testing.T) {
+func TestLocalPolicyCannotBypassControlPlaneTargetConstraint(t *testing.T) {
 	nodeBin := buildBinary(t, "./cmd/sam-node")
 	tmpDir := t.TempDir()
 
 	oidcURL, mintToken := startCustomMockOIDC(t)
 
-	// Hub Policy that grants service access but RESTRICTS target to "group:admin-only".
-	hubPolicyFile := filepath.Join(tmpDir, "policies.yaml")
-	hubPolicyYAML := `version: "v1alpha1"
+	// Control plane policy that grants service access but RESTRICTS target to "group:admin-only".
+	controlPlanePolicyFile := filepath.Join(tmpDir, "policies.yaml")
+	controlPlanePolicyYAML := `version: "v1alpha1"
 roles:
   restricted-role:
     allowed_services: ["*"]
@@ -174,15 +174,15 @@ bindings:
   - role: restricted-role
     members: ["user:nodeB-user"]
 `
-	if err := os.WriteFile(hubPolicyFile, []byte(hubPolicyYAML), 0644); err != nil {
+	if err := os.WriteFile(controlPlanePolicyFile, []byte(controlPlanePolicyYAML), 0644); err != nil {
 		t.Fatal(err)
 	}
 
-	httpPortHub, cleanupHub := startControlPlaneAndRouter(t, tmpDir, oidcURL, mintToken, hubPolicyFile)
-	defer cleanupHub()
+	httpPortCP, cleanupCP := startControlPlaneAndRouter(t, tmpDir, oidcURL, mintToken, controlPlanePolicyFile)
+	defer cleanupCP()
 
 	// Node B Config with a permissive local policy ("allow if true;")
-	// Node B will NOT claim "group:admin-only", so it will fail the Hub's target check.
+	// Node B will NOT claim "group:admin-only", so it will fail the control plane's target check.
 	nodeBPolicyFile := filepath.Join(tmpDir, "nodeB_config.yaml")
 	nodeBPolicyYAML := `version: "v1alpha1"
 services:
@@ -202,10 +202,10 @@ attenuation:
 	apiPortB := getFreePort(t)
 
 	cmdB := exec.Command(nodeBin, "run",
-		"--hub", fmt.Sprintf("http://127.0.0.1:%d", httpPortHub),
+		"--control-plane", fmt.Sprintf("http://127.0.0.1:%d", httpPortCP),
 		"--data-dir", homeB,
 		"--bind-addr", fmt.Sprintf("127.0.0.1:%d", apiPortB),
-		"--api-token", apiTokenB,
+		"--api-token-path", tokenPath(t, apiTokenB),
 		"--jwt", mintToken(map[string]interface{}{
 			"sub":   "nodeB-user",
 			"roles": []string{api.RoleNode},
@@ -246,10 +246,10 @@ attenuation:
 	apiPortA := getFreePort(t)
 
 	cmdA := exec.Command(nodeBin, "run",
-		"--hub", fmt.Sprintf("http://127.0.0.1:%d", httpPortHub),
+		"--control-plane", fmt.Sprintf("http://127.0.0.1:%d", httpPortCP),
 		"--data-dir", homeA,
 		"--bind-addr", fmt.Sprintf("127.0.0.1:%d", apiPortA),
-		"--api-token", apiTokenA,
+		"--api-token-path", tokenPath(t, apiTokenA),
 		"--jwt", mintToken(map[string]interface{}{
 			"sub":   "client-user",
 			"roles": []string{api.RoleNode},
@@ -298,6 +298,6 @@ attenuation:
 	}
 
 	if !failed {
-		t.Errorf("expected failure due to Hub target constraint check, got success. Resp: %s", resp)
+		t.Errorf("expected failure due to control plane target constraint check, got success. Resp: %s", resp)
 	}
 }

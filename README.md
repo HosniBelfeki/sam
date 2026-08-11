@@ -9,6 +9,8 @@ SAM is a smart network built for autonomous AI agents:
 *   **Agentic Network:** Formed by lightweight nodes (`sam-node`) that provide self-healing, P2P connectivity, allowing autonomous agents to plug in, communicate, and invoke tools dynamically.
 *   **Portability:** Cryptographic identities are environment-agnostic, allowing seamless node mobility across cloud, local, and edge environments.
 
+<video src="https://github.com/user-attachments/assets/f1a61b6f-efcd-46d8-a6e6-659fb29dd1ce" width="100%" autoplay loop muted playsinline controls></video>
+
 ---
 
 ## Architecture Components
@@ -32,7 +34,7 @@ Get a node running on the public testnet (`bananas.sam-mesh.dev`) in minutes:
 
 ### For Developers & Contributors
 Compile from source, run local clusters, or execute tests:
-- 🛠️ **[Developer Guide](site/content/docs/development/_index.md)**: Prereqs, compilation, local hub setup, and Kubernetes Kind deployment.
+- 🛠️ **[Developer Guide](site/content/docs/development/_index.md)**: Prereqs, compilation, local control plane setup, and Kubernetes Kind deployment.
 - 🧪 **[Testing Guide](site/content/docs/development/testing.md)**: Go tests, E2E BATS, and containerized mesh execution.
 
 ---

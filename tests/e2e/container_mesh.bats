@@ -11,11 +11,11 @@ teardown() {
   mesh_cleanup_env
 }
 
-@test "container framework starts hub and multiple nodes" {
+@test "container framework starts router and multiple nodes" {
   run mesh_start_mock_oidc
   [[ "$status" -eq 0 ]]
 
-  run mesh_start_hub
+  run mesh_start_router
   [[ "$status" -eq 0 ]]
 
   local node_count=5
@@ -26,7 +26,7 @@ teardown() {
   done
 
   # Verify every container remains healthy enough to keep the process running.
-  run mesh_assert_container_running "${MESH_PREFIX}-hub"
+  run mesh_assert_container_running "${MESH_PREFIX}-router"
   [[ "$status" -eq 0 ]]
 
   for i in $(seq 1 "$node_count"); do

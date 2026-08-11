@@ -24,7 +24,7 @@ spec:
             secretKeyRef:
               name: {{ include "sam-mesh.fullname" . }}-secrets
               key: db-password
-        - name: ADMIN_TOKEN
+        - name: SAM_ADMIN_TOKEN
           valueFrom:
             secretKeyRef:
               name: {{ include "sam-mesh.fullname" . }}-secrets
@@ -38,12 +38,12 @@ spec:
           protocol: TCP
         readinessProbe:
           httpGet:
-            path: /info
+            path: /readyz
             port: http
           periodSeconds: 5
         livenessProbe:
           httpGet:
-            path: /info
+            path: /healthz
             port: http
           periodSeconds: 15
         resources:
@@ -63,7 +63,6 @@ spec:
         {{- end }}
         - "--issuer={{ .Values.controlPlane.oidcIssuer }}"
         - "--allowed-audiences={{ .Values.controlPlane.allowedAudiences }}"
-        - "--admin-token=$(ADMIN_TOKEN)"
         {{- if .Values.controlPlane.autoApproveEnrollment }}
         - "--auto-approve-enrollment"
         {{- end }}

@@ -75,9 +75,9 @@ func TestPolicyPermutations(t *testing.T) {
 
 	oidcURL, mintToken := startCustomMockOIDC(t)
 
-	// 1. Hub Policies
-	hubPolicyFile := filepath.Join(tmpDir, "policies.yaml")
-	hubPolicyYAML := `version: "v1alpha1"
+	// 1. Control plane policies
+	controlPlanePolicyFile := filepath.Join(tmpDir, "policies.yaml")
+	controlPlanePolicyYAML := `version: "v1alpha1"
 roles:
   role-user:
     allowed_services: ["mcp://test-user"]
@@ -112,12 +112,12 @@ bindings:
   - role: admin
     members: ["user:nodeB"]
 `
-	if err := os.WriteFile(hubPolicyFile, []byte(hubPolicyYAML), 0644); err != nil {
+	if err := os.WriteFile(controlPlanePolicyFile, []byte(controlPlanePolicyYAML), 0644); err != nil {
 		t.Fatal(err)
 	}
 
-	httpPortHub, cleanupHub := startControlPlaneAndRouter(t, tmpDir, oidcURL, mintToken, hubPolicyFile)
-	defer cleanupHub()
+	httpPortCP, cleanupCP := startControlPlaneAndRouter(t, tmpDir, oidcURL, mintToken, controlPlanePolicyFile)
+	defer cleanupCP()
 
 	// 2. Node B (Target) Config
 	nodeBPolicyFile := filepath.Join(tmpDir, "nodeB_config.yaml")
@@ -148,10 +148,10 @@ services:
 	apiPortB := getFreePort(t)
 
 	cmdB := exec.Command(nodeBin, "run",
-		"--hub", fmt.Sprintf("http://127.0.0.1:%d", httpPortHub),
+		"--control-plane", fmt.Sprintf("http://127.0.0.1:%d", httpPortCP),
 		"--data-dir", homeB,
 		"--bind-addr", fmt.Sprintf("127.0.0.1:%d", apiPortB),
-		"--api-token", apiTokenB,
+		"--api-token-path", tokenPath(t, apiTokenB),
 		"--jwt", mintToken(map[string]interface{}{
 			"sub":    "bob-subject",
 			"roles":  []string{api.RoleNode},
@@ -184,11 +184,11 @@ services:
 
 	// 3. Test Permutations
 	tests := []struct {
-		name         string
-		jwtClaims    map[string]interface{}
-		targetSvc    string
-		expectAllow  bool
-		expectHubErr bool
+		name                  string
+		jwtClaims             map[string]interface{}
+		targetSvc             string
+		expectAllow           bool
+		expectControlPlaneErr bool
 	}{
 		{
 			name:        "Fact sub: user(bob-subject)",
@@ -221,7 +221,7 @@ services:
 			expectAllow: true,
 		},
 		{
-			name:        "Unknown User / No Roles -> Hub Error",
+			name:        "Unknown User / No Roles -> control plane error",
 			jwtClaims:   map[string]interface{}{"sub": "unknown"},
 			targetSvc:   "mcp://test-user",
 			expectAllow: false,
@@ -244,10 +244,10 @@ services:
 			jwtA := mintToken(tt.jwtClaims)
 
 			cmdA := exec.Command(nodeBin, "run",
-				"--hub", fmt.Sprintf("http://127.0.0.1:%d", httpPortHub),
+				"--control-plane", fmt.Sprintf("http://127.0.0.1:%d", httpPortCP),
 				"--data-dir", homeA,
 				"--bind-addr", fmt.Sprintf("127.0.0.1:%d", apiPortA),
-				"--api-token", apiTokenA,
+				"--api-token-path", tokenPath(t, apiTokenA),
 				"--jwt", jwtA,
 				"--listen", "/ip4/127.0.0.1/tcp/0",
 				"--listen", "/ip4/127.0.0.1/udp/0/quic-v1",

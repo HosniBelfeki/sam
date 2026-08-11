@@ -112,15 +112,15 @@ type CertCache struct {
 	leafKey *rsa.PrivateKey
 }
 
-func NewCertCache() *CertCache {
+func NewCertCache() (*CertCache, error) {
 	priv, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
-		panic(fmt.Sprintf("failed to generate reusable leaf private key: %v", err))
+		return nil, fmt.Errorf("failed to generate reusable leaf private key: %w", err)
 	}
 	return &CertCache{
 		certs:   make(map[string]*tls.Certificate),
 		leafKey: priv,
-	}
+	}, nil
 }
 
 func (c *CertCache) GetCertificate(sni string, ca *CA) (*tls.Certificate, error) {
@@ -206,9 +206,13 @@ func NewGateway(secretStore map[string]SecretConfig, transport http.RoundTripper
 	if err != nil {
 		return nil, err
 	}
+	certCache, err := NewCertCache()
+	if err != nil {
+		return nil, err
+	}
 	return &Gateway{
 		CA:              ca,
-		CertCache:       NewCertCache(),
+		CertCache:       certCache,
 		SecretStore:     secretStore,
 		Transport:       transport,
 		InterceptorsDir: interceptorsDir,

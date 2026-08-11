@@ -149,7 +149,7 @@ func (r *ServiceRegistry) TeardownAll() {
 	}
 }
 
-// ReprovideAll re-provides all registered services to the DHT.
+// ReprovideAll re-provides all registered services to the DHT concurrently.
 func (r *ServiceRegistry) ReprovideAll(ctx context.Context) {
 	r.mu.Lock()
 	var toProvide []*api.ServiceInfo
@@ -158,18 +158,36 @@ func (r *ServiceRegistry) ReprovideAll(ctx context.Context) {
 	}
 	r.mu.Unlock()
 
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 5)
+
+Loop:
 	for _, info := range toProvide {
-		srvNameCID, err := serviceNameToCID(info.Type, info.Name)
-		if err == nil {
-			nameCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-			_ = r.dht.Provide(nameCtx, srvNameCID, true)
-			cancel()
+		info := info
+		select {
+		case <-ctx.Done():
+			break Loop
+		case sem <- struct{}{}:
 		}
-		srvTypeCID, err := serviceTypeToCID(info.Type)
-		if err == nil {
-			typeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-			_ = r.dht.Provide(typeCtx, srvTypeCID, true)
-			cancel()
-		}
+
+		wg.Add(1)
+		go func() {
+			defer func() {
+				<-sem
+				wg.Done()
+			}()
+
+			if srvNameCID, err := serviceNameToCID(info.Type, info.Name); err == nil {
+				nameCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+				_ = r.dht.Provide(nameCtx, srvNameCID, true)
+				cancel()
+			}
+			if srvTypeCID, err := serviceTypeToCID(info.Type); err == nil {
+				typeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+				_ = r.dht.Provide(typeCtx, srvTypeCID, true)
+				cancel()
+			}
+		}()
 	}
+	wg.Wait()
 }

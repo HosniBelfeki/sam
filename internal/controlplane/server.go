@@ -43,9 +43,11 @@ import (
 	golog "github.com/ipfs/go-log/v2"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"golang.org/x/time/rate"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
+	"gopkg.in/yaml.v2"
 )
 
 var logger = golog.Logger("sam-control-plane")
@@ -147,6 +149,9 @@ func (s *Server) Start() error {
 	s.listener = l
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", s.HandleHealthz)
+	mux.HandleFunc("/readyz", s.HandleReadyz)
+	mux.Handle("/metrics", promhttp.Handler())
 	mux.HandleFunc("/info", s.HandleInfo)
 	mux.HandleFunc("/register", s.HandleRegister)
 	mux.HandleFunc("/keys", s.HandleKeys)
@@ -288,6 +293,36 @@ func (s *Server) runKeyRotationLoop() {
 	}
 }
 
+// HandleHealthz HTTP GET `/healthz`
+func (s *Server) HandleHealthz(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(`{"status":"ok"}`))
+}
+
+// HandleReadyz HTTP GET `/readyz`
+func (s *Server) HandleReadyz(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.store != nil {
+		if err := s.store.Ping(r.Context()); err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = fmt.Fprintf(w, `{"status":"error","message":%q}`, err.Error())
+			return
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(`{"status":"ready"}`))
+}
+
 // HandleInfo HTTP GET `/info`
 func (s *Server) HandleInfo(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -319,11 +354,11 @@ func (s *Server) HandleInfo(w http.ResponseWriter, r *http.Request) {
 		routerAddrs = append(routerAddrs, r.Addresses...)
 	}
 
-	resp := &api.HubInfoResponse{
-		OidcIssuer:   issuer,
-		ClientId:     aud,
-		Audience:     aud,
-		HubAddresses: routerAddrs, // Reused this field for back-compatibility with bootstrap routers list
+	resp := &api.ControlPlaneInfoResponse{
+		OidcIssuer:      issuer,
+		ClientId:        aud,
+		Audience:        aud,
+		RouterAddresses: routerAddrs, // Reused this field for back-compatibility with bootstrap routers list
 	}
 
 	respData, err := proto.Marshal(resp)
@@ -396,6 +431,16 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Fail closed on malformed region claims; canonical form is what gets
+	// attested into the biscuit and persisted for refreshes.
+	region := api.NormalizeRegion(req.Region)
+	if region != "" {
+		if err := api.ValidateRegion(region); err != nil {
+			http.Error(w, "Invalid region: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+
 	policyRoles, bindings, err := s.store.GetMeshPolicy(ctx)
 	if err != nil && err != storage.ErrNotFound {
 		logger.Errorf("Failed to load policy for registration: %v", err)
@@ -433,7 +478,7 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request) {
 
 	// Mint token
 	biscuitExpiry := time.Now().Add(api.BiscuitTokenTTL)
-	biscuitData, _, err := identity.MintBiscuitToken(privKey, claims, token, pID, biscuitExpiry, finalRoles, policyRoles)
+	biscuitData, _, err := identity.MintBiscuitToken(privKey, claims, token, pID, biscuitExpiry, finalRoles, policyRoles, region)
 	if err != nil {
 		logger.Errorw("Biscuit minting failed", "peer_id", req.PeerId, "error", err)
 		http.Error(w, "Failed to mint biscuit: "+err.Error(), http.StatusForbidden)
@@ -458,6 +503,7 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request) {
 		Role:           primaryRole,
 		EnrollmentType: "OIDC",
 		ClaimsJSON:     string(claimsBytes),
+		Region:         region,
 		EnrolledAt:     time.Now(),
 		ExpiresAt:      sessionExpiresAt,
 	}
@@ -483,10 +529,10 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := &api.EnrollResponse{
-		BiscuitToken: biscuitData,
-		HubPublicKey: pubKey,
-		HubAddresses: routerAddrs, // routers nodes multiaddresses
-		Expiration:   token.Expiry.Unix(),
+		BiscuitToken:          biscuitData,
+		ControlPlanePublicKey: pubKey,
+		RouterAddresses:       routerAddrs, // routers nodes multiaddresses
+		Expiration:            token.Expiry.Unix(),
 	}
 
 	respData, err := proto.Marshal(resp)
@@ -648,7 +694,7 @@ func (s *Server) HandleRefresh(w http.ResponseWriter, r *http.Request) {
 		finalRoles := []string{nodeRecord.Role}
 		finalRoles = append(finalRoles, customAccessRoles...)
 
-		bBytes, _, err := identity.MintBiscuitToken(privKey, claims, nil, pID, biscuitExpiry, finalRoles, policyRoles)
+		bBytes, _, err := identity.MintBiscuitToken(privKey, claims, nil, pID, biscuitExpiry, finalRoles, policyRoles, nodeRecord.Region)
 		if err != nil {
 			logger.Errorf("Failed to mint refreshed token for node %s: %v", nodeRecord.PeerID, err)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -657,7 +703,7 @@ func (s *Server) HandleRefresh(w http.ResponseWriter, r *http.Request) {
 		biscuitBytes = bBytes
 	} else {
 		// Bootstrap node
-		bBytes, err := identity.MintBootstrapBiscuitToken(privKey, pID, nodeRecord.Role, biscuitExpiry, policyRoles)
+		bBytes, err := identity.MintBootstrapBiscuitToken(privKey, pID, nodeRecord.Role, biscuitExpiry, policyRoles, nodeRecord.Region)
 		if err != nil {
 			logger.Errorf("Failed to mint refreshed token for node %s: %v", nodeRecord.PeerID, err)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -1050,6 +1096,14 @@ func (s *Server) HandleEnroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	region := api.NormalizeRegion(req.Region)
+	if region != "" {
+		if err := api.ValidateRegion(region); err != nil {
+			s.writeEnrollError(w, api.EnrollmentStatus_ENROLLMENT_STATUS_REJECTED, "Invalid region: "+err.Error())
+			return
+		}
+	}
+
 	pID, err := peer.Decode(req.PeerId)
 	if err != nil {
 		http.Error(w, "Invalid Peer ID", http.StatusBadRequest)
@@ -1089,6 +1143,7 @@ func (s *Server) HandleEnroll(w http.ResponseWriter, r *http.Request) {
 		PublicKey: req.PublicKey,
 		TokenID:   tokenRecord.ID,
 		Status:    api.EnrollmentStatus_ENROLLMENT_STATUS_PENDING,
+		Region:    region,
 		CreatedAt: time.Now(),
 	}
 
@@ -1110,7 +1165,7 @@ func (s *Server) HandleEnroll(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
 		}
-		biscuitBytes, err := identity.MintBootstrapBiscuitToken(privKey, pID, tokenRecord.Role, time.Now().Add(api.BiscuitTokenTTL), policyRoles)
+		biscuitBytes, err := identity.MintBootstrapBiscuitToken(privKey, pID, tokenRecord.Role, time.Now().Add(api.BiscuitTokenTTL), policyRoles, region)
 		if err != nil {
 			logger.Errorf("Failed to mint bootstrap biscuit: %v", err)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -1135,6 +1190,7 @@ func (s *Server) HandleEnroll(w http.ResponseWriter, r *http.Request) {
 			Biscuit:        biscuitBytes,
 			Role:           tokenRecord.Role,
 			EnrollmentType: "BOOTSTRAP",
+			Region:         region,
 			EnrolledAt:     time.Now(),
 			ExpiresAt:      time.Time{},
 		}
@@ -1459,7 +1515,9 @@ func (s *Server) HandleAdminEnrollmentAction(w http.ResponseWriter, r *http.Requ
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
 		}
-		biscuitBytes, err := identity.MintBootstrapBiscuitToken(privKey, pID, tokenRecord.Role, time.Now().Add(api.BiscuitTokenTTL), policyRoles)
+		// Admin approval is the attestation of the operator-declared region
+		// recorded on the pending request.
+		biscuitBytes, err := identity.MintBootstrapBiscuitToken(privKey, pID, tokenRecord.Role, time.Now().Add(api.BiscuitTokenTTL), policyRoles, enrollReq.Region)
 		if err != nil {
 			logger.Errorf("Failed to mint bootstrap biscuit: %v", err)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -1479,6 +1537,7 @@ func (s *Server) HandleAdminEnrollmentAction(w http.ResponseWriter, r *http.Requ
 			Biscuit:        biscuitBytes,
 			Role:           tokenRecord.Role,
 			EnrollmentType: "BOOTSTRAP",
+			Region:         enrollReq.Region,
 			EnrolledAt:     time.Now(),
 			ExpiresAt:      time.Time{},
 		}
@@ -1588,11 +1647,11 @@ func (s *Server) buildApprovedBootstrapEnrollResponse(ctx context.Context, biscu
 	}
 
 	return &api.BootstrapEnrollResponse{
-		Status:       api.EnrollmentStatus_ENROLLMENT_STATUS_APPROVED,
-		BiscuitToken: biscuitToken,
-		HubPublicKey: pubKey,
-		HubAddresses: routerAddrs,
-		Expiration:   expiration,
+		Status:                api.EnrollmentStatus_ENROLLMENT_STATUS_APPROVED,
+		BiscuitToken:          biscuitToken,
+		ControlPlanePublicKey: pubKey,
+		RouterAddresses:       routerAddrs,
+		Expiration:            expiration,
 	}, nil
 }
 
@@ -1649,7 +1708,41 @@ func (s *Server) HandleUserStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var policyYAML string // TODO: Implement relational policy rendering.
+	roles, bindings, err := s.store.GetMeshPolicy(r.Context())
+	if err != nil {
+		logger.Errorf("Failed to list policy: %v", err)
+	}
+
+	type displayRole struct {
+		AllowedServices []string `yaml:"allowed_services"`
+		AllowedTargets  []string `yaml:"allowed_targets"`
+	}
+	type displayBinding struct {
+		Role    string   `yaml:"role"`
+		Members []string `yaml:"members"`
+	}
+	displayMap := map[string]interface{}{
+		"roles":    make(map[string]displayRole),
+		"bindings": make([]displayBinding, 0),
+	}
+
+	for _, role := range roles {
+		displayMap["roles"].(map[string]displayRole)[role.Name] = displayRole{
+			AllowedServices: role.AllowedServices,
+			AllowedTargets:  role.AllowedTargets,
+		}
+	}
+	for _, b := range bindings {
+		displayMap["bindings"] = append(displayMap["bindings"].([]displayBinding), displayBinding{
+			Role:    b.Role,
+			Members: b.Members,
+		})
+	}
+
+	var policyYAML string
+	if yamlBytes, err := yaml.Marshal(displayMap); err == nil {
+		policyYAML = string(yamlBytes)
+	}
 
 	resp := map[string]any{
 		"user": map[string]any{

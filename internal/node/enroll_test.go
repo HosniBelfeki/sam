@@ -57,8 +57,8 @@ func TestGetOrGenerateKey(t *testing.T) {
 	}
 }
 
-func TestEnroll_InvalidHubPublicKeySize(t *testing.T) {
-	// 1. Start a fake hub enrollment server
+func TestEnroll_InvalidControlPlanePublicKeySize(t *testing.T) {
+	// 1. Start a fake control plane enrollment server
 	invalidKey := []byte("too-short") // Not ed25519.PublicKeySize (32 bytes)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/register" {
@@ -66,10 +66,10 @@ func TestEnroll_InvalidHubPublicKeySize(t *testing.T) {
 			return
 		}
 		resp := &api.EnrollResponse{
-			BiscuitToken: []byte("mock-token"),
-			Expiration:   time.Now().Add(1 * time.Hour).Unix(),
-			HubPublicKey: invalidKey,
-			HubAddresses: []string{"/ip4/127.0.0.1/tcp/4001"},
+			BiscuitToken:          []byte("mock-token"),
+			Expiration:            time.Now().Add(1 * time.Hour).Unix(),
+			ControlPlanePublicKey: invalidKey,
+			RouterAddresses:       []string{"/ip4/127.0.0.1/tcp/4001"},
 		}
 		data, _ := proto.Marshal(resp)
 		w.Header().Set("Content-Type", "application/x-protobuf")
@@ -105,7 +105,7 @@ func TestEnroll_InvalidHubPublicKeySize(t *testing.T) {
 	if err == nil {
 		t.Fatal("Expected Enroll to fail with invalid public key size, but it succeeded")
 	}
-	if !strings.Contains(err.Error(), "received invalid hub public key size") {
+	if !strings.Contains(err.Error(), "received invalid control plane public key size") {
 		t.Fatalf("Expected invalid public key size error, got: %v", err)
 	}
 }
@@ -155,8 +155,8 @@ func TestProcessEnrollResponse_Errors(t *testing.T) {
 
 	t.Run("EmptyBiscuitToken", func(t *testing.T) {
 		enrollResp := &api.EnrollResponse{
-			BiscuitToken: nil,
-			HubPublicKey: make([]byte, 32),
+			BiscuitToken:          nil,
+			ControlPlanePublicKey: make([]byte, 32),
 		}
 		data, _ := proto.Marshal(enrollResp)
 		resp := &http.Response{
@@ -170,7 +170,7 @@ func TestProcessEnrollResponse_Errors(t *testing.T) {
 	})
 }
 
-func TestConnectToHubAddresses_EmptyAddrs(t *testing.T) {
+func TestConnectToRouters_EmptyAddrs(t *testing.T) {
 	dir := t.TempDir()
 	store, err := NewStore(dir)
 	if err != nil {
@@ -188,8 +188,8 @@ func TestConnectToHubAddresses_EmptyAddrs(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = node.connectToHubAddresses(context.Background(), nil)
-	if err == nil || !strings.Contains(err.Error(), "returned no hub addresses") {
-		t.Fatalf("Expected no hub addresses error, got: %v", err)
+	err = node.connectToRouters(context.Background(), nil)
+	if err == nil || !strings.Contains(err.Error(), "returned no router addresses") {
+		t.Fatalf("Expected no router addresses error, got: %v", err)
 	}
 }

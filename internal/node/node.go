@@ -39,6 +39,7 @@ import (
 	"github.com/biscuit-auth/biscuit-go/v2/datalog"
 	"github.com/google/sam/api"
 	"github.com/google/sam/internal/identity"
+	samdiscovery "github.com/google/sam/internal/node/discovery"
 	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/ipfs/go-cid"
 	golog "github.com/ipfs/go-log/v2"
@@ -121,28 +122,30 @@ func (a *nodeRelayACL) AllowConnect(src peer.ID, srcAddr multiaddr.Multiaddr, de
 }
 
 type SamNode struct {
-	config            Options
-	Host              host.Host
-	DHT               *dht.IpfsDHT
-	PubSub            *pubsub.PubSub
-	Store             *Store
-	HubPeerID         peer.ID
-	authenticatedHubs map[peer.ID]bool
-	peerLastEventTime map[string]int64
-	receivedMsgs      map[string][]string
-	topics            map[string]*pubsub.Topic
-	mu                sync.Mutex
-	LocalPolicy       *NodeConfigComplete
-	revokedPeers      *lru.Cache[string, int64]
-	authPeers         sync.Map
-	trustedKeys       []TrustedKey
-	keysMu            sync.RWMutex
-	MeshPolicyRules   []biscuit.Rule
-	MeshPolicyMu      sync.RWMutex
-	rateLimiter       *PeerRateLimiter
-	services          *ServiceRegistry
-	BoundHTTPAddr     string
-	AllowLoopback     bool
+	config               Options
+	Host                 host.Host
+	DHT                  *dht.IpfsDHT
+	PubSub               *pubsub.PubSub
+	Discovery            *samdiscovery.Discovery
+	Store                *Store
+	RouterPeerID         peer.ID
+	authenticatedRouters map[peer.ID]bool
+	peerLastEventTime    map[string]int64
+	receivedMsgs         map[string][]string
+	topics               map[string]*pubsub.Topic
+	mu                   sync.Mutex
+	LocalPolicy          *NodeConfigComplete
+	revokedPeers         *lru.Cache[string, int64]
+	peerRegionGate       *lru.Cache[string, time.Time]
+	authPeers            sync.Map
+	trustedKeys          []TrustedKey
+	keysMu               sync.RWMutex
+	MeshPolicyRules      []biscuit.Rule
+	MeshPolicyMu         sync.RWMutex
+	rateLimiter          *PeerRateLimiter
+	services             *ServiceRegistry
+	BoundHTTPAddr        string
+	AllowLoopback        bool
 
 	authSuccess      chan struct{}
 	authOnce         sync.Once
@@ -233,23 +236,23 @@ func NewSamNode(cfg Options) (*SamNode, error) {
 	}
 
 	var trustedKeys []TrustedKey
-	if len(cfg.HubPubKey) > 0 {
-		trustedKeys = []TrustedKey{{Key: cfg.HubPubKey, ReceivedAt: time.Now()}}
+	if len(cfg.ControlPlanePubKey) > 0 {
+		trustedKeys = []TrustedKey{{Key: cfg.ControlPlanePubKey, ReceivedAt: time.Now()}}
 	}
 
 	node := &SamNode{
-		config:            cfg,
-		Store:             cfg.Store,
-		trustedKeys:       trustedKeys,
-		peerLastEventTime: make(map[string]int64),
-		receivedMsgs:      make(map[string][]string),
-		topics:            make(map[string]*pubsub.Topic),
-		authenticatedHubs: make(map[peer.ID]bool),
-		LocalPolicy:       cfg.NodeConfig,
-		AllowLoopback:     cfg.AllowLoopback,
-		authSuccess:       make(chan struct{}),
-		reprovideTrigger:  make(chan struct{}, 1),
-		logger:            golog.Logger("sam-node"),
+		config:               cfg,
+		Store:                cfg.Store,
+		trustedKeys:          trustedKeys,
+		peerLastEventTime:    make(map[string]int64),
+		receivedMsgs:         make(map[string][]string),
+		topics:               make(map[string]*pubsub.Topic),
+		authenticatedRouters: make(map[peer.ID]bool),
+		LocalPolicy:          cfg.NodeConfig,
+		AllowLoopback:        cfg.AllowLoopback,
+		authSuccess:          make(chan struct{}),
+		reprovideTrigger:     make(chan struct{}, 1),
+		logger:               golog.Logger("sam-node"),
 	}
 
 	var err error
@@ -261,16 +264,20 @@ func NewSamNode(cfg Options) (*SamNode, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create revocation cache: %w", err)
 	}
+	node.peerRegionGate, err = lru.New[string, time.Time](regionGateCacheSize)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create region gate cache: %w", err)
+	}
 
 	return node, nil
 }
 
-// Start initializes the libp2p host, DHT, connects to the hub, and starts runtime components.
+// Start initializes the libp2p host, DHT, connects to the routers, and starts runtime components.
 func (n *SamNode) Start(ctx context.Context) error {
 	if biscuitBytes := n.GetIdentity(); len(biscuitBytes) > 0 {
-		hubPubKeyBytes, _, err := n.Store.LoadHubConfig()
-		if err == nil && len(hubPubKeyBytes) > 0 {
-			if err := identity.VerifyBiscuitRole(biscuitBytes, ed25519.PublicKey(hubPubKeyBytes), n.config.RequiredRole); err != nil {
+		controlPlanePubKeyBytes, _, err := n.Store.LoadMeshConfig()
+		if err == nil && len(controlPlanePubKeyBytes) > 0 {
+			if err := identity.VerifyBiscuitRole(biscuitBytes, ed25519.PublicKey(controlPlanePubKeyBytes), n.config.RequiredRole); err != nil {
 				return fmt.Errorf("loaded identity fails role requirement %q: %w", n.config.RequiredRole, err)
 			}
 		}
@@ -279,9 +286,9 @@ func (n *SamNode) Start(ctx context.Context) error {
 	// Layer 2: Attach the Bouncer (Gater)
 	gater := &nodeConnGate{node: n}
 
-	// Convert Hub multiaddrs to peer.AddrInfo to use as static relays
+	// Convert router multiaddrs to peer.AddrInfo to use as static relays
 	var staticRelays []peer.AddrInfo
-	for _, addr := range n.config.HubAddrs {
+	for _, addr := range n.config.RouterAddrs {
 		resolvedAddrs, err := resolveAddrIfNeeded(ctx, addr)
 		if err != nil {
 			resolvedAddrs = []multiaddr.Multiaddr{addr}
@@ -289,8 +296,8 @@ func (n *SamNode) Start(ctx context.Context) error {
 		for _, resolved := range resolvedAddrs {
 			if addrInfo, err := peer.AddrInfoFromP2pAddr(resolved); err == nil && addrInfo.ID != "" {
 				staticRelays = append(staticRelays, *addrInfo)
-				if n.HubPeerID == "" {
-					n.HubPeerID = addrInfo.ID
+				if n.RouterPeerID == "" {
+					n.RouterPeerID = addrInfo.ID
 				}
 			} else {
 				logger.Warnf("Failed to parse static relay addr %s: %v", resolved, err)
@@ -332,7 +339,7 @@ func (n *SamNode) Start(ctx context.Context) error {
 		}),
 	}
 
-	// If we have a Hub, configure it as our static fallback relay for NAT hole-punching
+	// If we have routers, configure them as our static fallback relays for NAT hole-punching
 	if len(staticRelays) > 0 {
 		n.currentRelays = staticRelays
 		opts = append(opts, libp2p.EnableAutoRelayWithPeerSource(
@@ -350,7 +357,7 @@ func (n *SamNode) Start(ctx context.Context) error {
 						logger.Infof("[Relay] PeerSource context done")
 					case <-n.authSuccess:
 						logger.Infof("[Relay] Yielding static relays to AutoRelay")
-						// Shuffle the relays to distribute load evenly across Hubs
+						// Shuffle the relays to distribute load evenly across routers
 						shuffled := make([]peer.AddrInfo, len(currentRelays))
 						copy(shuffled, currentRelays)
 						rand.Shuffle(len(shuffled), func(i, j int) {
@@ -433,9 +440,9 @@ func (n *SamNode) Start(ctx context.Context) error {
 	var authenticated bool
 	var fatalAuthErr error
 
-	for _, addr := range n.config.HubAddrs {
-		if err := n.ConnectAndAuthWithHub(ctx, addr); err != nil {
-			logger.Warnf("[AuthN] Failed to bootstrap and auth with hub %s: %v", addr, err)
+	for _, addr := range n.config.RouterAddrs {
+		if err := n.ConnectAndAuthWithRouter(ctx, addr); err != nil {
+			logger.Warnf("[AuthN] Failed to bootstrap and auth with router %s: %v", addr, err)
 			if errors.Is(err, ErrFatalAuth) {
 				fatalAuthErr = err
 			}
@@ -444,26 +451,30 @@ func (n *SamNode) Start(ctx context.Context) error {
 		}
 	}
 
-	if len(n.config.HubAddrs) > 0 && !authenticated {
+	if len(n.config.RouterAddrs) > 0 && !authenticated {
 		if fatalAuthErr != nil {
 			return fmt.Errorf("fatal auth failure: %w", fatalAuthErr)
 		}
-		return fmt.Errorf("failed to authenticate with any hub: all connection attempts failed")
+		return fmt.Errorf("failed to authenticate with any router: all connection attempts failed")
 	}
 
 	if authenticated {
-		logger.Infof("[DHT] Bootstrapping DHT with connected hub...")
+		logger.Infof("[DHT] Bootstrapping DHT with connected router...")
 		if err := n.DHT.Bootstrap(ctx); err != nil {
 			logger.Warnf("[DHT] Failed to trigger DHT bootstrap: %v", err)
 		}
 	}
 
-	// Initialize Gossipsub for Hub Events
+	// Initialize Gossipsub for control plane events
 	ps, err := pubsub.NewGossipSub(ctx, h)
 	if err != nil {
 		return err
 	}
 	n.PubSub = ps
+
+	// Interest-scoped service announcements (provider + consumer roles).
+	n.Discovery = samdiscovery.New(ps, h.ID())
+	n.Discovery.Start(ctx, n.discoverySource)
 
 	// Subscribe to local address updates to reprovide services and log
 	sub, err := h.EventBus().Subscribe(new(event.EvtLocalAddressesUpdated))
@@ -503,8 +514,8 @@ func (n *SamNode) Start(ctx context.Context) error {
 		}()
 	}
 
-	// Listen for Network Evictions/Revocations from the Hub
-	go n.listenForHubEvents(ctx)
+	// Listen for Network Evictions/Revocations from the control plane
+	go n.listenForControlPlaneEvents(ctx)
 
 	interval, err := time.ParseDuration(n.config.DiscoveryInterval)
 	if err != nil {
@@ -570,10 +581,10 @@ func (n *SamNode) startReprovideLoop(ctx context.Context, interval time.Duration
 func (n *SamNode) IsConnected() bool {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if len(n.authenticatedHubs) == 0 {
+	if len(n.authenticatedRouters) == 0 {
 		return false
 	}
-	for pid := range n.authenticatedHubs {
+	for pid := range n.authenticatedRouters {
 		if n.Host.Network().Connectedness(pid) == network.Connected {
 			return true
 		}
@@ -581,16 +592,16 @@ func (n *SamNode) IsConnected() bool {
 	return false
 }
 
-func (n *SamNode) LoadHubConfig() ([]byte, []string, error) {
-	return n.Store.LoadHubConfig()
+func (n *SamNode) LoadMeshConfig() ([]byte, []string, error) {
+	return n.Store.LoadMeshConfig()
 }
 
-func (n *SamNode) LoadHubURL() (string, error) {
-	return n.Store.LoadHubURL()
+func (n *SamNode) LoadControlPlaneURL() (string, error) {
+	return n.Store.LoadControlPlaneURL()
 }
 
-func (n *SamNode) SaveHubConfig(pubKey []byte, addrs []string) error {
-	return n.Store.SaveHubConfig(pubKey, addrs)
+func (n *SamNode) SaveMeshConfig(pubKey []byte, addrs []string) error {
+	return n.Store.SaveMeshConfig(pubKey, addrs)
 }
 
 func (n *SamNode) startConnectionMonitor(ctx context.Context, bootstrapDuration, checkInterval time.Duration, maxFailures int) {
@@ -611,11 +622,11 @@ func (n *SamNode) startConnectionMonitor(ctx context.Context, bootstrapDuration,
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				stable, reconnected := checkHubConnection(ctx, n)
+				stable, reconnected := checkRouterConnection(ctx, n)
 
 				if stable {
 					if consecutiveFailures > 0 {
-						logger.Infof("[Monitor] Connection to hub is stable. Resetting failure count.")
+						logger.Infof("[Monitor] Connection to router is stable. Resetting failure count.")
 						consecutiveFailures = 0
 					}
 					continue
@@ -633,9 +644,9 @@ func (n *SamNode) startConnectionMonitor(ctx context.Context, bootstrapDuration,
 				}
 
 				consecutiveFailures++
-				logger.Errorf("[Monitor] Failed to reconnect to the hub. Consecutive failures: %d/%d", consecutiveFailures, maxFailures)
+				logger.Errorf("[Monitor] Failed to reconnect to a router. Consecutive failures: %d/%d", consecutiveFailures, maxFailures)
 				if consecutiveFailures >= maxFailures {
-					logger.Fatalf("[Monitor] Failed to reconnect to the hub for %d consecutive checks. Exiting to avoid network partition.", maxFailures)
+					logger.Fatalf("[Monitor] Failed to reconnect to a router for %d consecutive checks. Exiting to avoid network partition.", maxFailures)
 				}
 			}
 		}
@@ -643,7 +654,7 @@ func (n *SamNode) startConnectionMonitor(ctx context.Context, bootstrapDuration,
 }
 
 func (n *SamNode) RegisterStaticServices(ctx context.Context, services []api.ServiceConfig) error {
-	// Wait for node to be connected to a hub or DHT to be ready
+	// Wait for node to be connected to a router or DHT to be ready
 	// This avoids failure if we try to register immediately after enrollment
 	// before the connection is established.
 	ticker := time.NewTicker(100 * time.Millisecond)
@@ -685,7 +696,7 @@ dhtLoop:
 	return nil
 }
 
-func (n *SamNode) ConnectAndAuthWithHub(ctx context.Context, addr multiaddr.Multiaddr) error {
+func (n *SamNode) ConnectAndAuthWithRouter(ctx context.Context, addr multiaddr.Multiaddr) error {
 	resolvedAddrs, err := resolveAddrIfNeeded(ctx, addr)
 	if err != nil {
 		resolvedAddrs = []multiaddr.Multiaddr{addr}
@@ -712,14 +723,14 @@ func (n *SamNode) ConnectAndAuthWithHub(ctx context.Context, addr multiaddr.Mult
 		}
 
 		// Create a per-replica timeout context to prevent blocking on offline replicas
-		replicaCtx, cancel := context.WithTimeout(ctx, n.config.HubConnectTimeout)
+		replicaCtx, cancel := context.WithTimeout(ctx, n.config.RouterConnectTimeout)
 
 		if err := n.Host.Connect(replicaCtx, *addrInfo); err != nil {
 			cancel()
 			if strings.Contains(err.Error(), "peer id mismatch") {
 				lastFatalErr = fmt.Errorf("%w: %w", ErrFatalAuth, err)
 			}
-			errs = append(errs, fmt.Errorf("failed to connect to hub %s: %w", resolved, err))
+			errs = append(errs, fmt.Errorf("failed to connect to router %s: %w", resolved, err))
 			continue
 		}
 
@@ -727,16 +738,16 @@ func (n *SamNode) ConnectAndAuthWithHub(ctx context.Context, addr multiaddr.Mult
 		s, err := n.Host.NewStream(replicaCtx, addrInfo.ID, api.AuthProtocolID)
 		if err != nil {
 			cancel()
-			errs = append(errs, fmt.Errorf("failed to open auth stream to hub %s: %w", resolved, err))
+			errs = append(errs, fmt.Errorf("failed to open auth stream to router %s: %w", resolved, err))
 			continue
 		}
 		_ = s.SetDeadline(time.Now().Add(5 * time.Second))
 
-		success, err := n.performHubAuthHandshake(s, biscuitBytes, addrInfo.ID)
+		success, err := n.performRouterAuthHandshake(s, biscuitBytes, addrInfo.ID)
 		if err != nil {
 			_ = s.Reset()
 			cancel()
-			errs = append(errs, fmt.Errorf("handshake failed with hub %s: %w", resolved, err))
+			errs = append(errs, fmt.Errorf("handshake failed with router %s: %w", resolved, err))
 			if errors.Is(err, ErrFatalAuth) {
 				lastFatalErr = err
 			}
@@ -747,10 +758,10 @@ func (n *SamNode) ConnectAndAuthWithHub(ctx context.Context, addr multiaddr.Mult
 
 		if success {
 			n.mu.Lock()
-			n.authenticatedHubs[addrInfo.ID] = true
-			n.HubPeerID = addrInfo.ID
+			n.authenticatedRouters[addrInfo.ID] = true
+			n.RouterPeerID = addrInfo.ID
 			n.mu.Unlock()
-			logger.Infof("[AuthN] Successfully authenticated with hub via libp2p: %s", addrInfo.ID)
+			logger.Infof("[AuthN] Successfully authenticated with router via libp2p: %s", addrInfo.ID)
 			connected = true
 		}
 	}
@@ -765,10 +776,10 @@ func (n *SamNode) ConnectAndAuthWithHub(ctx context.Context, addr multiaddr.Mult
 	if lastFatalErr != nil {
 		return lastFatalErr
 	}
-	return fmt.Errorf("failed to authenticate with any hub addresses: %w", errors.Join(errs...))
+	return fmt.Errorf("failed to authenticate with any router addresses: %w", errors.Join(errs...))
 }
 
-func (n *SamNode) performHubAuthHandshake(s network.Stream, biscuitBytes []byte, expectedRouter peer.ID) (bool, error) {
+func (n *SamNode) performRouterAuthHandshake(s network.Stream, biscuitBytes []byte, expectedRouter peer.ID) (bool, error) {
 	writer := msgio.NewVarintWriter(s)
 	authFrame := &api.AuthFrame{Biscuit: biscuitBytes}
 	data, err := proto.Marshal(authFrame)
@@ -904,11 +915,11 @@ func (n *SamNode) StartRenewalLoop(ctx context.Context, issuerURL, clientID, cli
 				}
 
 				if fetchErr == nil {
-					hubURL, loadErr := n.Store.LoadHubURL()
+					controlPlaneURL, loadErr := n.Store.LoadControlPlaneURL()
 					if loadErr != nil {
-						fetchErr = fmt.Errorf("failed to load hub URL for renewal: %w", loadErr)
+						fetchErr = fmt.Errorf("failed to load control plane URL for renewal: %w", loadErr)
 					} else {
-						fetchErr = n.Enroll(ctx, hubURL, newJWT)
+						fetchErr = n.Enroll(ctx, controlPlaneURL, newJWT)
 					}
 				}
 
@@ -975,16 +986,16 @@ func (n *SamNode) RefreshEnrollment(ctx context.Context) error {
 		return fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	hubURL, err := n.Store.LoadHubURL()
+	controlPlaneURL, err := n.Store.LoadControlPlaneURL()
 	if err != nil {
-		return fmt.Errorf("failed to load hub URL: %w", err)
+		return fmt.Errorf("failed to load control plane URL: %w", err)
 	}
 
-	if !strings.HasPrefix(hubURL, "http://") && !strings.HasPrefix(hubURL, "https://") {
-		return fmt.Errorf("hub address must be an HTTP or HTTPS URL for renewal: %s", hubURL)
+	if !strings.HasPrefix(controlPlaneURL, "http://") && !strings.HasPrefix(controlPlaneURL, "https://") {
+		return fmt.Errorf("control plane address must be an HTTP or HTTPS URL for renewal: %s", controlPlaneURL)
 	}
 
-	url := hubURL + "/refresh"
+	url := controlPlaneURL + "/refresh"
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(reqData))
 	if err != nil {
 		return fmt.Errorf("failed to create http request: %w", err)
@@ -1079,16 +1090,19 @@ func (n *SamNode) renewWithRefreshToken(ctx context.Context, clientSecret string
 	return newJWT, nil
 }
 
-// listenForHubEvents listens to the topic established by the Hub
-func (n *SamNode) listenForHubEvents(ctx context.Context) {
+// listenForControlPlaneEvents listens to the topic established by the control plane
+func (n *SamNode) listenForControlPlaneEvents(ctx context.Context) {
 	topic, err := n.PubSub.Join(api.GossipEvents)
 	if err != nil {
 		return
 	}
+	defer func() { _ = topic.Close() }()
+
 	sub, err := topic.Subscribe()
 	if err != nil {
 		return
 	}
+	defer sub.Cancel()
 
 	for {
 		msg, err := sub.Next(ctx)
@@ -1107,10 +1121,10 @@ func (n *SamNode) listenForHubEvents(ctx context.Context) {
 			continue
 		}
 
-		// Since the signature is verified against our list of trusted hub public keys
+		// Since the signature is verified against our list of trusted control plane public keys
 		// in verifyEvent below, any message with a valid signature is cryptographically
-		// proven to have been authored by one of the hubs. We do not restrict msg.GetFrom()
-		// to a single HubPeerID because there can be multiple hub replicas in a cluster,
+		// proven to have been authored by one of the control planes. We do not restrict msg.GetFrom()
+		// to a single RouterPeerID because there can be multiple control plane replicas in a cluster,
 		// each with its own PeerID.
 
 		if !n.verifyEvent(&event) {
@@ -1133,10 +1147,15 @@ func (n *SamNode) listenForHubEvents(ctx context.Context) {
 		case api.MeshEvent_POLICY_UPDATE:
 			logger.Infof("[Mesh Event] Received POLICY_UPDATE event from %s, triggering sync", msg.ReceivedFrom)
 			go func() {
-				// Jitter delay (0-2s) to prevent thundering herd on Control Plane
-				jitter := time.Duration(rand.Intn(2000)) * time.Millisecond
+				maxJitter := n.config.PolicySyncJitter
+				if maxJitter <= 0 {
+					maxJitter = 10 * time.Second
+				}
+				jitter := time.Duration(rand.Int63n(int64(maxJitter)))
+				timer := time.NewTimer(jitter)
+				defer timer.Stop()
 				select {
-				case <-time.After(jitter):
+				case <-timer.C:
 				case <-ctx.Done():
 					return
 				}
@@ -1391,6 +1410,14 @@ func (n *SamNode) HandleAuthHandshake(s network.Stream) {
 
 	n.authPeers.Store(remotePeer, true)
 	logger.Infof("[AuthN] Successfully authenticated peer %s", remotePeer)
+
+	// Mutual response with our identity, mirroring the router handler, so
+	// peers can verify this node's attested facts (e.g. region).
+	writer := msgio.NewVarintWriter(s)
+	respBytes, _ := proto.Marshal(&api.AuthResponse{Success: true, Biscuit: n.GetIdentity()})
+	if err := writer.WriteMsg(respBytes); err != nil {
+		logger.Errorf("[AuthN] Failed to write mutual ACK to %s: %v", remotePeer, err)
+	}
 }
 
 func (n *SamNode) verifyBiscuit(biscuitData []byte, remotePeer peer.ID) (*biscuit.Biscuit, error) {
@@ -1496,11 +1523,11 @@ func (n *SamNode) findProvidersByCID(ctx context.Context, c cid.Cid) ([]peer.Add
 	}
 	providers := make([]peer.AddrInfo, 0, len(providersMap))
 	for _, p := range providersMap {
-		hubAddrsCount := 0
-		if n.HubPeerID != "" {
-			hubAddrsCount = len(n.Host.Peerstore().Addrs(n.HubPeerID))
+		routerAddrsCount := 0
+		if n.RouterPeerID != "" {
+			routerAddrsCount = len(n.Host.Peerstore().Addrs(n.RouterPeerID))
 		}
-		logger.Infof("[Discovery] Evaluating relay for %s: HubPeerID=%s, HubAddrsCount=%d", p.ID, n.HubPeerID, hubAddrsCount)
+		logger.Infof("[Discovery] Evaluating relay for %s: RouterPeerID=%s, RouterAddrsCount=%d", p.ID, n.RouterPeerID, routerAddrsCount)
 
 		for _, addr := range p.Addrs {
 			logger.Infof("[Discovery] Provider %s advertised address: %s", p.ID, addr)
@@ -1953,9 +1980,9 @@ func hasCircuit(addr multiaddr.Multiaddr) bool {
 }
 
 func (n *SamNode) syncMeshPolicy(ctx context.Context) error {
-	hubURL, err := n.Store.LoadHubURL()
-	if err != nil || hubURL == "" {
-		return fmt.Errorf("hub URL not found in store")
+	controlPlaneURL, err := n.Store.LoadControlPlaneURL()
+	if err != nil || controlPlaneURL == "" {
+		return fmt.Errorf("control plane URL not found in store")
 	}
 
 	token := n.GetIdentity()
@@ -1963,7 +1990,7 @@ func (n *SamNode) syncMeshPolicy(ctx context.Context) error {
 		return fmt.Errorf("node has no identity token to fetch mesh policy")
 	}
 
-	policyResp, err := FetchMeshPolicy(ctx, hubURL, token)
+	policyResp, err := FetchMeshPolicy(ctx, controlPlaneURL, token)
 	if err != nil {
 		return fmt.Errorf("failed to fetch mesh policy: %w", err)
 	}

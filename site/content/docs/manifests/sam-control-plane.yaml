@@ -45,7 +45,7 @@ spec:
         - "--db-driver=sqlite"
         - "--db-dsn=/data/control-plane.db"
         - "--issuer=$(SAM_OIDC_ISSUER)"
-        - "--allowed-audiences=sam-mesh-audience,sam-hub-audience"
+        - "--allowed-audiences=sam-mesh-audience,sam-control-plane-audience"
         - "--policy-file=/etc/sam/policies/policies.yaml"
         - "--insecure-skip-tls-verify"
         ports:

@@ -209,12 +209,12 @@ func runCommandWithCallback(
 	return stdout.String(), stderr.String(), err
 }
 
-func startMockLibp2pHub(t *testing.T) (peer.ID, string) {
+func startMockRouter(t *testing.T) (peer.ID, string) {
 	t.Helper()
 
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
-		t.Fatalf("Failed to generate hub key: %v", err)
+		t.Fatalf("Failed to generate control plane key: %v", err)
 	}
 
 	h, err := libp2p.New(libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"))
@@ -242,7 +242,7 @@ func startMockLibp2pHub(t *testing.T) (peer.ID, string) {
 
 	kdht, err := dht.New(h, dht.Mode(dht.ModeServer), dht.ProtocolPrefix("/sam"))
 	if err != nil {
-		t.Fatalf("failed to create DHT on mock hub: %v", err)
+		t.Fatalf("failed to create DHT on mock router: %v", err)
 	}
 
 	// Start HTTP server for enrollment
@@ -265,9 +265,9 @@ func startMockLibp2pHub(t *testing.T) (peer.ID, string) {
 		}
 
 		resp := &api.EnrollResponse{
-			BiscuitToken: createMockBiscuitToken(t, req.PeerId, priv, api.RoleNode),
-			HubPublicKey: pub,
-			HubAddresses: []string{h.Addrs()[0].String() + "/p2p/" + h.ID().String()},
+			BiscuitToken:          createMockBiscuitToken(t, req.PeerId, priv, api.RoleNode, req.Region),
+			ControlPlanePublicKey: pub,
+			RouterAddresses:       []string{h.Addrs()[0].String() + "/p2p/" + h.ID().String()},
 		}
 		data, err := proto.Marshal(resp)
 		if err != nil {
@@ -290,12 +290,12 @@ func startMockLibp2pHub(t *testing.T) (peer.ID, string) {
 	return h.ID(), httpServer.URL
 }
 
-func startMockLibp2pHubWithOIDC(t *testing.T, oidcIssuerURL string) (peer.ID, string) {
+func startMockRouterWithOIDC(t *testing.T, oidcIssuerURL string) (peer.ID, string) {
 	t.Helper()
 
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
-		t.Fatalf("Failed to generate hub key: %v", err)
+		t.Fatalf("Failed to generate control plane key: %v", err)
 	}
 
 	h, err := libp2p.New(libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"))
@@ -323,7 +323,7 @@ func startMockLibp2pHubWithOIDC(t *testing.T, oidcIssuerURL string) (peer.ID, st
 
 	kdht, err := dht.New(h, dht.Mode(dht.ModeServer), dht.ProtocolPrefix("/sam"))
 	if err != nil {
-		t.Fatalf("failed to create DHT on mock hub: %v", err)
+		t.Fatalf("failed to create DHT on mock router: %v", err)
 	}
 
 	// Start HTTP server for enrollment and info
@@ -334,7 +334,7 @@ func startMockLibp2pHubWithOIDC(t *testing.T, oidcIssuerURL string) (peer.ID, st
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		resp := &api.HubInfoResponse{
+		resp := &api.ControlPlaneInfoResponse{
 			OidcIssuer: oidcIssuerURL,
 			ClientId:   "sam-mesh-audience",
 			Audience:   "sam-mesh-audience",
@@ -365,9 +365,9 @@ func startMockLibp2pHubWithOIDC(t *testing.T, oidcIssuerURL string) (peer.ID, st
 		}
 
 		resp := &api.EnrollResponse{
-			BiscuitToken: createMockBiscuitToken(t, req.PeerId, priv, api.RoleNode),
-			HubPublicKey: pub,
-			HubAddresses: []string{h.Addrs()[0].String() + "/p2p/" + h.ID().String()},
+			BiscuitToken:          createMockBiscuitToken(t, req.PeerId, priv, api.RoleNode, req.Region),
+			ControlPlanePublicKey: pub,
+			RouterAddresses:       []string{h.Addrs()[0].String() + "/p2p/" + h.ID().String()},
 		}
 		data, err := proto.Marshal(resp)
 		if err != nil {
@@ -390,11 +390,19 @@ func startMockLibp2pHubWithOIDC(t *testing.T, oidcIssuerURL string) (peer.ID, st
 	return h.ID(), httpServer.URL
 }
 
-func createMockBiscuitToken(t *testing.T, peerID string, priv ed25519.PrivateKey, role string) []byte {
+func createMockBiscuitToken(t *testing.T, peerID string, priv ed25519.PrivateKey, role string, region ...string) []byte {
 	builder := biscuit.NewBuilder(priv)
 	err := builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{Name: "target_unrestricted"}})
 	if err != nil {
 		t.Fatalf("failed to add target_unrestricted: %v", err)
+	}
+
+	for _, r := range region {
+		for _, fact := range api.RegionFacts(r) {
+			if err := builder.AddAuthorityFact(fact); err != nil {
+				t.Fatalf("failed to add region fact: %v", err)
+			}
+		}
 	}
 
 	err = builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{
@@ -469,7 +477,7 @@ func startControlPlaneAndRouter(t *testing.T, tmpDir string, oidcURL string, min
 		"--db-dsn", filepath.Join(tmpDir, "cp-keys.db"),
 		"--issuer", oidcURL,
 		"--insecure-skip-tls-verify",
-		"--admin-token", "test-admin-token",
+		"--admin-token-path", tokenPath(t, "test-admin-token"),
 	)
 	cpCmd.Stdout = os.Stdout
 	cpCmd.Stderr = os.Stderr
@@ -540,10 +548,10 @@ func fetchPeerID(t *testing.T, port int) string {
 			bodyBytes, err := io.ReadAll(resp.Body)
 			_ = resp.Body.Close()
 			if err == nil {
-				var info api.HubInfoResponse
+				var info api.ControlPlaneInfoResponse
 				if err := proto.Unmarshal(bodyBytes, &info); err == nil {
-					if len(info.HubAddresses) > 0 {
-						peerID = extractPeerID(info.HubAddresses[0])
+					if len(info.RouterAddresses) > 0 {
+						peerID = extractPeerID(info.RouterAddresses[0])
 					}
 				}
 			}
