@@ -1,0 +1,28 @@
+name: Govulncheck
+
+on:
+  push:
+    branches:
+      - 'main'
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ main ]
+  schedule:
+    - cron: '0 6 * * 1'
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: "1.26"
+
+jobs:
+  govulncheck:
+    runs-on: ubuntu-latest
+    steps:
+    - id: govulncheck
+      uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1.1.0
+      with:
+        go-version-input: ${{ env.GO_VERSION }}
+        go-package: ./...
