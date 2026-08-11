@@ -118,8 +118,10 @@ func (n *SamNode) WithBiscuitAuth(next func(network.Stream, RequestContext)) net
 			return
 		}
 
-		// Valid
-		resp := &api.AuthResponse{Success: true}
+		// Valid. Mutual auth: return our control-plane-minted identity so the
+		// caller can verify this node's attested facts (e.g. region) before
+		// sending request data.
+		resp := &api.AuthResponse{Success: true, Biscuit: n.GetIdentity()}
 		respBytes, _ := proto.Marshal(resp)
 		if err := writer.WriteMsg(respBytes); err != nil {
 			logger.Errorf("[Auth] Failed to write ACK to %s: %v", remotePeer, err)

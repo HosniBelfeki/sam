@@ -398,10 +398,12 @@ func TestRankProviders(t *testing.T) {
 
 	t.Run("region requirement is fail-closed and hierarchical", func(t *testing.T) {
 		f := newTestFacade()
-		// Requiring the continent matches the finer country claim; the
-		// unlabeled remote and unlabeled local must both be excluded.
+		// Requiring the continent matches the finer country claim and drops
+		// the known-mismatched remote. The unlabeled remote survives ranking
+		// (the region gate attests it before any bytes are sent); the
+		// unlabeled local has no gate and stays excluded.
 		got := f.rankProviders([]modelProvider{remoteEU, remoteUS, remoteNoLabel, local}, []string{"EU"})
-		if len(got) != 1 || got[0].peerID != "peerEU" {
+		if len(got) != 2 || got[0].peerID != "peerX" || got[1].peerID != "peerEU" {
 			t.Fatalf("unexpected ranking under region requirement: %+v", got)
 		}
 		// A finer requirement never matches a coarser claim.
@@ -558,6 +560,11 @@ func TestFacade_Completions_RegionRequirement(t *testing.T) {
 			{peerID: "peerUS", service: "srvUS", region: "NA-US"},
 		}
 	}
+	var attested [][2]string
+	f.verifyPeerRegions = func(_ context.Context, peerID string, required []string) error {
+		attested = append(attested, [2]string{peerID, strings.Join(required, ",")})
+		return nil
+	}
 	var gotPath, gotRegionHeader string
 	f.forward = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
@@ -574,6 +581,9 @@ func TestFacade_Completions_RegionRequirement(t *testing.T) {
 	}
 	if gotRegionHeader != "" {
 		t.Errorf("%s must not travel to the provider, got %q", api.HeaderSamRequiredRegion, gotRegionHeader)
+	}
+	if len(attested) != 1 || attested[0] != [2]string{"peerEU", "EU"} {
+		t.Errorf("expected one attestation for peerEU/EU, got %v", attested)
 	}
 
 	// No provider satisfies the requirement (valid code, no claimant).
@@ -593,6 +603,70 @@ func TestFacade_Completions_RegionRequirement(t *testing.T) {
 	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "invalid_request") {
 		t.Errorf("invalid region: got status %d, body %s", rec.Code, rec.Body.String())
 	}
+}
+
+func TestFacade_Completions_RegionAttestation(t *testing.T) {
+	newRegionFacade := func() *openAIFacade {
+		f := newTestFacade()
+		f.viewProviders = func(model string) []modelProvider {
+			return []modelProvider{
+				{peerID: "peerEU1", service: "srv1", region: "EU-DE", active: 1},
+				{peerID: "peerEU2", service: "srv2", region: "EU-FR", active: 2},
+			}
+		}
+		return f
+	}
+
+	t.Run("unattested provider is skipped, attested one serves", func(t *testing.T) {
+		f := newRegionFacade()
+		f.verifyPeerRegions = func(_ context.Context, peerID string, _ []string) error {
+			if peerID == "peerEU1" {
+				return fmt.Errorf("no attested region")
+			}
+			return nil
+		}
+		var gotPath string
+		f.forward = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotPath = r.URL.Path
+		})
+
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"m1"}`))
+		req.Header.Set(api.HeaderSamRequiredRegion, "EU")
+		rec := httptest.NewRecorder()
+		f.handleCompletions(rec, req)
+
+		if want := "/sam/peerEU2/inference/srv2/v1/chat/completions"; gotPath != want {
+			t.Errorf("forwarded path: got %q, want %q", gotPath, want)
+		}
+	})
+
+	t.Run("requirement with enforcement unavailable fails closed", func(t *testing.T) {
+		f := newRegionFacade() // verifyPeerRegions deliberately nil
+		f.forward = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			t.Error("request must not be forwarded without attestation")
+		})
+
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"m1"}`))
+		req.Header.Set(api.HeaderSamRequiredRegion, "EU")
+		rec := httptest.NewRecorder()
+		f.handleCompletions(rec, req)
+
+		if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "region_unattested") {
+			t.Errorf("got status %d, body %s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("no requirement never attests", func(t *testing.T) {
+		f := newRegionFacade()
+		f.verifyPeerRegions = func(_ context.Context, _ string, _ []string) error {
+			t.Error("attestation must not run without a requirement")
+			return nil
+		}
+		f.forward = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})
+
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"m1"}`))
+		f.handleCompletions(httptest.NewRecorder(), req)
+	})
 }
 
 func TestAttemptWriter(t *testing.T) {

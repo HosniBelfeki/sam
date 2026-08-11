@@ -198,6 +198,17 @@ const (
 	// Example Datalog: service("mcp", "calculator")
 	FactService = "service"
 
+	// FactRegion is the control-plane-attested jurisdiction of the token's node,
+	// following the hierarchical model of region.go. The control plane mints one
+	// fact per hierarchy level (RegionPrefixes), so a requirement is a single
+	// exact match: a node attested as "EU-DE" carries region("EU") and
+	// region("EU-DE"), satisfying `check if region("EU")` but never a finer
+	// requirement it cannot guarantee. Distinct from LabelRegion, the
+	// unauthenticated gossip routing hint.
+	// Contains: biscuit.String(regionPrefix)
+	// Example Datalog: check if region("EU")
+	FactRegion = "region"
+
 	// FactTime defines the current system time injected during evaluation.
 	// Contains: biscuit.Date(currentTime)
 	// Example Datalog: check if time($time)
@@ -418,6 +429,40 @@ func BuildTargetDatalogFact(targetStr string) biscuit.Fact {
 		Name: FactGrantedTargetExact,
 		IDs:  []biscuit.Term{biscuit.String(tFact), biscuit.String(tVal)},
 	}}
+}
+
+// RegionFacts materializes a region claim as one Datalog fact per hierarchy
+// level (see FactRegion and RegionPrefixes). An empty region returns nil.
+func RegionFacts(region string) []biscuit.Fact {
+	prefixes := RegionPrefixes(region)
+	if len(prefixes) == 0 {
+		return nil
+	}
+	facts := make([]biscuit.Fact, 0, len(prefixes))
+	for _, p := range prefixes {
+		facts = append(facts, biscuit.Fact{Predicate: biscuit.Predicate{
+			Name: FactRegion,
+			IDs:  []biscuit.Term{biscuit.String(p)},
+		}})
+	}
+	return facts
+}
+
+// RegionCheck compiles required regions (canonical, pre-validated with
+// ValidateRegion) into a single fail-closed check satisfied when the token
+// carries any of them: `check if region("EU") or region("NA-US")`.
+func RegionCheck(required []string) (biscuit.Check, error) {
+	if len(required) == 0 {
+		return biscuit.Check{}, fmt.Errorf("no required regions")
+	}
+	clauses := make([]string, 0, len(required))
+	for _, r := range required {
+		if err := ValidateRegion(r); err != nil {
+			return biscuit.Check{}, err
+		}
+		clauses = append(clauses, fmt.Sprintf("%s(%q)", FactRegion, NormalizeRegion(r)))
+	}
+	return parser.FromStringCheck("check if " + strings.Join(clauses, " or "))
 }
 
 // isExactService reports whether serviceStr resolves to a plain exact-match grant, as opposed to a

@@ -301,6 +301,17 @@ var migrations = []migration{
 			)`,
 		},
 	},
+	{
+		version: 5,
+		postgres: []string{
+			`ALTER TABLE nodes ADD COLUMN region VARCHAR(16) DEFAULT '' NOT NULL`,
+			`ALTER TABLE enrollment_requests ADD COLUMN region VARCHAR(16) DEFAULT '' NOT NULL`,
+		},
+		sqlite: []string{
+			`ALTER TABLE nodes ADD COLUMN region TEXT DEFAULT '' NOT NULL`,
+			`ALTER TABLE enrollment_requests ADD COLUMN region TEXT DEFAULT '' NOT NULL`,
+		},
+	},
 }
 
 func (s *SQLStore) initSchema() error {
@@ -525,16 +536,16 @@ func (s *SQLStore) EnrollNode(ctx context.Context, node *EnrolledNode) error {
 	var query string
 	if s.isPostgres() {
 		query = s.rebind(`
-			INSERT INTO nodes (peer_id, public_key, biscuit_token, role, enrollment_type, claims_json, owner_id, enrolled_at, expires_at, banned) 
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, FALSE)
+			INSERT INTO nodes (peer_id, public_key, biscuit_token, role, enrollment_type, claims_json, owner_id, region, enrolled_at, expires_at, banned) 
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, FALSE)
 			ON CONFLICT (peer_id) 
-			DO UPDATE SET public_key = EXCLUDED.public_key, biscuit_token = EXCLUDED.biscuit_token, role = EXCLUDED.role, enrollment_type = EXCLUDED.enrollment_type, claims_json = EXCLUDED.claims_json, owner_id = EXCLUDED.owner_id, enrolled_at = EXCLUDED.enrolled_at, expires_at = EXCLUDED.expires_at`)
+			DO UPDATE SET public_key = EXCLUDED.public_key, biscuit_token = EXCLUDED.biscuit_token, role = EXCLUDED.role, enrollment_type = EXCLUDED.enrollment_type, claims_json = EXCLUDED.claims_json, owner_id = EXCLUDED.owner_id, region = EXCLUDED.region, enrolled_at = EXCLUDED.enrolled_at, expires_at = EXCLUDED.expires_at`)
 	} else {
 		query = s.rebind(`
-			INSERT INTO nodes (peer_id, public_key, biscuit_token, role, enrollment_type, claims_json, owner_id, enrolled_at, expires_at, banned) 
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+			INSERT INTO nodes (peer_id, public_key, biscuit_token, role, enrollment_type, claims_json, owner_id, region, enrolled_at, expires_at, banned) 
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
 			ON CONFLICT (peer_id) 
-			DO UPDATE SET public_key = excluded.public_key, biscuit_token = excluded.biscuit_token, role = excluded.role, enrollment_type = excluded.enrollment_type, claims_json = excluded.claims_json, owner_id = excluded.owner_id, enrolled_at = excluded.enrolled_at, expires_at = excluded.expires_at`)
+			DO UPDATE SET public_key = excluded.public_key, biscuit_token = excluded.biscuit_token, role = excluded.role, enrollment_type = excluded.enrollment_type, claims_json = excluded.claims_json, owner_id = excluded.owner_id, region = excluded.region, enrolled_at = excluded.enrolled_at, expires_at = excluded.expires_at`)
 	}
 
 	ownerIDNull := sql.NullString{String: node.OwnerID, Valid: node.OwnerID != ""}
@@ -546,6 +557,7 @@ func (s *SQLStore) EnrollNode(ctx context.Context, node *EnrolledNode) error {
 		node.EnrollmentType,
 		node.ClaimsJSON,
 		ownerIDNull,
+		node.Region,
 		node.EnrolledAt.UnixMilli(),
 		node.ExpiresAt.UnixMilli(),
 	)
@@ -554,7 +566,7 @@ func (s *SQLStore) EnrollNode(ctx context.Context, node *EnrolledNode) error {
 
 // GetNode implements Store.
 func (s *SQLStore) GetNode(ctx context.Context, peerID string) (*EnrolledNode, error) {
-	query := s.rebind(`SELECT peer_id, public_key, biscuit_token, role, enrollment_type, claims_json, owner_id, enrolled_at, expires_at, banned FROM nodes WHERE peer_id = ?`)
+	query := s.rebind(`SELECT peer_id, public_key, biscuit_token, role, enrollment_type, claims_json, owner_id, region, enrolled_at, expires_at, banned FROM nodes WHERE peer_id = ?`)
 	var node EnrolledNode
 	var claimsJSON, ownerID sql.NullString
 	var enrolledAtUnix, expiresAtUnix int64
@@ -566,6 +578,7 @@ func (s *SQLStore) GetNode(ctx context.Context, peerID string) (*EnrolledNode, e
 		&node.EnrollmentType,
 		&claimsJSON,
 		&ownerID,
+		&node.Region,
 		&enrolledAtUnix,
 		&expiresAtUnix,
 		&node.Banned,
@@ -885,8 +898,8 @@ func (s *SQLStore) IncrementBootstrapTokenUsage(ctx context.Context, id string) 
 
 // CreateEnrollmentRequest saves a new pending request.
 func (s *SQLStore) CreateEnrollmentRequest(ctx context.Context, req *EnrollmentRequest) error {
-	query := `INSERT INTO enrollment_requests (id, peer_id, public_key, token_id, status, biscuit_token, created_at, resolved_at, resolved_by)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	query := `INSERT INTO enrollment_requests (id, peer_id, public_key, token_id, status, region, biscuit_token, created_at, resolved_at, resolved_by)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	var resAt sql.NullInt64
 	if req.ResolvedAt != nil {
 		resAt = sql.NullInt64{Int64: req.ResolvedAt.Unix(), Valid: true}
@@ -897,6 +910,7 @@ func (s *SQLStore) CreateEnrollmentRequest(ctx context.Context, req *EnrollmentR
 		req.PublicKey,
 		req.TokenID,
 		int(req.Status),
+		req.Region,
 		req.BiscuitToken,
 		req.CreatedAt.Unix(),
 		resAt,
@@ -910,14 +924,14 @@ func (s *SQLStore) CreateEnrollmentRequest(ctx context.Context, req *EnrollmentR
 
 // GetEnrollmentRequest retrieves request by PeerID.
 func (s *SQLStore) GetEnrollmentRequest(ctx context.Context, peerID string) (*EnrollmentRequest, error) {
-	query := `SELECT id, peer_id, public_key, token_id, status, biscuit_token, created_at, resolved_at, resolved_by 
+	query := `SELECT id, peer_id, public_key, token_id, status, region, biscuit_token, created_at, resolved_at, resolved_by 
 		FROM enrollment_requests WHERE peer_id = ?`
 	return s.scanEnrollmentRequest(s.db.QueryRowContext(ctx, s.rebind(query), peerID))
 }
 
 // GetEnrollmentRequestByID retrieves request by UUID.
 func (s *SQLStore) GetEnrollmentRequestByID(ctx context.Context, id string) (*EnrollmentRequest, error) {
-	query := `SELECT id, peer_id, public_key, token_id, status, biscuit_token, created_at, resolved_at, resolved_by 
+	query := `SELECT id, peer_id, public_key, token_id, status, region, biscuit_token, created_at, resolved_at, resolved_by 
 		FROM enrollment_requests WHERE id = ?`
 	return s.scanEnrollmentRequest(s.db.QueryRowContext(ctx, s.rebind(query), id))
 }
@@ -938,6 +952,7 @@ func (s *SQLStore) scanEnrollmentRequest(row scannable) (*EnrollmentRequest, err
 		&req.PublicKey,
 		&req.TokenID,
 		&statusVal,
+		&req.Region,
 		&req.BiscuitToken,
 		&created,
 		&resAt,
@@ -969,7 +984,7 @@ func (s *SQLStore) scanEnrollmentRequest(row scannable) (*EnrollmentRequest, err
 
 // ListEnrollmentRequests retrieves all requests.
 func (s *SQLStore) ListEnrollmentRequests(ctx context.Context) ([]EnrollmentRequest, error) {
-	query := `SELECT id, peer_id, public_key, token_id, status, biscuit_token, created_at, resolved_at, resolved_by 
+	query := `SELECT id, peer_id, public_key, token_id, status, region, biscuit_token, created_at, resolved_at, resolved_by 
 		FROM enrollment_requests ORDER BY created_at DESC`
 	rows, err := s.db.QueryContext(ctx, s.rebind(query))
 	if err != nil {
@@ -1009,7 +1024,7 @@ func (s *SQLStore) UpdateEnrollmentRequest(ctx context.Context, id string, statu
 
 // ListNodes retrieves all enrolled nodes.
 func (s *SQLStore) ListNodes(ctx context.Context) ([]EnrolledNode, error) {
-	query := s.rebind(`SELECT peer_id, public_key, biscuit_token, role, enrollment_type, claims_json, owner_id, enrolled_at, expires_at, banned FROM nodes ORDER BY enrolled_at DESC`)
+	query := s.rebind(`SELECT peer_id, public_key, biscuit_token, role, enrollment_type, claims_json, owner_id, region, enrolled_at, expires_at, banned FROM nodes ORDER BY enrolled_at DESC`)
 	rows, err := s.db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query nodes: %w", err)
@@ -1029,6 +1044,7 @@ func (s *SQLStore) ListNodes(ctx context.Context) ([]EnrolledNode, error) {
 			&node.EnrollmentType,
 			&claimsJSON,
 			&ownerID,
+			&node.Region,
 			&enrolledAtUnix,
 			&expiresAtUnix,
 			&node.Banned,

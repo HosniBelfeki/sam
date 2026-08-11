@@ -133,6 +133,45 @@ func TestOpenAIFacadeCUJ(t *testing.T) {
 		t.Fatalf("unexpected completion: %s", string(body))
 	}
 
+	// CUJ step 2b: a region requirement is enforced end to end — the provider
+	// declared "eu" at enrollment, so its biscuit carries attested region
+	// facts and the consumer's region gate admits it. The region label
+	// arrives via interest-scoped gossip, so poll until it propagates.
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		req, _ = http.NewRequest("POST", "http://"+apiAddrB+"/v1/chat/completions", strings.NewReader(reqBody))
+		req.Header.Set("Authorization", "Bearer "+apiToken)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set(api.HeaderSamRequiredRegion, "EU")
+		respEU, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("region-constrained completion request failed: %v", err)
+		}
+		euBody, _ := io.ReadAll(respEU.Body)
+		_ = respEU.Body.Close()
+		if respEU.StatusCode == http.StatusOK {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("region-constrained completion status: got %d, body: %s", respEU.StatusCode, string(euBody))
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+
+	// A finer requirement than the provider's claim fails closed.
+	req, _ = http.NewRequest("POST", "http://"+apiAddrB+"/v1/chat/completions", strings.NewReader(reqBody))
+	req.Header.Set("Authorization", "Bearer "+apiToken)
+	req.Header.Set(api.HeaderSamRequiredRegion, "EU-DE")
+	respDE, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("finer-region completion request failed: %v", err)
+	}
+	defer func() { _ = respDE.Body.Close() }()
+	deBody, _ := io.ReadAll(respDE.Body)
+	if respDE.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("finer region must fail closed: got %d, body: %s", respDE.StatusCode, string(deBody))
+	}
+
 	// CUJ step 3: unknown models fail with an OpenAI-style error.
 	req, _ = http.NewRequest("POST", "http://"+apiAddrB+"/v1/chat/completions",
 		strings.NewReader(`{"model":"no-such-model","messages":[]}`))

@@ -379,6 +379,11 @@ type EnrollRequest struct {
 	PeerId        string                 `protobuf:"bytes,2,opt,name=peer_id,json=peerId,proto3" json:"peer_id,omitempty"`
 	PublicKey     []byte                 `protobuf:"bytes,3,opt,name=public_key,json=publicKey,proto3" json:"public_key,omitempty"`
 	RequestedRole string                 `protobuf:"bytes,4,opt,name=requested_role,json=requestedRole,proto3" json:"requested_role,omitempty"`
+	// Operator-declared region claim (CONTINENT[-COUNTRY[-ZONE]], see
+	// api/region.go). Validated fail-closed by the control plane and, once
+	// attested by the enrollment flow's gates, minted as signed region()
+	// facts in the biscuit. Empty means no claim.
+	Region        string `protobuf:"bytes,5,opt,name=region,proto3" json:"region,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -437,6 +442,13 @@ func (x *EnrollRequest) GetPublicKey() []byte {
 func (x *EnrollRequest) GetRequestedRole() string {
 	if x != nil {
 		return x.RequestedRole
+	}
+	return ""
+}
+
+func (x *EnrollRequest) GetRegion() string {
+	if x != nil {
+		return x.Region
 	}
 	return ""
 }
@@ -567,8 +579,11 @@ type BootstrapEnrollRequest struct {
 	PeerId         string                 `protobuf:"bytes,2,opt,name=peer_id,json=peerId,proto3" json:"peer_id,omitempty"`
 	PublicKey      []byte                 `protobuf:"bytes,3,opt,name=public_key,json=publicKey,proto3" json:"public_key,omitempty"`
 	RequestedRole  string                 `protobuf:"bytes,4,opt,name=requested_role,json=requestedRole,proto3" json:"requested_role,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Operator-declared region claim; the admin approving the enrollment
+	// attests it (see EnrollRequest.region).
+	Region        string `protobuf:"bytes,5,opt,name=region,proto3" json:"region,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *BootstrapEnrollRequest) Reset() {
@@ -625,6 +640,13 @@ func (x *BootstrapEnrollRequest) GetPublicKey() []byte {
 func (x *BootstrapEnrollRequest) GetRequestedRole() string {
 	if x != nil {
 		return x.RequestedRole
+	}
+	return ""
+}
+
+func (x *BootstrapEnrollRequest) GetRegion() string {
+	if x != nil {
+		return x.Region
 	}
 	return ""
 }
@@ -1890,13 +1912,14 @@ const file_api_sam_proto_rawDesc = "" +
 	"\n" +
 	"\x06BANNED\x10\x00\x12\x10\n" +
 	"\fKEY_ROTATION\x10\x01\x12\x11\n" +
-	"\rPOLICY_UPDATE\x10\x02\"\x80\x01\n" +
+	"\rPOLICY_UPDATE\x10\x02\"\x98\x01\n" +
 	"\rEnrollRequest\x12\x10\n" +
 	"\x03jwt\x18\x01 \x01(\tR\x03jwt\x12\x17\n" +
 	"\apeer_id\x18\x02 \x01(\tR\x06peerId\x12\x1d\n" +
 	"\n" +
 	"public_key\x18\x03 \x01(\fR\tpublicKey\x12%\n" +
-	"\x0erequested_role\x18\x04 \x01(\tR\rrequestedRole\"\xde\x01\n" +
+	"\x0erequested_role\x18\x04 \x01(\tR\rrequestedRole\x12\x16\n" +
+	"\x06region\x18\x05 \x01(\tR\x06region\"\xde\x01\n" +
 	"\x0eEnrollResponse\x12#\n" +
 	"\rbiscuit_token\x18\x01 \x01(\fR\fbiscuitToken\x12#\n" +
 	"\rerror_message\x18\x02 \x01(\tR\ferrorMessage\x127\n" +
@@ -1906,13 +1929,14 @@ const file_api_sam_proto_rawDesc = "" +
 	"expiration\x18\x05 \x01(\x03R\n" +
 	"expiration\"2\n" +
 	"\x17EnrollmentStatusRequest\x12\x17\n" +
-	"\apeer_id\x18\x01 \x01(\tR\x06peerId\"\xa0\x01\n" +
+	"\apeer_id\x18\x01 \x01(\tR\x06peerId\"\xb8\x01\n" +
 	"\x16BootstrapEnrollRequest\x12'\n" +
 	"\x0fbootstrap_token\x18\x01 \x01(\tR\x0ebootstrapToken\x12\x17\n" +
 	"\apeer_id\x18\x02 \x01(\tR\x06peerId\x12\x1d\n" +
 	"\n" +
 	"public_key\x18\x03 \x01(\fR\tpublicKey\x12%\n" +
-	"\x0erequested_role\x18\x04 \x01(\tR\rrequestedRole\"\xcd\x02\n" +
+	"\x0erequested_role\x18\x04 \x01(\tR\rrequestedRole\x12\x16\n" +
+	"\x06region\x18\x05 \x01(\tR\x06region\"\xcd\x02\n" +
 	"\x17BootstrapEnrollResponse\x120\n" +
 	"\x06status\x18\x01 \x01(\x0e2\x18.sam.v1.EnrollmentStatusR\x06status\x12#\n" +
 	"\rbiscuit_token\x18\x02 \x01(\fR\fbiscuitToken\x122\n" +

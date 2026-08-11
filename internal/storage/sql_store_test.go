@@ -170,6 +170,7 @@ func TestNodeEnrollmentOps(t *testing.T) {
 		Biscuit:        biscuitData,
 		Role:           "node",
 		EnrollmentType: "OIDC",
+		Region:         "EU-DE",
 		EnrolledAt:     time.Now(),
 		ExpiresAt:      expiresAt,
 	}
@@ -185,6 +186,9 @@ func TestNodeEnrollmentOps(t *testing.T) {
 	}
 	if n.PeerID != peerID || !bytes.Equal(n.Biscuit, biscuitData) || n.Banned {
 		t.Fatalf("node data mismatch: %+v", n)
+	}
+	if n.Region != "EU-DE" {
+		t.Fatalf("node region mismatch: got %q, want EU-DE", n.Region)
 	}
 
 	// Ban node
@@ -398,6 +402,7 @@ func TestBootstrapTokensAndEnrollmentRequestsOps(t *testing.T) {
 		PublicKey:    []byte("my-public-key-bytes"),
 		TokenID:      tok.ID,
 		Status:       api.EnrollmentStatus_ENROLLMENT_STATUS_PENDING,
+		Region:       "NA-US",
 		BiscuitToken: nil,
 		CreatedAt:    time.Now().Truncate(time.Second),
 	}
@@ -412,6 +417,9 @@ func TestBootstrapTokensAndEnrollmentRequestsOps(t *testing.T) {
 	}
 	if gotReq.ID != req.ID || gotReq.Status != req.Status || !bytes.Equal(gotReq.PublicKey, req.PublicKey) {
 		t.Errorf("retrieved request mismatch: %+v", gotReq)
+	}
+	if gotReq.Region != "NA-US" {
+		t.Errorf("retrieved request region mismatch: got %q, want NA-US", gotReq.Region)
 	}
 
 	gotReqByID, err := store.GetEnrollmentRequestByID(ctx, req.ID)

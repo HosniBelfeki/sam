@@ -71,3 +71,27 @@ func TestNormalizeRegion(t *testing.T) {
 		t.Errorf("NormalizeRegion: got %q, want EU-DE", got)
 	}
 }
+
+func TestRegionPrefixes(t *testing.T) {
+	tests := []struct {
+		in   string
+		want []string
+	}{
+		{"", nil},
+		{"EU", []string{"EU"}},
+		{"eu-de", []string{"EU", "EU-DE"}}, // normalized
+		{"EU-DE-BY", []string{"EU", "EU-DE", "EU-DE-BY"}},
+	}
+	for _, tt := range tests {
+		got := RegionPrefixes(tt.in)
+		if len(got) != len(tt.want) {
+			t.Errorf("RegionPrefixes(%q) = %v, want %v", tt.in, got, tt.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != tt.want[i] {
+				t.Errorf("RegionPrefixes(%q)[%d] = %q, want %q", tt.in, i, got[i], tt.want[i])
+			}
+		}
+	}
+}

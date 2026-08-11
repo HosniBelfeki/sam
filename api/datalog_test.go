@@ -556,3 +556,65 @@ func TestBuildTargetDatalogFacts(t *testing.T) {
 		})
 	}
 }
+
+func TestRegionFactsAndCheck(t *testing.T) {
+	pub, priv := makeKeyPair(t)
+
+	if facts := RegionFacts(""); facts != nil {
+		t.Errorf("RegionFacts(\"\") = %v, want nil", facts)
+	}
+	if _, err := RegionCheck(nil); err == nil {
+		t.Error("RegionCheck(nil): expected error, got nil")
+	}
+	if _, err := RegionCheck([]string{"MARS"}); err == nil {
+		t.Error("RegionCheck(MARS): expected error, got nil")
+	}
+
+	tests := []struct {
+		name        string
+		claimed     string // minted into the token via RegionFacts
+		required    []string
+		expectAllow bool
+	}{
+		{"finer claim satisfies coarser requirement", "EU-DE-BY", []string{"EU"}, true},
+		{"exact level match", "EU-DE", []string{"EU-DE"}, true},
+		{"any-of requirement", "NA-US", []string{"EU", "NA-US"}, true},
+		{"lowercase requirement is normalized", "EU-DE", []string{"eu"}, true},
+		{"coarser claim never satisfies finer requirement", "EU", []string{"EU-DE"}, false},
+		{"disjoint region", "NA-US", []string{"EU"}, false},
+		{"unattested token fails closed", "", []string{"EU"}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			builder := biscuit.NewBuilder(priv)
+			for _, fact := range RegionFacts(tt.claimed) {
+				if err := builder.AddAuthorityFact(fact); err != nil {
+					t.Fatalf("failed to add region fact: %v", err)
+				}
+			}
+			tok, err := builder.Build()
+			if err != nil {
+				t.Fatalf("failed to build token: %v", err)
+			}
+
+			authorizer, err := tok.Authorizer(pub, biscuit.WithWorldOptions(datalog.WithMaxDuration(5*time.Second)))
+			if err != nil {
+				t.Fatalf("failed to create authorizer: %v", err)
+			}
+			check, err := RegionCheck(tt.required)
+			if err != nil {
+				t.Fatalf("RegionCheck(%v): %v", tt.required, err)
+			}
+			authorizer.AddCheck(check)
+			authorizer.AddPolicy(AllowIfTruePolicy)
+
+			err = authorizer.Authorize()
+			if tt.expectAllow && err != nil {
+				t.Errorf("expected authorized, got error: %v", err)
+			} else if !tt.expectAllow && err == nil {
+				t.Error("expected denied, but authorization succeeded")
+			}
+		})
+	}
+}

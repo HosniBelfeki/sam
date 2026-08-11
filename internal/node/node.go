@@ -136,6 +136,7 @@ type SamNode struct {
 	mu                   sync.Mutex
 	LocalPolicy          *NodeConfigComplete
 	revokedPeers         *lru.Cache[string, int64]
+	peerRegionGate       *lru.Cache[string, time.Time]
 	authPeers            sync.Map
 	trustedKeys          []TrustedKey
 	keysMu               sync.RWMutex
@@ -262,6 +263,10 @@ func NewSamNode(cfg Options) (*SamNode, error) {
 	node.revokedPeers, err = lru.New[string, int64](RevocationCacheSize)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create revocation cache: %w", err)
+	}
+	node.peerRegionGate, err = lru.New[string, time.Time](regionGateCacheSize)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create region gate cache: %w", err)
 	}
 
 	return node, nil
@@ -1405,6 +1410,14 @@ func (n *SamNode) HandleAuthHandshake(s network.Stream) {
 
 	n.authPeers.Store(remotePeer, true)
 	logger.Infof("[AuthN] Successfully authenticated peer %s", remotePeer)
+
+	// Mutual response with our identity, mirroring the router handler, so
+	// peers can verify this node's attested facts (e.g. region).
+	writer := msgio.NewVarintWriter(s)
+	respBytes, _ := proto.Marshal(&api.AuthResponse{Success: true, Biscuit: n.GetIdentity()})
+	if err := writer.WriteMsg(respBytes); err != nil {
+		logger.Errorf("[AuthN] Failed to write mutual ACK to %s: %v", remotePeer, err)
+	}
 }
 
 func (n *SamNode) verifyBiscuit(biscuitData []byte, remotePeer peer.ID) (*biscuit.Biscuit, error) {

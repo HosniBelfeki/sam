@@ -77,3 +77,43 @@ You can further restrict access using the `attenuation` block. Local policies de
 
 1. **`rules`**: Inject custom Datalog facts asserting local node state (e.g., `time($time)`).
 2. **`policies`**: Add local restrictions (e.g., `deny if user("banned_user");`).
+
+---
+
+## 4. Regions & Data Sovereignty
+
+SAM supports jurisdiction constraints so a request never leaves a required region.
+
+### Declaring a region (provider)
+
+Start the node with its operator-declared region, using the hierarchical form `CONTINENT[-COUNTRY[-ZONE]]` (ISO 3166, e.g. `EU`, `EU-DE`, `NA-US-CA`):
+
+```bash
+sam-node run --region EU-DE ...
+```
+
+The region is declared at enrollment and **attested by the control plane**: for bootstrap enrollments the administrator sees the declared region on the pending request and approving it attests the claim. The control plane then mints one signed `region()` fact per hierarchy level into the node's Biscuit (`region("EU")`, `region("EU-DE")`), so a coarser requirement matches a finer claim, but never the reverse. An invalid region is rejected at enrollment; an empty one means no claim.
+
+### Requiring a region (consumer)
+
+On the sidecar's OpenAI-compatible endpoints, constrain a request with the `X-Sam-Required-Region` header (comma-separated, any-of):
+
+```bash
+curl http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer $SAM_API_TOKEN" \
+  -H "X-Sam-Required-Region: EU" \
+  -d '{"model":"test-model","messages":[{"role":"user","content":"hi"}]}'
+```
+
+Enforcement is fail-closed and cryptographic: gossiped region labels only rank candidate providers, and before any request data leaves your node the sidecar verifies the provider's control-plane-signed Biscuit and checks its attested `region()` facts. Providers that return no identity or lack a matching fact are rejected.
+
+### Restricting callers by region (provider)
+
+Because every enrolled node's token carries its attested region facts, a provider can require callers to be in a region with a single local check in its `attenuation` block:
+
+```yaml
+attenuation:
+  checks:
+    - 'check if region("EU");'
+```
+

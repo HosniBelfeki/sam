@@ -31,6 +31,7 @@ const (
 	reasonPeerRevoked      = "peer_revoked"
 	reasonProviderBackoff  = "provider_backoff"
 	reasonRegionMismatch   = "region_mismatch"
+	reasonRegionUnattested = "region_unattested"
 	reasonNoEligible       = "no_eligible_provider"
 	reasonAttemptsExceeded = "attempts_exceeded"
 )
@@ -77,13 +78,22 @@ func (f *openAIFacade) rankProviders(providers []modelProvider, requiredRegions 
 		region := p.region
 		if p.peerID == "" && f.localRegion != nil {
 			region = f.localRegion()
+		} else if region == "" && p.peerID != "" && f.peerRegion != nil {
+			// Registry-probed providers carry no labels; the gossip view may
+			// still know the peer's claim.
+			region = f.peerRegion(p.peerID)
 		}
-		// Region is fail-closed: a requirement never matches an unlabeled or
-		// coarser-scoped provider. Labels are routing hints until
-		// biscuit-attested.
-		if len(requiredRegions) > 0 && !regionAllowed(requiredRegions, region) {
-			recordFacadeRejection(reasonRegionMismatch)
-			continue
+		// Labels are routing hints: a remote whose own claim mismatches the
+		// requirement is dropped early, but an unlabeled remote proceeds to
+		// the region gate, the authoritative fail-closed check on the
+		// provider's biscuit-attested region (see region_gate.go). Locals
+		// have no gate, so their declared region stays fail-closed here.
+		if len(requiredRegions) > 0 {
+			knownMismatch := region != "" && !regionAllowed(requiredRegions, region)
+			if knownMismatch || (p.peerID == "" && !regionAllowed(requiredRegions, region)) {
+				recordFacadeRejection(reasonRegionMismatch)
+				continue
+			}
 		}
 		if p.peerID == "" {
 			locals = append(locals, p)
