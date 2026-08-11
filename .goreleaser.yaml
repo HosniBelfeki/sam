@@ -98,3 +98,6 @@ archives:
       - goos: windows
         formats:
           - zip
+    # nano-init has no windows build (see build id "nano-init" above), so the
+    # windows archive intentionally has one fewer binary than linux/darwin.
+    allow_different_binary_count: true
