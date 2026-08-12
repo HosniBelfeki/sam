@@ -28,8 +28,8 @@ import (
 // requirement also matches) is entirely up to the operator. Matching is
 // exact and case-sensitive on both key and value (see LabelCheck).
 //
-// Well-known keys (e.g. LabelRegion) are just conventions; SAM does not
-// validate or interpret their values beyond ValidateLabelValue.
+// Keys are plain conventions agreed by operators (e.g. "region"); SAM does
+// not reserve or interpret any key beyond ValidateLabelKey/ValidateLabelValue.
 
 // labelKeySyntax bounds label keys to a safe, portable charset.
 var labelKeySyntax = regexp.MustCompile(`^[a-zA-Z0-9_.-]{1,63}$`)

@@ -118,27 +118,8 @@ const (
 	//
 	// Reserved as part of the sidecar contract; enforced by the provider
 	// scorer. Label declarations are routing hints until attested via the
-	// node's Biscuit (see LabelRegion).
+	// node's Biscuit (see api/labels.go).
 	HeaderSamRequiredLabels = "X-Sam-Required-Labels"
-)
-
-// ============================================================================
-// Well-Known Node Labels
-// ============================================================================
-//
-// Placement rule: anything two nodes must agree on to interoperate (topics,
-// headers, labels, wire caps, canonical value forms) is defined here in api/.
-// Behavioral tuning a node decides alone (intervals, TTLs, table bounds)
-// lives in the package that owns the behavior.
-
-const (
-	// LabelRegion is the operator-declared jurisdiction of a node, a
-	// free-form value (e.g. "us-east-1", "EU-DE"); see api/labels.go. It is
-	// carried in ServiceAnnounce messages as a routing hint. Absent means
-	// the node makes no region claim, and consumers with a region
-	// requirement will never select it. Operator-declared labels always
-	// take precedence over runtime-derived values.
-	LabelRegion = "region"
 )
 
 // ============================================================================

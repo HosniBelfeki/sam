@@ -140,7 +140,7 @@ message ServiceAnnounce {
   // Routing keys served by this service: model IDs for inference,
   // tool names for MCP.
   repeated string keys = 4;
-  // Operator-declared labels (e.g. LabelRegion). Operator claims always
+  // Operator-declared labels (e.g. "region"). Operator claims always
   // take precedence over runtime-derived values.
   map<string, string> labels = 5;
   // Runtime load hints; zero values mean unknown.

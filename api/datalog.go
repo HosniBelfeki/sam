@@ -204,8 +204,8 @@ const (
 	// attested with region="us-east-1" carries label("region", "us-east-1"),
 	// satisfying `check if label("region", "us-east-1")` only — composition
 	// across values is left entirely to the operator (attest as many labels
-	// as needed). Distinct from LabelRegion, the unauthenticated gossip
-	// routing hint.
+	// as needed). Distinct from the unauthenticated gossip routing hint
+	// carried in ServiceAnnounce.labels.
 	// Contains: biscuit.String(key), biscuit.String(value)
 	// Example Datalog: check if label("region", "us-east-1")
 	FactLabel = "label"

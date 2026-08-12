@@ -1025,7 +1025,7 @@ type ServiceAnnounce struct {
 	// Routing keys served by this service: model IDs for inference,
 	// tool names for MCP.
 	Keys []string `protobuf:"bytes,4,rep,name=keys,proto3" json:"keys,omitempty"`
-	// Operator-declared labels (e.g. LabelRegion). Operator claims always
+	// Operator-declared labels (e.g. "region"). Operator claims always
 	// take precedence over runtime-derived values.
 	Labels map[string]string `protobuf:"bytes,5,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	// Runtime load hints; zero values mean unknown.

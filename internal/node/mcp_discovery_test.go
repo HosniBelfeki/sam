@@ -72,7 +72,7 @@ func (f *fakeToolService) Tools(_ context.Context) ([]string, error) {
 func TestDiscoverySource(t *testing.T) {
 	node := &SamNode{
 		services: NewServiceRegistry(&fakeDHT{}),
-		config:   Options{Labels: map[string]string{api.LabelRegion: "EU"}},
+		config:   Options{Labels: map[string]string{"region": "EU"}},
 	}
 	ctx := context.Background()
 
@@ -106,7 +106,7 @@ func TestDiscoverySource(t *testing.T) {
 		t.Errorf("reviewer announcement: %+v", a)
 	}
 	for name, a := range byName {
-		if a.Labels[api.LabelRegion] != "EU" {
+		if a.Labels["region"] != "EU" {
 			t.Errorf("%s labels: got %v, want region=EU", name, a.Labels)
 		}
 	}
@@ -128,14 +128,14 @@ func TestCapKeys(t *testing.T) {
 
 func TestGossipToolRows(t *testing.T) {
 	provs := []samdiscovery.Provider{
-		{PeerID: "peerA", Service: "reviewer", Labels: map[string]string{api.LabelRegion: "eu"}},
+		{PeerID: "peerA", Service: "reviewer", Labels: map[string]string{"region": "eu"}},
 		{PeerID: "peerB", Service: "other"},
 	}
 	rows := gossipToolRows(provs, "review_pr", "")
 	if len(rows) != 2 {
 		t.Fatalf("rows: got %+v, want 2", rows)
 	}
-	if rows[0].ToolName != "mcp://reviewer/review_pr" || rows[0].Labels[api.LabelRegion] != "eu" {
+	if rows[0].ToolName != "mcp://reviewer/review_pr" || rows[0].Labels["region"] != "eu" {
 		t.Errorf("row 0: %+v", rows[0])
 	}
 	if len(rows[1].Labels) != 0 {
