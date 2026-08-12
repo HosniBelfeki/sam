@@ -62,6 +62,13 @@ The `services` array allows you to register endpoints that remote peers in the S
 | `env` | *(For MCP)* Key-value environment variables passed to the subprocess. |
 | `target_url` | *(For HTTP/Inference)* The upstream local URL to proxy traffic to. |
 
+### Inference Service Path Standards & Proxy Routing
+
+When configuring `target_url` for `type: inference` services (e.g. Ollama, vLLM, OpenAI-compatible backends):
+* **Root Target URL Standard**: Always register `target_url` using the base root URL (e.g. `http://localhost:11434` or `http://localhost:8000`), strictly omitting `/v1`.
+* **OpenAI Facade Access**: Clients connecting via the node's local OpenAI Facade (`http://localhost:8080/v1`) request paths like `/v1/chat/completions`. SAM automatically proxies these to the backend's root URL.
+* **Raw Proxy Access**: If bypassing the Facade and making requests directly via the local egress proxy (`/sam/{peer}/inference/{service}`), the request path must include the explicit `/v1` namespace suffix (e.g. `http://localhost:8080/sam/{peer}/inference/{service}/v1/chat/completions`).
+
 ---
 
 ## 3. Defining Local Security (Target Attenuation)
