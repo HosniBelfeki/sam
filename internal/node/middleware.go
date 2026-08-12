@@ -37,6 +37,20 @@ type RequestContext struct {
 	Target   string
 }
 
+// recoverStreamHandler isolates a panic while processing untrusted peer bytes
+// to the single stream, resetting it instead of crashing the whole node.
+func recoverStreamHandler(name string, next network.StreamHandler) network.StreamHandler {
+	return func(s network.Stream) {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Errorf("[%s] panic recovered from peer %s: %v", name, s.Conn().RemotePeer(), r)
+				_ = s.Reset()
+			}
+		}()
+		next(s)
+	}
+}
+
 // trackingStream wraps a network.Stream to count bytes read and written.
 type trackingStream struct {
 	network.Stream

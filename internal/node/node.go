@@ -527,10 +527,10 @@ func (n *SamNode) Start(ctx context.Context) error {
 	go n.startDiscovery(ctx, n.config.MeshID, interval)
 
 	// Layer 3: Open the Lobby Door (Auth Protocol is bypassed by Layer 4)
-	n.Host.SetStreamHandler(api.AuthProtocolID, n.HandleAuthHandshake)
+	n.Host.SetStreamHandler(api.AuthProtocolID, recoverStreamHandler("AuthHandshake", n.HandleAuthHandshake))
 
 	// Layer 3: Wire up MCP handler wrapped in middleware
-	n.Host.SetStreamHandler(api.MCPProtocolID, n.WithBiscuitAuth(n.HandleMCPStream))
+	n.Host.SetStreamHandler(api.MCPProtocolID, recoverStreamHandler("MCP", n.WithBiscuitAuth(n.HandleMCPStream)))
 
 	// Start key pruning
 	n.startKeyPruning(ctx, n.config.KeyGracePeriod)
