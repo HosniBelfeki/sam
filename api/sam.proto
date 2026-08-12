@@ -49,11 +49,11 @@ message EnrollRequest {
   string peer_id = 2;
   bytes public_key = 3;
   string requested_role = 4;
-  // Operator-declared region claim (CONTINENT[-COUNTRY[-ZONE]], see
-  // api/region.go). Validated fail-closed by the control plane and, once
-  // attested by the enrollment flow's gates, minted as signed region()
-  // facts in the biscuit. Empty means no claim.
-  string region = 5;
+  // Operator-declared labels (e.g. key "region", see api/labels.go).
+  // Validated fail-closed by the control plane and, once attested by the
+  // enrollment flow's gates, minted as signed label() facts in the
+  // biscuit. Empty means no claims.
+  map<string, string> labels = 5;
 }
 
 message EnrollResponse {
@@ -80,9 +80,9 @@ message BootstrapEnrollRequest {
   string peer_id = 2;
   bytes public_key = 3;
   string requested_role = 4;
-  // Operator-declared region claim; the admin approving the enrollment
-  // attests it (see EnrollRequest.region).
-  string region = 5;
+  // Operator-declared labels; the admin approving the enrollment attests
+  // them (see EnrollRequest.labels).
+  map<string, string> labels = 5;
 }
 
 message BootstrapEnrollResponse {

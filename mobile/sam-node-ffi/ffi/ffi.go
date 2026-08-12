@@ -419,7 +419,7 @@ func CallRemoteTool(peerIDStr string, toolName string, argsJSON string) string {
 		}
 	}
 
-	res, err := n.CallMCPTool(context.Background(), targetPeer, toolName, params)
+	res, err := n.CallMCPTool(context.Background(), targetPeer, toolName, params, nil)
 	if err != nil {
 		return fmt.Sprintf(`{"error": "failed to call tool: %s"}`, err.Error())
 	}

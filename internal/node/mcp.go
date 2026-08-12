@@ -113,7 +113,7 @@ func NewMCPServer(node *SamNode) *mcp.Server {
 	// Add the find_remote_tools tool.
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "find_remote_tools",
-		Description: "Discover MCP tools available on hosted services across the mesh. Returns name + description per tool, plus the provider's region claim when known. Optionally narrow by peer_id, service_name, or tool_name (exact tool name; fastest — served from mesh announcements when available). intent is reserved for future ranking and is accepted-but-ignored.",
+		Description: "Discover MCP tools available on hosted services across the mesh. Returns name + description per tool, plus the provider's region label when known. Optionally narrow by peer_id, service_name, or tool_name (exact tool name; fastest — served from mesh announcements when available). intent is reserved for future ranking and is accepted-but-ignored.",
 	}, node.handleFindRemoteTools)
 
 	// Add the describe_remote_tool tool.
@@ -227,7 +227,10 @@ func NewMCPHandler(node *SamNode) http.Handler {
 }
 
 // CallMCPTool opens a stream to a remote peer, performs the handshake, and calls a tool.
-func (n *SamNode) CallMCPTool(ctx context.Context, targetPeer peer.ID, toolName string, params any) (*mcp.CallToolResult, error) {
+// CallMCPTool opens a stream to a remote peer, performs the handshake, and calls a tool.
+// requiredLabels, when non-empty, fail-closed verifies the peer's control-plane-attested
+// labels (see checkPeerLabels) before the tool is invoked; nil means no requirement.
+func (n *SamNode) CallMCPTool(ctx context.Context, targetPeer peer.ID, toolName string, params any, requiredLabels map[string]string) (*mcp.CallToolResult, error) {
 	var res *mcp.CallToolResult
 	var err error
 	maxRetries := 3
@@ -237,7 +240,7 @@ func (n *SamNode) CallMCPTool(ctx context.Context, targetPeer peer.ID, toolName 
 	n.preparePeerAddrs(ctx, targetPeer)
 
 	for i := 0; i < maxRetries; i++ {
-		res, err = n.callMCPToolOnce(ctx, targetPeer, toolName, params)
+		res, err = n.callMCPToolOnce(ctx, targetPeer, toolName, params, requiredLabels)
 		if err == nil {
 			return res, nil
 		}
@@ -264,7 +267,7 @@ func (n *SamNode) CallMCPTool(ctx context.Context, targetPeer peer.ID, toolName 
 // (find_remote_tools) can hide forbidden services instead of leaking their names.
 var ErrAuthRejected = errors.New("auth rejected")
 
-func (n *SamNode) ConnectMCPSession(ctx context.Context, targetPeer peer.ID, targetService string) (*mcp.ClientSession, func(), error) {
+func (n *SamNode) ConnectMCPSession(ctx context.Context, targetPeer peer.ID, targetService string, requiredLabels map[string]string) (*mcp.ClientSession, func(), error) {
 	// Open stream
 	logger.Debugf("Dialing %s for MCP...\n", targetPeer)
 	// For discovery, we want a fast failure, but for tool calls, we can wait a bit. We'll use the context's deadline,
@@ -353,6 +356,13 @@ func (n *SamNode) ConnectMCPSession(ctx context.Context, targetPeer peer.ID, tar
 		return nil, nil, fmt.Errorf("%w by %s: %s", ErrAuthRejected, targetPeer, resp.Error)
 	}
 
+	if len(requiredLabels) > 0 {
+		if err := n.checkPeerLabels(resp.Biscuit, targetPeer, requiredLabels); err != nil {
+			cleanup()
+			return nil, nil, err
+		}
+	}
+
 	// Handoff to SDK using custom transport
 	transport := NewStreamTransport(s)
 	mcpClient := mcp.NewClient(&mcp.Implementation{Name: "sam-node-mcp-client", Version: "0.1.0"}, nil)
@@ -371,13 +381,13 @@ func (n *SamNode) ConnectMCPSession(ctx context.Context, targetPeer peer.ID, tar
 	return session, fullCleanup, nil
 }
 
-func (n *SamNode) callMCPToolOnce(ctx context.Context, targetPeer peer.ID, toolName string, params any) (*mcp.CallToolResult, error) {
+func (n *SamNode) callMCPToolOnce(ctx context.Context, targetPeer peer.ID, toolName string, params any, requiredLabels map[string]string) (*mcp.CallToolResult, error) {
 	targetService, originalToolName, err := api.SplitToolName(toolName)
 	if err != nil {
 		return nil, err
 	}
 
-	session, cleanup, err := n.ConnectMCPSession(ctx, targetPeer, targetService)
+	session, cleanup, err := n.ConnectMCPSession(ctx, targetPeer, targetService, requiredLabels)
 	if err != nil {
 		return nil, err
 	}
@@ -403,7 +413,7 @@ func (n *SamNode) callMCPToolOnce(ctx context.Context, targetPeer peer.ID, toolN
 func (n *SamNode) fetchRemoteServiceCatalog(ctx context.Context, peerID peer.ID, typeStr string) ([]*api.ServiceInfo, error) {
 	n.preparePeerAddrs(ctx, peerID)
 
-	session, cleanup, err := n.ConnectMCPSession(ctx, peerID, "system://"+api.CatalogTarget)
+	session, cleanup, err := n.ConnectMCPSession(ctx, peerID, "system://"+api.CatalogTarget, nil)
 	if err != nil {
 		return nil, err
 	}

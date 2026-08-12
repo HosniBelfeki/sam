@@ -114,7 +114,7 @@ func TestPolicyScale(t *testing.T) {
 		}
 
 		start = time.Now()
-		biscuitBytes, _, err := identity.MintBiscuitToken(priv, claims, nil, nodePeer, time.Now().Add(time.Hour), roleNames, roles, "")
+		biscuitBytes, _, err := identity.MintBiscuitToken(priv, claims, nil, nodePeer, time.Now().Add(time.Hour), roleNames, roles, nil)
 		mintDur := time.Since(start)
 		if err != nil {
 			t.Fatalf("mint failed at n=%d: %v", n, err)
@@ -200,7 +200,7 @@ func TestPolicyScaleSetEncoding(t *testing.T) {
 
 		claims := jwt.MapClaims{}
 		start := time.Now()
-		biscuitBytes, _, err := identity.MintBiscuitToken(priv, claims, nil, nodePeer, time.Now().Add(time.Hour), []string{"bulk-role"}, roles, "")
+		biscuitBytes, _, err := identity.MintBiscuitToken(priv, claims, nil, nodePeer, time.Now().Add(time.Hour), []string{"bulk-role"}, roles, nil)
 		mintDur := time.Since(start)
 		if err != nil {
 			t.Fatalf("mint failed at n=%d exact entries: %v", n, err)
@@ -319,7 +319,7 @@ func TestPolicyScaleManyRoles(t *testing.T) {
 
 		claims := jwt.MapClaims{}
 		start := time.Now()
-		biscuitBytes, _, err := identity.MintBiscuitToken(priv, claims, nil, nodePeer, time.Now().Add(time.Hour), roleNames, roles, "")
+		biscuitBytes, _, err := identity.MintBiscuitToken(priv, claims, nil, nodePeer, time.Now().Add(time.Hour), roleNames, roles, nil)
 		mintDur := time.Since(start)
 		if err != nil {
 			t.Fatalf("mint failed at n=%d matched roles: %v", n, err)

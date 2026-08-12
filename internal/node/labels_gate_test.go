@@ -24,7 +24,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
-func TestCheckPeerRegions(t *testing.T) {
+func TestCheckPeerLabels(t *testing.T) {
 	cpPub, cpPriv, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatal(err)
@@ -38,9 +38,9 @@ func TestCheckPeerRegions(t *testing.T) {
 	providerPeer := peer.ID("provider-peer-id")
 	expiry := time.Now().Add(time.Hour)
 
-	mint := func(key ed25519.PrivateKey, p peer.ID, region string) []byte {
+	mint := func(key ed25519.PrivateKey, p peer.ID, labels map[string]string) []byte {
 		t.Helper()
-		b, err := identity.MintBootstrapBiscuitToken(key, p, api.RoleNode, expiry, nil, region)
+		b, err := identity.MintBootstrapBiscuitToken(key, p, api.RoleNode, expiry, nil, labels)
 		if err != nil {
 			t.Fatalf("mint: %v", err)
 		}
@@ -55,23 +55,22 @@ func TestCheckPeerRegions(t *testing.T) {
 	tests := []struct {
 		name      string
 		biscuit   []byte
-		required  []string
+		required  map[string]string
 		expectErr bool
 	}{
-		{"finer claim satisfies coarser requirement", mint(cpPriv, providerPeer, "EU-DE"), []string{"EU"}, false},
-		{"exact match", mint(cpPriv, providerPeer, "EU-DE"), []string{"EU-DE"}, false},
-		{"any-of requirement", mint(cpPriv, providerPeer, "NA-US"), []string{"EU", "NA-US"}, false},
-		{"coarser claim fails finer requirement", mint(cpPriv, providerPeer, "EU"), []string{"EU-DE"}, true},
-		{"disjoint region fails", mint(cpPriv, providerPeer, "NA-US"), []string{"EU"}, true},
-		{"unattested token fails closed", mint(cpPriv, providerPeer, ""), []string{"EU"}, true},
-		{"empty biscuit fails closed", nil, []string{"EU"}, true},
-		{"untrusted signer fails", mint(otherPriv, providerPeer, "EU-DE"), []string{"EU"}, true},
-		{"token bound to another peer fails", mint(cpPriv, peer.ID("other-peer"), "EU-DE"), []string{"EU"}, true},
+		{"exact match", mint(cpPriv, providerPeer, map[string]string{"region": "us-east-1"}), map[string]string{"region": "us-east-1"}, false},
+		{"any-of requirement matches one key", mint(cpPriv, providerPeer, map[string]string{"region": "na-us", "team": "platform"}), map[string]string{"region": "eu", "team": "platform"}, false},
+		{"no built-in hierarchy: coarser requirement fails a finer claim", mint(cpPriv, providerPeer, map[string]string{"region": "us-east-1"}), map[string]string{"region": "us"}, true},
+		{"disjoint labels fail", mint(cpPriv, providerPeer, map[string]string{"region": "na-us"}), map[string]string{"region": "eu"}, true},
+		{"unattested token fails closed", mint(cpPriv, providerPeer, nil), map[string]string{"region": "eu"}, true},
+		{"empty biscuit fails closed", nil, map[string]string{"region": "eu"}, true},
+		{"untrusted signer fails", mint(otherPriv, providerPeer, map[string]string{"region": "eu"}), map[string]string{"region": "eu"}, true},
+		{"token bound to another peer fails", mint(cpPriv, peer.ID("other-peer"), map[string]string{"region": "eu"}), map[string]string{"region": "eu"}, true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := node.checkPeerRegions(tt.biscuit, providerPeer, tt.required)
+			err := node.checkPeerLabels(tt.biscuit, providerPeer, tt.required)
 			if tt.expectErr && err == nil {
 				t.Error("expected error, got nil")
 			} else if !tt.expectErr && err != nil {
@@ -82,7 +81,7 @@ func TestCheckPeerRegions(t *testing.T) {
 
 	t.Run("no trusted keys fails closed", func(t *testing.T) {
 		bare := &SamNode{BiscuitTimeout: 500 * time.Millisecond}
-		if err := bare.checkPeerRegions(mint(cpPriv, providerPeer, "EU"), providerPeer, []string{"EU"}); err == nil {
+		if err := bare.checkPeerLabels(mint(cpPriv, providerPeer, map[string]string{"region": "eu"}), providerPeer, map[string]string{"region": "eu"}); err == nil {
 			t.Error("expected error, got nil")
 		}
 	})

@@ -61,9 +61,9 @@ type EnrolledNode struct {
 	EnrollmentType string
 	ClaimsJSON     string
 	OwnerID        string
-	// Region is the attested region claim minted into the node's biscuit;
-	// kept on the record so token refreshes re-mint it unchanged.
-	Region     string
+	// Labels are the attested key=value claims minted into the node's
+	// biscuit; kept on the record so token refreshes re-mint them unchanged.
+	Labels     map[string]string
 	EnrolledAt time.Time
 	ExpiresAt  time.Time
 	Banned     bool
@@ -89,9 +89,9 @@ type EnrollmentRequest struct {
 	PublicKey []byte
 	TokenID   string
 	Status    api.EnrollmentStatus
-	// Region is the operator-declared region claim, surfaced to the
-	// approving admin; approval attests it into the minted biscuit.
-	Region       string
+	// Labels are the operator-declared key=value claims, surfaced to the
+	// approving admin; approval attests them into the minted biscuit.
+	Labels       map[string]string
 	BiscuitToken []byte
 	CreatedAt    time.Time
 	ResolvedAt   *time.Time

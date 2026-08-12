@@ -93,7 +93,7 @@ func TestSelfHealingHTTPFallback(t *testing.T) {
 			writer := msgio.NewVarintWriter(s)
 			resp := &api.AuthResponse{
 				Success: true,
-				Biscuit: createMockBiscuitToken(t, newH.ID().String(), priv, api.RoleRouter),
+				Biscuit: createMockBiscuitToken(t, newH.ID().String(), priv, api.RoleRouter, nil),
 			}
 			respBytes, _ := proto.Marshal(resp)
 			_ = writer.WriteMsg(respBytes)
@@ -155,7 +155,7 @@ func TestSelfHealingHTTPFallback(t *testing.T) {
 		}
 
 		resp := &api.EnrollResponse{
-			BiscuitToken:          createMockBiscuitToken(t, enrollReq.PeerId, priv, api.RoleNode),
+			BiscuitToken:          createMockBiscuitToken(t, enrollReq.PeerId, priv, api.RoleNode, nil),
 			ControlPlanePublicKey: pub,
 			RouterAddresses:       []string{addr},
 		}

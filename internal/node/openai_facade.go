@@ -51,12 +51,12 @@ type modelLister interface {
 }
 
 // modelProvider locates one service able to serve a model.
-// An empty peerID means the service runs on this node. region and active
+// An empty peerID means the service runs on this node. labels and active
 // are known only for gossip-observed providers; zero values mean unknown.
 type modelProvider struct {
 	peerID  string
 	service string
-	region  string
+	labels  map[string]string
 	active  uint32
 }
 
@@ -75,17 +75,17 @@ type openAIFacade struct {
 	// and interest registration so announcements start flowing for a model.
 	viewProviders  func(model string) []modelProvider
 	ensureInterest func(model string)
-	// Scorer seams (may be nil): revocation check and this node's region.
+	// Scorer seams (may be nil): revocation check and this node's labels.
 	isRevoked   func(peerID string) bool
-	localRegion func() string
-	// peerRegion resolves a peer's gossip-observed region label for providers
+	localLabels func() map[string]string
+	// peerLabels resolves a peer's gossip-observed labels for providers
 	// discovered via the registry probe, which carries no labels.
-	peerRegion func(peerID string) string
-	// Region gate seam (may be nil = enforcement unavailable, fail closed
+	peerLabels func(peerID string) map[string]string
+	// Label gate seam (may be nil = enforcement unavailable, fail closed
 	// when a requirement exists): verifies the provider's
-	// control-plane-attested region facts before any request data is sent
-	// (see region_gate.go).
-	verifyPeerRegions func(ctx context.Context, peerID string, required []string) error
+	// control-plane-attested labels before any request data is sent
+	// (see labels_gate.go).
+	verifyPeerLabels func(ctx context.Context, peerID string, required map[string]string) error
 
 	ttl     time.Duration
 	mu      sync.Mutex
@@ -126,7 +126,7 @@ func newOpenAIFacade(node *SamNode, egress http.Handler) *openAIFacade {
 				out = append(out, modelProvider{
 					peerID:  p.PeerID,
 					service: p.Service,
-					region:  p.Labels[api.LabelRegion],
+					labels:  p.Labels,
 					active:  p.Load.ActiveRequests,
 				})
 			}
@@ -140,19 +140,19 @@ func newOpenAIFacade(node *SamNode, egress http.Handler) *openAIFacade {
 		isRevoked: func(peerID string) bool {
 			return node.revokedPeers != nil && node.revokedPeers.Contains(peerID)
 		},
-		localRegion: func() string { return node.config.Region },
-		peerRegion: func(peerID string) string {
+		localLabels: func() map[string]string { return node.config.Labels },
+		peerLabels: func(peerID string) map[string]string {
 			if node.Discovery == nil {
-				return ""
+				return nil
 			}
-			return node.Discovery.PeerLabels(peerID)[api.LabelRegion]
+			return node.Discovery.PeerLabels(peerID)
 		},
-		verifyPeerRegions: func(ctx context.Context, peerID string, required []string) error {
+		verifyPeerLabels: func(ctx context.Context, peerID string, required map[string]string) error {
 			pid, err := peer.Decode(peerID)
 			if err != nil {
 				return fmt.Errorf("invalid peer ID %q: %w", peerID, err)
 			}
-			return node.VerifyPeerRegions(ctx, pid, required)
+			return node.VerifyPeerLabels(ctx, pid, required)
 		},
 	}
 }
@@ -359,7 +359,7 @@ func (f *openAIFacade) handleCompletions(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	requiredRegions, err := parseRequiredRegions(r.Header.Get(api.HeaderSamRequiredRegion))
+	requiredLabels, err := parseRequiredLabels(r.Header.Get(api.HeaderSamRequiredLabels))
 	if err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
@@ -372,7 +372,7 @@ func (f *openAIFacade) handleCompletions(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	ranked := f.rankProviders(providers, requiredRegions)
+	ranked := f.rankProviders(providers, requiredLabels)
 	if len(ranked) == 0 {
 		recordFacadeRejection(reasonNoEligible)
 		writeOpenAIError(w, http.StatusServiceUnavailable, "no_eligible_provider",
@@ -383,10 +383,10 @@ func (f *openAIFacade) handleCompletions(w http.ResponseWriter, r *http.Request)
 	// The gate already stripped the credential it consumed; a surviving
 	// Authorization header is the destination backend's own credential and
 	// passes through, mirroring the egress path. X-Sam-Authentication is
-	// local-only, and the region requirement is an instruction to this
+	// local-only, and the label requirement is an instruction to this
 	// sidecar, not to the provider.
 	r.Header.Del(api.HeaderSamAuthentication)
-	r.Header.Del(api.HeaderSamRequiredRegion)
+	r.Header.Del(api.HeaderSamRequiredLabels)
 
 	maxAttempts := min(3, len(ranked))
 	for i := range maxAttempts {
@@ -402,22 +402,22 @@ func (f *openAIFacade) handleCompletions(w http.ResponseWriter, r *http.Request)
 		if p.peerID == "" {
 			f.serveLocal(aw, attempt, p.service)
 		} else {
-			// Labels ranked this provider; the region gate is the enforcement
+			// Labels ranked this provider; the label gate is the enforcement
 			// point: the provider's biscuit must attest the requirement before
 			// the request body leaves this node.
-			if len(requiredRegions) > 0 {
-				if f.verifyPeerRegions == nil {
-					recordFacadeRejection(reasonRegionUnattested)
-					writeOpenAIError(w, http.StatusServiceUnavailable, "region_unattested",
-						"region enforcement is unavailable on this node")
+			if len(requiredLabels) > 0 {
+				if f.verifyPeerLabels == nil {
+					recordFacadeRejection(reasonLabelUnattested)
+					writeOpenAIError(w, http.StatusServiceUnavailable, "label_unattested",
+						"label enforcement is unavailable on this node")
 					return
 				}
 				// No backoff on failure: the verdict is requirement-scoped,
 				// the provider stays eligible for unconstrained requests.
-				if err := f.verifyPeerRegions(r.Context(), p.peerID, requiredRegions); err != nil {
-					recordFacadeRejection(reasonRegionUnattested)
-					logger.Warnf("[OpenAIFacade] provider peer=%q service=%q failed region attestation for %v: %v; trying next",
-						p.peerID, p.service, requiredRegions, err)
+				if err := f.verifyPeerLabels(r.Context(), p.peerID, requiredLabels); err != nil {
+					recordFacadeRejection(reasonLabelUnattested)
+					logger.Warnf("[OpenAIFacade] provider peer=%q service=%q failed label attestation for %v: %v; trying next",
+						p.peerID, p.service, requiredLabels, err)
 					continue
 				}
 			}

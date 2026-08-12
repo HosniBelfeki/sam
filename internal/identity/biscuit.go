@@ -32,20 +32,20 @@ import (
 )
 
 // MintBiscuitToken generates a signed Biscuit token for a peer with policy rules based on JWT claims.
-// region is the control-plane-attested region claim (canonical, pre-validated); empty means no claim.
-func MintBiscuitToken(signingKey ed25519.PrivateKey, claims jwt.MapClaims, token *oidc.IDToken, remotePeer peer.ID, biscuitExpiry time.Time, roles []string, policyRoles []*api.PolicyRole, region string) ([]byte, []string, error) {
+// labels are control-plane-attested key=value claims (canonical, pre-validated); empty means no claims.
+func MintBiscuitToken(signingKey ed25519.PrivateKey, claims jwt.MapClaims, token *oidc.IDToken, remotePeer peer.ID, biscuitExpiry time.Time, roles []string, policyRoles []*api.PolicyRole, labels map[string]string) ([]byte, []string, error) {
 	if claims == nil {
 		return nil, nil, fmt.Errorf("claims cannot be nil")
 	}
 
-	biscuitBytes, err := mintBiscuit(signingKey, remotePeer, roles, biscuitExpiry, claims, policyRoles, region)
+	biscuitBytes, err := mintBiscuit(signingKey, remotePeer, roles, biscuitExpiry, claims, policyRoles, labels)
 	if err != nil {
 		return nil, nil, err
 	}
 	return biscuitBytes, roles, nil
 }
 
-func mintBiscuit(signingKey ed25519.PrivateKey, remotePeer peer.ID, roles []string, expiration time.Time, claims jwt.MapClaims, policyRoles []*api.PolicyRole, region string) ([]byte, error) {
+func mintBiscuit(signingKey ed25519.PrivateKey, remotePeer peer.ID, roles []string, expiration time.Time, claims jwt.MapClaims, policyRoles []*api.PolicyRole, labels map[string]string) ([]byte, error) {
 	builder := biscuit.NewBuilder(signingKey)
 	addedFacts := make(map[string]bool)
 	addFact := func(fact biscuit.Fact) error {
@@ -81,11 +81,11 @@ func mintBiscuit(signingKey ed25519.PrivateKey, remotePeer peer.ID, roles []stri
 		return nil, fmt.Errorf("failed to add client_peer_id fact: %w", err)
 	}
 
-	// One signed fact per hierarchy level so a requirement is a single exact
-	// match (see api.FactRegion).
-	for _, fact := range api.RegionFacts(region) {
+	// One signed fact per declared label so a requirement is a single exact
+	// match (see api.FactLabel).
+	for _, fact := range api.LabelFacts(labels) {
 		if err := addFact(fact); err != nil {
-			return nil, fmt.Errorf("failed to add region fact: %w", err)
+			return nil, fmt.Errorf("failed to add label fact: %w", err)
 		}
 	}
 
@@ -343,9 +343,9 @@ func toStringSlice(val any) []string {
 }
 
 // MintBootstrapBiscuitToken generates a signed Biscuit token for a peer using a bootstrap role.
-// region is the control-plane-attested region claim (canonical, pre-validated); empty means no claim.
-func MintBootstrapBiscuitToken(signingKey ed25519.PrivateKey, remotePeer peer.ID, role string, expiration time.Time, policyRoles []*api.PolicyRole, region string) ([]byte, error) {
-	return mintBiscuit(signingKey, remotePeer, []string{role}, expiration, nil, policyRoles, region)
+// labels are control-plane-attested key=value claims (canonical, pre-validated); empty means no claims.
+func MintBootstrapBiscuitToken(signingKey ed25519.PrivateKey, remotePeer peer.ID, role string, expiration time.Time, policyRoles []*api.PolicyRole, labels map[string]string) ([]byte, error) {
+	return mintBiscuit(signingKey, remotePeer, []string{role}, expiration, nil, policyRoles, labels)
 }
 
 // VerifyAndExtractPeerID checks that the biscuit is signed by one of the trusted keys and returns the peer ID.

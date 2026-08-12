@@ -279,11 +279,8 @@ func TestValidateServiceAnnounceCaps(t *testing.T) {
 		{"oversized label", func(a *api.ServiceAnnounce) {
 			a.Labels = map[string]string{"k": string(make([]byte, api.MaxAnnounceStringLen+1))}
 		}, true},
-		{"invalid region label", func(a *api.ServiceAnnounce) {
-			a.Labels = map[string]string{api.LabelRegion: "mars"}
-		}, true},
-		{"valid region label", func(a *api.ServiceAnnounce) {
-			a.Labels = map[string]string{api.LabelRegion: "EU-DE"}
+		{"free-form region label", func(a *api.ServiceAnnounce) {
+			a.Labels = map[string]string{api.LabelRegion: "us-east-1"}
 		}, false},
 	}
 	for _, tt := range tests {

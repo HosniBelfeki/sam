@@ -16,6 +16,7 @@ import (
 
 	"github.com/biscuit-auth/biscuit-go/v2"
 	"github.com/google/sam/api"
+	"github.com/google/sam/internal/identity"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -512,6 +513,67 @@ func TestFetchRemoteToolCatalogue_AuthRejectedHidden(t *testing.T) {
 
 	if len(rows) != 0 {
 		t.Fatalf("expected unauthorized service to be hidden (0 rows), got %d: %+v", len(rows), rows)
+	}
+}
+
+func TestCallMCPTool_LabelEnforcement(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	nodeA, cleanupA := startBareNode(t, ctx)
+	defer cleanupA()
+	nodeB, cleanupB := startBareNode(t, ctx)
+	defer cleanupB()
+
+	if err := nodeA.Host.Connect(ctx, peer.AddrInfo{ID: nodeB.Host.ID(), Addrs: nodeB.Host.Addrs()}); err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+
+	rootPub, rootPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("gen root key: %v", err)
+	}
+
+	// nodeA authenticates to nodeB as an unrestricted caller.
+	if err := buildAndSaveBiscuit(nodeA, rootPriv); err != nil {
+		t.Fatalf("buildAndSaveBiscuit: %v", err)
+	}
+	nodeB.keysMu.Lock()
+	nodeB.trustedKeys = append(nodeB.trustedKeys, TrustedKey{Key: rootPub, ReceivedAt: time.Now()})
+	nodeB.keysMu.Unlock()
+
+	// nodeB's own identity is control-plane-attested with region=eu-de; nodeA
+	// must trust the same root to verify it.
+	nodeBIdentity, err := identity.MintBootstrapBiscuitToken(rootPriv, nodeB.Host.ID(), api.RoleNode, time.Now().Add(time.Hour), nil, map[string]string{"region": "eu-de"})
+	if err != nil {
+		t.Fatalf("mint nodeB identity: %v", err)
+	}
+	nodeB.SetIdentityCache(nodeBIdentity)
+	nodeA.keysMu.Lock()
+	nodeA.trustedKeys = append(nodeA.trustedKeys, TrustedKey{Key: rootPub, ReceivedAt: time.Now()})
+	nodeA.keysMu.Unlock()
+
+	hostedSrv := httptest.NewServer(newFakeMCPHandler(t, []*mcp.Tool{
+		{Name: "review_pr", Description: "Run a code review", InputSchema: map[string]any{"type": "object"}},
+	}))
+	defer hostedSrv.Close()
+
+	if err := nodeB.RegisterService(ctx, &api.RegisterServiceRequest{
+		Service: &api.ServiceInfo{Type: api.ServiceType_SERVICE_TYPE_MCP, Name: "code-reviewer"},
+		Backend: &api.RegisterServiceRequest_TargetUrl{TargetUrl: hostedSrv.URL},
+	}); err != nil {
+		t.Fatalf("RegisterService: %v", err)
+	}
+	defer func() { _ = nodeB.UnregisterService(ctx, "code-reviewer") }()
+
+	// A required label that nodeB's attestation satisfies (exact match).
+	if _, err := nodeA.CallMCPTool(ctx, nodeB.Host.ID(), "mcp://code-reviewer/review_pr", map[string]any{}, map[string]string{"region": "eu-de"}); err != nil {
+		t.Fatalf("CallMCPTool with satisfied label requirement should succeed: %v", err)
+	}
+
+	// A required label that nodeB's attestation does not satisfy: fail closed.
+	if _, err := nodeA.CallMCPTool(ctx, nodeB.Host.ID(), "mcp://code-reviewer/review_pr", map[string]any{}, map[string]string{"region": "na-us"}); err == nil {
+		t.Fatal("CallMCPTool with a non-matching label requirement must fail")
 	}
 }
 

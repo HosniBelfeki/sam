@@ -136,7 +136,7 @@ type SamNode struct {
 	mu                   sync.Mutex
 	LocalPolicy          *NodeConfigComplete
 	revokedPeers         *lru.Cache[string, int64]
-	peerRegionGate       *lru.Cache[string, time.Time]
+	peerLabelGate        *lru.Cache[string, time.Time]
 	authPeers            sync.Map
 	trustedKeys          []TrustedKey
 	keysMu               sync.RWMutex
@@ -264,9 +264,9 @@ func NewSamNode(cfg Options) (*SamNode, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create revocation cache: %w", err)
 	}
-	node.peerRegionGate, err = lru.New[string, time.Time](regionGateCacheSize)
+	node.peerLabelGate, err = lru.New[string, time.Time](labelGateCacheSize)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create region gate cache: %w", err)
+		return nil, fmt.Errorf("failed to create label gate cache: %w", err)
 	}
 
 	return node, nil

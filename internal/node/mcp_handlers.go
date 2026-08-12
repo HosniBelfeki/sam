@@ -225,9 +225,10 @@ func (n *SamNode) handleGetMeshInfo(ctx context.Context, req *mcp.CallToolReques
 // input_schema (use describe_remote_tool to fetch it). Earlier revisions
 // took a stringified JSON blob here; that footgun is gone.
 type CallRemoteToolParams struct {
-	PeerID    string         `json:"peer_id" jsonschema:"The Peer ID of the target agent"`
-	ToolName  string         `json:"tool_name" jsonschema:"The name of the server to call"`
-	Arguments map[string]any `json:"arguments,omitempty" jsonschema:"Server arguments as a JSON object whose keys match the target server's input_schema. Call describe_remote_tool first to learn the schema."`
+	PeerID         string         `json:"peer_id" jsonschema:"The Peer ID of the target agent"`
+	ToolName       string         `json:"tool_name" jsonschema:"The name of the server to call"`
+	Arguments      map[string]any `json:"arguments,omitempty" jsonschema:"Server arguments as a JSON object whose keys match the target server's input_schema. Call describe_remote_tool first to learn the schema."`
+	RequiredLabels string         `json:"required_labels,omitempty" jsonschema:"Comma-separated key=value pairs (e.g. 'region=us-east-1,team=platform'). Fails closed: the call is rejected unless the peer attests any one of them. Empty means no requirement."`
 }
 
 // handleCallRemoteTool implements the call_remote_tool tool.
@@ -237,7 +238,11 @@ func (n *SamNode) handleCallRemoteTool(ctx context.Context, req *mcp.CallToolReq
 	if err != nil {
 		return nil, nil, err
 	}
-	res, err := n.CallMCPTool(ctx, targetPeer, params.ToolName, params.Arguments)
+	requiredLabels, err := parseRequiredLabels(params.RequiredLabels)
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid required_labels: %w", err)
+	}
+	res, err := n.CallMCPTool(ctx, targetPeer, params.ToolName, params.Arguments, requiredLabels)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -464,7 +469,7 @@ func (n *SamNode) fetchRemoteToolCatalogue(ctx context.Context, targetPeer peer.
 		}
 
 		n.preparePeerAddrs(ctx, targetPeer)
-		session, cleanup, err := n.ConnectMCPSession(ctx, targetPeer, connectService)
+		session, cleanup, err := n.ConnectMCPSession(ctx, targetPeer, connectService, nil)
 		if err != nil {
 			if errors.Is(err, ErrAuthRejected) {
 				// Not authorized for this service: omit it entirely rather than
@@ -606,7 +611,7 @@ func (n *SamNode) handleDescribeRemoteTool(ctx context.Context, req *mcp.CallToo
 	}
 	n.preparePeerAddrs(ctx, pid)
 
-	session, cleanup, err := n.ConnectMCPSession(ctx, pid, serviceName)
+	session, cleanup, err := n.ConnectMCPSession(ctx, pid, serviceName, nil)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -557,40 +557,40 @@ func TestBuildTargetDatalogFacts(t *testing.T) {
 	}
 }
 
-func TestRegionFactsAndCheck(t *testing.T) {
+func TestLabelFactsAndCheck(t *testing.T) {
 	pub, priv := makeKeyPair(t)
 
-	if facts := RegionFacts(""); facts != nil {
-		t.Errorf("RegionFacts(\"\") = %v, want nil", facts)
+	if facts := LabelFacts(nil); facts != nil {
+		t.Errorf("LabelFacts(nil) = %v, want nil", facts)
 	}
-	if _, err := RegionCheck(nil); err == nil {
-		t.Error("RegionCheck(nil): expected error, got nil")
+	if _, err := LabelCheck(nil); err == nil {
+		t.Error("LabelCheck(nil): expected error, got nil")
 	}
-	if _, err := RegionCheck([]string{"MARS"}); err == nil {
-		t.Error("RegionCheck(MARS): expected error, got nil")
+	if _, err := LabelCheck(map[string]string{"region": "bad,value"}); err == nil {
+		t.Error("LabelCheck(invalid value): expected error, got nil")
 	}
 
 	tests := []struct {
 		name        string
-		claimed     string // minted into the token via RegionFacts
-		required    []string
+		claimed     map[string]string // minted into the token via LabelFacts
+		required    map[string]string
 		expectAllow bool
 	}{
-		{"finer claim satisfies coarser requirement", "EU-DE-BY", []string{"EU"}, true},
-		{"exact level match", "EU-DE", []string{"EU-DE"}, true},
-		{"any-of requirement", "NA-US", []string{"EU", "NA-US"}, true},
-		{"lowercase requirement is normalized", "EU-DE", []string{"eu"}, true},
-		{"coarser claim never satisfies finer requirement", "EU", []string{"EU-DE"}, false},
-		{"disjoint region", "NA-US", []string{"EU"}, false},
-		{"unattested token fails closed", "", []string{"EU"}, false},
+		{"exact match", map[string]string{"region": "us-east-1"}, map[string]string{"region": "us-east-1"}, true},
+		{"any-of requirement", map[string]string{"region": "us-east-1"}, map[string]string{"region": "eu", "team": "us-east-1"}, false},
+		{"any-of requirement matches one key", map[string]string{"region": "us-east-1", "team": "platform"}, map[string]string{"region": "eu", "team": "platform"}, true},
+		{"case-sensitive value mismatch", map[string]string{"region": "us-east-1"}, map[string]string{"region": "US-EAST-1"}, false},
+		{"no built-in hierarchy: coarser requirement does not match a finer claim", map[string]string{"region": "us-east-1"}, map[string]string{"region": "us"}, false},
+		{"disjoint labels", map[string]string{"region": "us-east-1"}, map[string]string{"region": "eu-west-1"}, false},
+		{"unattested token fails closed", nil, map[string]string{"region": "us-east-1"}, false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			builder := biscuit.NewBuilder(priv)
-			for _, fact := range RegionFacts(tt.claimed) {
+			for _, fact := range LabelFacts(tt.claimed) {
 				if err := builder.AddAuthorityFact(fact); err != nil {
-					t.Fatalf("failed to add region fact: %v", err)
+					t.Fatalf("failed to add label fact: %v", err)
 				}
 			}
 			tok, err := builder.Build()
@@ -602,9 +602,9 @@ func TestRegionFactsAndCheck(t *testing.T) {
 			if err != nil {
 				t.Fatalf("failed to create authorizer: %v", err)
 			}
-			check, err := RegionCheck(tt.required)
+			check, err := LabelCheck(tt.required)
 			if err != nil {
-				t.Fatalf("RegionCheck(%v): %v", tt.required, err)
+				t.Fatalf("LabelCheck(%v): %v", tt.required, err)
 			}
 			authorizer.AddCheck(check)
 			authorizer.AddPolicy(AllowIfTruePolicy)

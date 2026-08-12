@@ -83,7 +83,7 @@ var (
 	apiTokenPathFlag          string
 	bootstrapTokenPathFlag    string
 	clientSecretPathFlag      string
-	regionFlag                string
+	labelsFlag                string
 	tlsCertFlag               string
 	tlsKeyFlag                string
 	tlsCAFlag                 string
@@ -118,6 +118,27 @@ func resolveDaemonSecret(name, path, envVar string) string {
 		logger.Fatalf("%v", err)
 	}
 	return secret
+}
+
+// parseLabelsFlag parses a comma-separated "key=value" list (see
+// api/labels.go) into a label map; an empty string means no claims.
+func parseLabelsFlag(s string) (map[string]string, error) {
+	if s == "" {
+		return nil, nil
+	}
+	labels := make(map[string]string)
+	for _, part := range strings.Split(s, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		k, v, ok := strings.Cut(part, "=")
+		if !ok {
+			return nil, fmt.Errorf("invalid label %q: expected key=value", part)
+		}
+		labels[strings.TrimSpace(k)] = strings.TrimSpace(v)
+	}
+	return labels, nil
 }
 
 func main() {
@@ -155,6 +176,10 @@ func main() {
 			clientSecretFlag = resolveDaemonSecret("client-secret", clientSecretPathFlag, "SAM_CLIENT_SECRET")
 			if jwtFlag != "" {
 				logger.Warn("--jwt passes a secret on the command line; prefer --jwt-path")
+			}
+			labels, err := parseLabelsFlag(labelsFlag)
+			if err != nil {
+				logger.Fatalf("Invalid --labels: %v", err)
 			}
 
 			store, err := node.NewStore(resolveDataDir())
@@ -265,7 +290,7 @@ func main() {
 					AutoRelayBackoff:     autoRelayBackoffFlag,
 					RouterConnectTimeout: routerConnectTimeoutFlag,
 					RequiredRole:         api.RoleNode,
-					Region:               regionFlag,
+					Labels:               labels,
 					PolicySyncInterval:   policySyncIntervalFlag,
 					DHTProviderAddrTTL:   dhtProviderAddrTTLFlag,
 					DHTMaxRecordAge:      dhtMaxRecordAgeFlag,
@@ -331,7 +356,7 @@ func main() {
 					AutoRelayBackoff:     autoRelayBackoffFlag,
 					RouterConnectTimeout: routerConnectTimeoutFlag,
 					RequiredRole:         api.RoleNode,
-					Region:               regionFlag,
+					Labels:               labels,
 					PolicySyncInterval:   policySyncIntervalFlag,
 					DHTProviderAddrTTL:   dhtProviderAddrTTLFlag,
 					DHTMaxRecordAge:      dhtMaxRecordAgeFlag,
@@ -394,7 +419,7 @@ func main() {
 					AutoRelayBackoff:     autoRelayBackoffFlag,
 					RouterConnectTimeout: routerConnectTimeoutFlag,
 					RequiredRole:         api.RoleNode,
-					Region:               regionFlag,
+					Labels:               labels,
 					PolicySyncInterval:   policySyncIntervalFlag,
 				})
 				if err != nil {
@@ -541,6 +566,11 @@ func main() {
 				}
 			}
 
+			labels, err := parseLabelsFlag(labelsFlag)
+			if err != nil {
+				logger.Fatalf("Invalid --labels: %v", err)
+			}
+
 			priv := node.GetOrGenerateKey(store)
 			meshNode, err := node.NewSamNode(node.Options{
 				PrivKey:              priv,
@@ -560,7 +590,7 @@ func main() {
 				AutoRelayBackoff:     3 * time.Second,
 				RouterConnectTimeout: routerConnectTimeoutFlag,
 				RequiredRole:         api.RoleNode,
-				Region:               regionFlag,
+				Labels:               labels,
 				PolicySyncInterval:   policySyncIntervalFlag,
 			})
 			if err != nil {
@@ -619,7 +649,7 @@ func main() {
 	joinCmd.Flags().StringVar(&bootstrapTokenFlag, "bootstrap-token", "", "Pre-shared bootstrap token for enrollment")
 	joinCmd.Flags().StringVar(&bootstrapTokenPathFlag, "bootstrap-token-path", "", "Path to file containing the bootstrap token (recommended over --bootstrap-token)")
 	runCmd.Flags().StringVar(&apiTokenPathFlag, "api-token-path", "", "Path to file containing the static Bearer token for API authorization (or env SAM_API_TOKEN)")
-	runCmd.Flags().StringVar(&regionFlag, "region", "", "Operator-declared region of this node: CONTINENT[-COUNTRY[-ZONE]] per ISO 3166 (e.g. \"EU\", \"EU-DE\", \"NA-US-CA\"); empty means no claim")
+	runCmd.Flags().StringVar(&labelsFlag, "labels", "", "Operator-declared key=value labels of this node, comma-separated (e.g. \"region=us-east-1,team=platform\"); empty means no claims")
 	runCmd.Flags().StringVar(&tlsCertFlag, "tls-cert", "", "Path to TLS certificate for sidecar API")
 	runCmd.Flags().StringVar(&tlsKeyFlag, "tls-key", "", "Path to TLS key for sidecar API")
 	runCmd.Flags().StringVar(&tlsCAFlag, "tls-ca", "", "Path to TLS CA for sidecar API mTLS")
