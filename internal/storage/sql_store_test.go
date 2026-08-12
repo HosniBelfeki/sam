@@ -177,6 +177,39 @@ func TestClaimKeyRotation(t *testing.T) {
 	}
 }
 
+func TestReleaseKeyRotationClaim(t *testing.T) {
+	store := newTestStore(t)
+	defer func() { _ = store.Close() }()
+
+	ctx := context.Background()
+	t0 := time.Now()
+	interval := 24 * time.Hour
+
+	claimed, err := store.ClaimKeyRotation(ctx, t0, interval)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !claimed {
+		t.Fatal("expected first claim to succeed")
+	}
+
+	// A failed rotation releases the claim instead of stranding the window
+	// for a full interval.
+	if err := store.ReleaseKeyRotationClaim(ctx, t0, interval); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// The window can now be reclaimed immediately, without waiting for the
+	// interval to elapse.
+	claimed, err = store.ClaimKeyRotation(ctx, t0.Add(time.Second), interval)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !claimed {
+		t.Fatal("expected claim to succeed after release")
+	}
+}
+
 func TestClaimKeyRotationConcurrent(t *testing.T) {
 	store := newTestStore(t)
 	defer func() { _ = store.Close() }()

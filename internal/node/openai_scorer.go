@@ -64,6 +64,9 @@ func parseRequiredLabels(h string) (map[string]string, error) {
 		if out == nil {
 			out = make(map[string]string)
 		}
+		if _, exists := out[k]; exists {
+			return nil, fmt.Errorf("duplicate label key %q", k)
+		}
 		out[k] = v
 	}
 	return out, nil

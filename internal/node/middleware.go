@@ -17,6 +17,7 @@ package node
 import (
 	"crypto/ed25519"
 	"fmt"
+	"runtime/debug"
 	"sync/atomic"
 
 	"github.com/biscuit-auth/biscuit-go/v2"
@@ -43,7 +44,7 @@ func recoverStreamHandler(name string, next network.StreamHandler) network.Strea
 	return func(s network.Stream) {
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Errorf("[%s] panic recovered from peer %s: %v", name, s.Conn().RemotePeer(), r)
+				logger.Errorf("[%s] panic recovered from peer %s: %v\n%s", name, s.Conn().RemotePeer(), r, debug.Stack())
 				_ = s.Reset()
 			}
 		}()

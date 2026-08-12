@@ -136,7 +136,11 @@ func parseLabelsFlag(s string) (map[string]string, error) {
 		if !ok {
 			return nil, fmt.Errorf("invalid label %q: expected key=value", part)
 		}
-		labels[strings.TrimSpace(k)] = strings.TrimSpace(v)
+		key := strings.TrimSpace(k)
+		if _, exists := labels[key]; exists {
+			return nil, fmt.Errorf("duplicate label key %q", key)
+		}
+		labels[key] = strings.TrimSpace(v)
 	}
 	return labels, nil
 }

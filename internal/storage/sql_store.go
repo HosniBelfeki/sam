@@ -545,6 +545,15 @@ func (s *SQLStore) ClaimKeyRotation(ctx context.Context, now time.Time, interval
 	return n == 1, nil
 }
 
+// ReleaseKeyRotationClaim implements Store. It only resets the deadline if
+// it still holds the exact value this claim set, so it can't clobber a
+// newer claim.
+func (s *SQLStore) ReleaseKeyRotationClaim(ctx context.Context, now time.Time, interval time.Duration) error {
+	query := s.rebind(`UPDATE rotation_lock SET next_rotation_at = ? WHERE id = 1 AND next_rotation_at = ?`)
+	_, err := s.db.ExecContext(ctx, query, now.UnixMilli(), now.Add(interval).UnixMilli())
+	return err
+}
+
 // RotateKeys implements Store.
 func (s *SQLStore) RotateKeys(ctx context.Context, newPriv ed25519.PrivateKey, newPub ed25519.PublicKey, gracePeriod time.Duration) error {
 	tx, err := s.db.BeginTx(ctx, nil)

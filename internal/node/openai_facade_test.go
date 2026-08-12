@@ -473,6 +473,9 @@ func TestParseRequiredLabels(t *testing.T) {
 	if _, err := parseRequiredLabels("bad key!=v"); err == nil {
 		t.Error("invalid label key must be rejected")
 	}
+	if _, err := parseRequiredLabels("region=us-east-1,region=us-west-1"); err == nil {
+		t.Error("duplicate label key must be rejected")
+	}
 }
 
 func TestRankProviders_LabelMatchIsExactAndCaseSensitive(t *testing.T) {

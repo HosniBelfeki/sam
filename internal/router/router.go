@@ -26,6 +26,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -829,7 +830,7 @@ func recoverStreamHandler(name string, next network.StreamHandler) network.Strea
 	return func(s network.Stream) {
 		defer func() {
 			if rec := recover(); rec != nil {
-				logger.Errorf("[%s] panic recovered from peer %s: %v", name, s.Conn().RemotePeer(), rec)
+				logger.Errorf("[%s] panic recovered from peer %s: %v\n%s", name, s.Conn().RemotePeer(), rec, debug.Stack())
 				_ = s.Reset()
 			}
 		}()

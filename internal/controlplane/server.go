@@ -279,7 +279,8 @@ func (s *Server) runKeyRotationLoop() {
 		case <-ticker.C:
 			// Replicas share one DB but tick independently; only the replica
 			// that wins this claim may rotate for the current window.
-			claimed, err := s.store.ClaimKeyRotation(s.ctx, time.Now(), s.config.KeyRotationInterval)
+			now := time.Now()
+			claimed, err := s.store.ClaimKeyRotation(s.ctx, now, s.config.KeyRotationInterval)
 			if err != nil {
 				logger.Errorf("Failed to claim key rotation window: %v", err)
 				continue
@@ -293,11 +294,20 @@ func (s *Server) runKeyRotationLoop() {
 			newPub, newPriv, err := ed25519.GenerateKey(rand.Reader)
 			if err != nil {
 				logger.Errorf("Failed to generate key pair for rotation: %v", err)
+				// Give up the window so a retry isn't stuck waiting a full interval.
+				if relErr := s.store.ReleaseKeyRotationClaim(s.ctx, now, s.config.KeyRotationInterval); relErr != nil {
+					logger.Errorf("Failed to release key rotation claim: %v", relErr)
+				}
 				continue
 			}
 			err = s.store.RotateKeys(s.ctx, newPriv, newPub, s.config.KeyGracePeriod)
 			if err != nil {
 				logger.Errorf("Failed to rotate keyring: %v", err)
+				// Same as above: don't let a failed rotation strand the mesh
+				// on unrotated keys until the next full interval.
+				if relErr := s.store.ReleaseKeyRotationClaim(s.ctx, now, s.config.KeyRotationInterval); relErr != nil {
+					logger.Errorf("Failed to release key rotation claim: %v", relErr)
+				}
 			} else {
 				logger.Infof("Key rotation committed. New current public key: %s", hex.EncodeToString(newPub))
 				if err := s.getMeshAdapter().PublishEvent(s.ctx, api.MeshEvent_KEY_ROTATION, "", newPub); err != nil {

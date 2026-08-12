@@ -119,6 +119,12 @@ type Store interface {
 	// interval), false if another replica already claimed this window.
 	ClaimKeyRotation(ctx context.Context, now time.Time, interval time.Duration) (bool, error)
 
+	// ReleaseKeyRotationClaim reverts a claim won via ClaimKeyRotation with
+	// the same now/interval back to its pre-claim deadline, so the window
+	// can be retried without waiting a full interval. Callers use this when
+	// the rotation that followed a successful claim failed.
+	ReleaseKeyRotationClaim(ctx context.Context, now time.Time, interval time.Duration) error
+
 	// SaveInitialKey sets the initial key pair if no keys exist yet.
 	SaveInitialKey(ctx context.Context, priv ed25519.PrivateKey, pub ed25519.PublicKey) error
 
