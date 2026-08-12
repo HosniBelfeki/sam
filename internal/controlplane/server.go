@@ -171,6 +171,11 @@ func (s *Server) Start() error {
 
 	s.httpServer = &http.Server{
 		Handler: mux,
+		// Mitigate Slowloris-style resource exhaustion from slow/malicious clients.
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	s.wg.Add(1)

@@ -45,6 +45,11 @@ func main() {
 	httpSrv := &http.Server{
 		Addr:    *bindAddr,
 		Handler: srv.Handler(),
+		// Mitigate Slowloris-style resource exhaustion from slow/malicious clients.
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	go func() {

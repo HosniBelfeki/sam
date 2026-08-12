@@ -1799,6 +1799,9 @@ func (n *SamNode) StartIngressServer(ctx context.Context) error {
 	}
 
 	server := &http.Server{
+		// Bound header-read time only: proxied backend responses can stream.
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			rc := &readCloserWithCount{ReadCloser: r.Body}
 			r.Body = rc
