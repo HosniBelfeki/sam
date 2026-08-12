@@ -34,6 +34,7 @@ var (
 	bindAddress           string
 	dbDriver              string
 	dbDSN                 string
+	dbDSNPath             string
 	oidcIssuer            string
 	allowedAudiencesFlag  string
 	keyRotationInterval   time.Duration
@@ -51,6 +52,17 @@ func main() {
 	rootCmd := &cobra.Command{
 		Use:   "sam-control-plane",
 		Short: "Sovereign Agent Mesh - Control Plane",
+		// Resolve the DB DSN (may embed a password) before any subcommand runs.
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			resolved, err := secrets.FromPathOrEnv("db-dsn", dbDSNPath, "SAM_DB_DSN")
+			if err != nil {
+				return err
+			}
+			if resolved != "" {
+				dbDSN = resolved
+			}
+			return nil
+		},
 		Run: func(cmd *cobra.Command, args []string) {
 			// Initialize logging
 			if os.Getenv("LOG_FORMAT") == "json" {
@@ -131,7 +143,8 @@ func main() {
 
 	rootCmd.Flags().StringVar(&bindAddress, "bind-address", "0.0.0.0:8080", "Address to listen on for web API services")
 	rootCmd.PersistentFlags().StringVar(&dbDriver, "db-driver", "sqlite", "Database driver (sqlite or postgres)")
-	rootCmd.PersistentFlags().StringVar(&dbDSN, "db-dsn", "control-plane.db", "Database DSN/Connection URL")
+	rootCmd.PersistentFlags().StringVar(&dbDSN, "db-dsn", "control-plane.db", "Database DSN/Connection URL (avoid for postgres: embeds a password; prefer --db-dsn-path or SAM_DB_DSN)")
+	rootCmd.PersistentFlags().StringVar(&dbDSNPath, "db-dsn-path", "", "Path to file containing the database DSN/Connection URL (overrides --db-dsn; or env SAM_DB_DSN)")
 	rootCmd.Flags().StringVar(&oidcIssuer, "issuer", "", "OIDC Issuer URL (comma-separated)")
 	rootCmd.Flags().StringVar(&allowedAudiencesFlag, "allowed-audiences", api.DefaultAudience, "Comma-separated list of allowed OIDC audiences")
 	rootCmd.Flags().DurationVar(&keyRotationInterval, "key-rotation-interval", 24*time.Hour, "Key rotation interval (e.g. 24h). 0 disables rotation.")
