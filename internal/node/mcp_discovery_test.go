@@ -135,11 +135,11 @@ func TestGossipToolRows(t *testing.T) {
 	if len(rows) != 2 {
 		t.Fatalf("rows: got %+v, want 2", rows)
 	}
-	if rows[0].ToolName != "mcp://reviewer/review_pr" || rows[0].Region != "eu" {
+	if rows[0].ToolName != "mcp://reviewer/review_pr" || rows[0].Labels[api.LabelRegion] != "eu" {
 		t.Errorf("row 0: %+v", rows[0])
 	}
-	if rows[1].Region != "" {
-		t.Errorf("row 1 should have no region claim: %+v", rows[1])
+	if len(rows[1].Labels) != 0 {
+		t.Errorf("row 1 should have no labels: %+v", rows[1])
 	}
 
 	filtered := gossipToolRows(provs, "review_pr", "reviewer")

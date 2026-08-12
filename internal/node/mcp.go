@@ -113,7 +113,7 @@ func NewMCPServer(node *SamNode) *mcp.Server {
 	// Add the find_remote_tools tool.
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "find_remote_tools",
-		Description: "Discover MCP tools available on hosted services across the mesh. Returns name + description per tool, plus the provider's region label when known. Optionally narrow by peer_id, service_name, or tool_name (exact tool name; fastest — served from mesh announcements when available). intent is reserved for future ranking and is accepted-but-ignored.",
+		Description: "Discover MCP tools available on hosted services across the mesh. Returns name + description per tool, plus the provider's declared labels (e.g. region) when known. Optionally narrow by peer_id, service_name, or tool_name (exact tool name; fastest — served from mesh announcements when available). intent is reserved for future ranking and is accepted-but-ignored.",
 	}, node.handleFindRemoteTools)
 
 	// Add the describe_remote_tool tool.

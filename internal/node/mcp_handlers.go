@@ -300,10 +300,10 @@ type remoteToolRow struct {
 	PeerID      string `json:"peer_id"`
 	ToolName    string `json:"tool_name,omitempty"`
 	Description string `json:"description,omitempty"`
-	// Region is the provider's operator-declared region claim, when known
-	// from gossip. A routing hint, not an enforced attribute.
-	Region string `json:"region,omitempty"`
-	Error  string `json:"error,omitempty"`
+	// Labels are the provider's operator-declared labels, when known from
+	// gossip (e.g. "region"). A routing hint, not an enforced attribute.
+	Labels map[string]string `json:"labels,omitempty"`
+	Error  string            `json:"error,omitempty"`
 }
 
 // handleFindRemoteTools implements the find_remote_tools tool.
@@ -378,7 +378,7 @@ func (n *SamNode) handleFindRemoteTools(ctx context.Context, req *mcp.CallToolRe
 	if params.ToolName != "" {
 		rows = filterRowsByToolName(rows, params.ToolName)
 	}
-	n.annotateToolRegions(rows)
+	n.annotateToolLabels(rows)
 	return marshalToolRows(rows)
 }
 
@@ -410,7 +410,7 @@ func gossipToolRows(provs []samdiscovery.Provider, toolName, serviceNameFilter s
 		rows = append(rows, remoteToolRow{
 			PeerID:   p.PeerID,
 			ToolName: name + "/" + toolName,
-			Region:   p.Labels[api.LabelRegion],
+			Labels:   p.Labels,
 		})
 	}
 	return rows
@@ -432,17 +432,18 @@ func filterRowsByToolName(rows []remoteToolRow, toolName string) []remoteToolRow
 	return out
 }
 
-// annotateToolRegions fills the region hint for peers the gossip view knows.
-func (n *SamNode) annotateToolRegions(rows []remoteToolRow) {
+// annotateToolLabels fills in the operator-declared labels for peers the
+// gossip view knows, when not already known from a fresher source.
+func (n *SamNode) annotateToolLabels(rows []remoteToolRow) {
 	if n.Discovery == nil {
 		return
 	}
 	for i := range rows {
-		if rows[i].Region != "" {
+		if len(rows[i].Labels) != 0 {
 			continue
 		}
 		if labels := n.Discovery.PeerLabels(rows[i].PeerID); labels != nil {
-			rows[i].Region = labels[api.LabelRegion]
+			rows[i].Labels = labels
 		}
 	}
 }
