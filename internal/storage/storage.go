@@ -112,6 +112,13 @@ type Store interface {
 	// RotateKeys rotates the current key to a new key pair and sets the expiration of the old key.
 	RotateKeys(ctx context.Context, newPriv ed25519.PrivateKey, newPub ed25519.PublicKey, gracePeriod time.Duration) error
 
+	// ClaimKeyRotation atomically claims the next scheduled key-rotation
+	// window, so multiple control-plane replicas sharing one database rotate
+	// keys exactly once per interval instead of racing independently. It
+	// returns true if the caller won the claim (advancing the deadline by
+	// interval), false if another replica already claimed this window.
+	ClaimKeyRotation(ctx context.Context, now time.Time, interval time.Duration) (bool, error)
+
 	// SaveInitialKey sets the initial key pair if no keys exist yet.
 	SaveInitialKey(ctx context.Context, priv ed25519.PrivateKey, pub ed25519.PublicKey) error
 

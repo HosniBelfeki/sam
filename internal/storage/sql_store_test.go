@@ -22,6 +22,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -136,6 +138,76 @@ func TestKeyRingOps(t *testing.T) {
 	}
 	if len(validKeys) != 2 {
 		t.Fatalf("expected 2 valid keys, got %d", len(validKeys))
+	}
+}
+
+func TestClaimKeyRotation(t *testing.T) {
+	store := newTestStore(t)
+	defer func() { _ = store.Close() }()
+
+	ctx := context.Background()
+	t0 := time.Now()
+	interval := 24 * time.Hour
+
+	// Fresh state: the first replica to tick claims the window.
+	claimed, err := store.ClaimKeyRotation(ctx, t0, interval)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !claimed {
+		t.Fatal("expected first claim to succeed")
+	}
+
+	// A second replica racing for the same window loses.
+	claimed, err = store.ClaimKeyRotation(ctx, t0.Add(time.Second), interval)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if claimed {
+		t.Fatal("expected concurrent claim in the same window to fail")
+	}
+
+	// Once the interval has elapsed, the next window can be claimed again.
+	claimed, err = store.ClaimKeyRotation(ctx, t0.Add(interval+time.Second), interval)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !claimed {
+		t.Fatal("expected claim after the interval elapsed to succeed")
+	}
+}
+
+func TestClaimKeyRotationConcurrent(t *testing.T) {
+	store := newTestStore(t)
+	defer func() { _ = store.Close() }()
+
+	ctx := context.Background()
+	now := time.Now()
+	interval := 24 * time.Hour
+
+	// Simulate several control-plane replicas racing to claim the same
+	// rotation window concurrently; exactly one must win.
+	const replicas = 10
+	var wg sync.WaitGroup
+	var wins atomic.Int32
+	for i := 0; i < replicas; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			claimed, err := store.ClaimKeyRotation(ctx, now, interval)
+			if err != nil {
+				t.Errorf("unexpected error: %v", err)
+				return
+			}
+			if claimed {
+				wins.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+
+	if got := wins.Load(); got != 1 {
+		t.Fatalf("expected exactly 1 replica to win the claim, got %d", got)
 	}
 }
 

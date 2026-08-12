@@ -277,6 +277,18 @@ func (s *Server) runKeyRotationLoop() {
 	for {
 		select {
 		case <-ticker.C:
+			// Replicas share one DB but tick independently; only the replica
+			// that wins this claim may rotate for the current window.
+			claimed, err := s.store.ClaimKeyRotation(s.ctx, time.Now(), s.config.KeyRotationInterval)
+			if err != nil {
+				logger.Errorf("Failed to claim key rotation window: %v", err)
+				continue
+			}
+			if !claimed {
+				logger.Debug("Skipping key rotation: another replica already claimed this window")
+				continue
+			}
+
 			logger.Info("Rotating Biscuit signing keys...")
 			newPub, newPriv, err := ed25519.GenerateKey(rand.Reader)
 			if err != nil {

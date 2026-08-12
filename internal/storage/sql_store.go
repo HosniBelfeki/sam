@@ -312,6 +312,26 @@ var migrations = []migration{
 			`ALTER TABLE enrollment_requests ADD COLUMN region TEXT DEFAULT '' NOT NULL`,
 		},
 	},
+	{
+		// rotation_lock backs ClaimKeyRotation: a singleton row whose
+		// next_rotation_at only advances via a conditional UPDATE, so it
+		// doubles as a driver-agnostic mutex across control-plane replicas.
+		version: 6,
+		postgres: []string{
+			`CREATE TABLE IF NOT EXISTS rotation_lock (
+				id SMALLINT PRIMARY KEY,
+				next_rotation_at BIGINT NOT NULL
+			)`,
+			`INSERT INTO rotation_lock (id, next_rotation_at) VALUES (1, 0) ON CONFLICT (id) DO NOTHING`,
+		},
+		sqlite: []string{
+			`CREATE TABLE IF NOT EXISTS rotation_lock (
+				id INTEGER PRIMARY KEY,
+				next_rotation_at BIGINT NOT NULL
+			)`,
+			`INSERT OR IGNORE INTO rotation_lock (id, next_rotation_at) VALUES (1, 0)`,
+		},
+	},
 }
 
 func (s *SQLStore) initSchema() error {
@@ -490,6 +510,20 @@ func (s *SQLStore) GetAllValidKeys(ctx context.Context) ([]KeyPair, error) {
 		})
 	}
 	return keys, rows.Err()
+}
+
+// ClaimKeyRotation implements Store.
+func (s *SQLStore) ClaimKeyRotation(ctx context.Context, now time.Time, interval time.Duration) (bool, error) {
+	query := s.rebind(`UPDATE rotation_lock SET next_rotation_at = ? WHERE id = 1 AND next_rotation_at <= ?`)
+	res, err := s.db.ExecContext(ctx, query, now.Add(interval).UnixMilli(), now.UnixMilli())
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n == 1, nil
 }
 
 // RotateKeys implements Store.
