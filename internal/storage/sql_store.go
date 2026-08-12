@@ -312,6 +312,45 @@ var migrations = []migration{
 			`ALTER TABLE enrollment_requests ADD COLUMN region TEXT DEFAULT '' NOT NULL`,
 		},
 	},
+	{
+		// rotation_lock backs ClaimKeyRotation: a singleton row whose
+		// next_rotation_at only advances via a conditional UPDATE, so it
+		// doubles as a driver-agnostic mutex across control-plane replicas.
+		version: 6,
+		postgres: []string{
+			`CREATE TABLE IF NOT EXISTS rotation_lock (
+				id SMALLINT PRIMARY KEY,
+				next_rotation_at BIGINT NOT NULL
+			)`,
+			`INSERT INTO rotation_lock (id, next_rotation_at) VALUES (1, 0) ON CONFLICT (id) DO NOTHING`,
+		},
+		sqlite: []string{
+			`CREATE TABLE IF NOT EXISTS rotation_lock (
+				id INTEGER PRIMARY KEY,
+				next_rotation_at BIGINT NOT NULL
+			)`,
+			`INSERT OR IGNORE INTO rotation_lock (id, next_rotation_at) VALUES (1, 0)`,
+		},
+	},
+	{
+		// Replaces the region-specific claim with a generic key=value label
+		// set (see api/labels.go): no built-in taxonomy or hierarchy, just a
+		// JSON-encoded map an operator can populate with as many labels as
+		// their composition needs.
+		version: 7,
+		postgres: []string{
+			`ALTER TABLE nodes DROP COLUMN IF EXISTS region`,
+			`ALTER TABLE nodes ADD COLUMN IF NOT EXISTS labels_json TEXT DEFAULT '' NOT NULL`,
+			`ALTER TABLE enrollment_requests DROP COLUMN IF EXISTS region`,
+			`ALTER TABLE enrollment_requests ADD COLUMN IF NOT EXISTS labels_json TEXT DEFAULT '' NOT NULL`,
+		},
+		sqlite: []string{
+			`ALTER TABLE nodes DROP COLUMN region`,
+			`ALTER TABLE nodes ADD COLUMN labels_json TEXT DEFAULT '' NOT NULL`,
+			`ALTER TABLE enrollment_requests DROP COLUMN region`,
+			`ALTER TABLE enrollment_requests ADD COLUMN labels_json TEXT DEFAULT '' NOT NULL`,
+		},
+	},
 }
 
 func (s *SQLStore) initSchema() error {
@@ -492,6 +531,29 @@ func (s *SQLStore) GetAllValidKeys(ctx context.Context) ([]KeyPair, error) {
 	return keys, rows.Err()
 }
 
+// ClaimKeyRotation implements Store.
+func (s *SQLStore) ClaimKeyRotation(ctx context.Context, now time.Time, interval time.Duration) (bool, error) {
+	query := s.rebind(`UPDATE rotation_lock SET next_rotation_at = ? WHERE id = 1 AND next_rotation_at <= ?`)
+	res, err := s.db.ExecContext(ctx, query, now.Add(interval).UnixMilli(), now.UnixMilli())
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n == 1, nil
+}
+
+// ReleaseKeyRotationClaim implements Store. It only resets the deadline if
+// it still holds the exact value this claim set, so it can't clobber a
+// newer claim.
+func (s *SQLStore) ReleaseKeyRotationClaim(ctx context.Context, now time.Time, interval time.Duration) error {
+	query := s.rebind(`UPDATE rotation_lock SET next_rotation_at = ? WHERE id = 1 AND next_rotation_at = ?`)
+	_, err := s.db.ExecContext(ctx, query, now.UnixMilli(), now.Add(interval).UnixMilli())
+	return err
+}
+
 // RotateKeys implements Store.
 func (s *SQLStore) RotateKeys(ctx context.Context, newPriv ed25519.PrivateKey, newPub ed25519.PublicKey, gracePeriod time.Duration) error {
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -533,23 +595,28 @@ func (s *SQLStore) SaveInitialKey(ctx context.Context, priv ed25519.PrivateKey, 
 
 // EnrollNode implements Store.
 func (s *SQLStore) EnrollNode(ctx context.Context, node *EnrolledNode) error {
+	labelsJSON, err := json.Marshal(node.Labels)
+	if err != nil {
+		return fmt.Errorf("failed to marshal labels: %w", err)
+	}
+
 	var query string
 	if s.isPostgres() {
 		query = s.rebind(`
-			INSERT INTO nodes (peer_id, public_key, biscuit_token, role, enrollment_type, claims_json, owner_id, region, enrolled_at, expires_at, banned) 
+			INSERT INTO nodes (peer_id, public_key, biscuit_token, role, enrollment_type, claims_json, owner_id, labels_json, enrolled_at, expires_at, banned) 
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, FALSE)
 			ON CONFLICT (peer_id) 
-			DO UPDATE SET public_key = EXCLUDED.public_key, biscuit_token = EXCLUDED.biscuit_token, role = EXCLUDED.role, enrollment_type = EXCLUDED.enrollment_type, claims_json = EXCLUDED.claims_json, owner_id = EXCLUDED.owner_id, region = EXCLUDED.region, enrolled_at = EXCLUDED.enrolled_at, expires_at = EXCLUDED.expires_at`)
+			DO UPDATE SET public_key = EXCLUDED.public_key, biscuit_token = EXCLUDED.biscuit_token, role = EXCLUDED.role, enrollment_type = EXCLUDED.enrollment_type, claims_json = EXCLUDED.claims_json, owner_id = EXCLUDED.owner_id, labels_json = EXCLUDED.labels_json, enrolled_at = EXCLUDED.enrolled_at, expires_at = EXCLUDED.expires_at`)
 	} else {
 		query = s.rebind(`
-			INSERT INTO nodes (peer_id, public_key, biscuit_token, role, enrollment_type, claims_json, owner_id, region, enrolled_at, expires_at, banned) 
+			INSERT INTO nodes (peer_id, public_key, biscuit_token, role, enrollment_type, claims_json, owner_id, labels_json, enrolled_at, expires_at, banned) 
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
 			ON CONFLICT (peer_id) 
-			DO UPDATE SET public_key = excluded.public_key, biscuit_token = excluded.biscuit_token, role = excluded.role, enrollment_type = excluded.enrollment_type, claims_json = excluded.claims_json, owner_id = excluded.owner_id, region = excluded.region, enrolled_at = excluded.enrolled_at, expires_at = excluded.expires_at`)
+			DO UPDATE SET public_key = excluded.public_key, biscuit_token = excluded.biscuit_token, role = excluded.role, enrollment_type = excluded.enrollment_type, claims_json = excluded.claims_json, owner_id = excluded.owner_id, labels_json = excluded.labels_json, enrolled_at = excluded.enrolled_at, expires_at = excluded.expires_at`)
 	}
 
 	ownerIDNull := sql.NullString{String: node.OwnerID, Valid: node.OwnerID != ""}
-	_, err := s.db.ExecContext(ctx, query,
+	_, err = s.db.ExecContext(ctx, query,
 		node.PeerID,
 		node.PublicKey,
 		node.Biscuit,
@@ -557,7 +624,7 @@ func (s *SQLStore) EnrollNode(ctx context.Context, node *EnrolledNode) error {
 		node.EnrollmentType,
 		node.ClaimsJSON,
 		ownerIDNull,
-		node.Region,
+		string(labelsJSON),
 		node.EnrolledAt.UnixMilli(),
 		node.ExpiresAt.UnixMilli(),
 	)
@@ -566,9 +633,9 @@ func (s *SQLStore) EnrollNode(ctx context.Context, node *EnrolledNode) error {
 
 // GetNode implements Store.
 func (s *SQLStore) GetNode(ctx context.Context, peerID string) (*EnrolledNode, error) {
-	query := s.rebind(`SELECT peer_id, public_key, biscuit_token, role, enrollment_type, claims_json, owner_id, region, enrolled_at, expires_at, banned FROM nodes WHERE peer_id = ?`)
+	query := s.rebind(`SELECT peer_id, public_key, biscuit_token, role, enrollment_type, claims_json, owner_id, labels_json, enrolled_at, expires_at, banned FROM nodes WHERE peer_id = ?`)
 	var node EnrolledNode
-	var claimsJSON, ownerID sql.NullString
+	var claimsJSON, ownerID, labelsJSON sql.NullString
 	var enrolledAtUnix, expiresAtUnix int64
 	err := s.db.QueryRowContext(ctx, query, peerID).Scan(
 		&node.PeerID,
@@ -578,7 +645,7 @@ func (s *SQLStore) GetNode(ctx context.Context, peerID string) (*EnrolledNode, e
 		&node.EnrollmentType,
 		&claimsJSON,
 		&ownerID,
-		&node.Region,
+		&labelsJSON,
 		&enrolledAtUnix,
 		&expiresAtUnix,
 		&node.Banned,
@@ -594,6 +661,11 @@ func (s *SQLStore) GetNode(ctx context.Context, peerID string) (*EnrolledNode, e
 	}
 	if err != nil {
 		return nil, err
+	}
+	if labelsJSON.Valid && labelsJSON.String != "" {
+		if err := json.Unmarshal([]byte(labelsJSON.String), &node.Labels); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal labels: %w", err)
+		}
 	}
 	node.EnrolledAt = time.UnixMilli(enrolledAtUnix)
 	node.ExpiresAt = time.UnixMilli(expiresAtUnix)
@@ -898,19 +970,23 @@ func (s *SQLStore) IncrementBootstrapTokenUsage(ctx context.Context, id string) 
 
 // CreateEnrollmentRequest saves a new pending request.
 func (s *SQLStore) CreateEnrollmentRequest(ctx context.Context, req *EnrollmentRequest) error {
-	query := `INSERT INTO enrollment_requests (id, peer_id, public_key, token_id, status, region, biscuit_token, created_at, resolved_at, resolved_by)
+	labelsJSON, err := json.Marshal(req.Labels)
+	if err != nil {
+		return fmt.Errorf("failed to marshal labels: %w", err)
+	}
+	query := `INSERT INTO enrollment_requests (id, peer_id, public_key, token_id, status, labels_json, biscuit_token, created_at, resolved_at, resolved_by)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	var resAt sql.NullInt64
 	if req.ResolvedAt != nil {
 		resAt = sql.NullInt64{Int64: req.ResolvedAt.Unix(), Valid: true}
 	}
-	_, err := s.db.ExecContext(ctx, s.rebind(query),
+	_, err = s.db.ExecContext(ctx, s.rebind(query),
 		req.ID,
 		req.PeerID,
 		req.PublicKey,
 		req.TokenID,
 		int(req.Status),
-		req.Region,
+		string(labelsJSON),
 		req.BiscuitToken,
 		req.CreatedAt.Unix(),
 		resAt,
@@ -924,14 +1000,14 @@ func (s *SQLStore) CreateEnrollmentRequest(ctx context.Context, req *EnrollmentR
 
 // GetEnrollmentRequest retrieves request by PeerID.
 func (s *SQLStore) GetEnrollmentRequest(ctx context.Context, peerID string) (*EnrollmentRequest, error) {
-	query := `SELECT id, peer_id, public_key, token_id, status, region, biscuit_token, created_at, resolved_at, resolved_by 
+	query := `SELECT id, peer_id, public_key, token_id, status, labels_json, biscuit_token, created_at, resolved_at, resolved_by 
 		FROM enrollment_requests WHERE peer_id = ?`
 	return s.scanEnrollmentRequest(s.db.QueryRowContext(ctx, s.rebind(query), peerID))
 }
 
 // GetEnrollmentRequestByID retrieves request by UUID.
 func (s *SQLStore) GetEnrollmentRequestByID(ctx context.Context, id string) (*EnrollmentRequest, error) {
-	query := `SELECT id, peer_id, public_key, token_id, status, region, biscuit_token, created_at, resolved_at, resolved_by 
+	query := `SELECT id, peer_id, public_key, token_id, status, labels_json, biscuit_token, created_at, resolved_at, resolved_by 
 		FROM enrollment_requests WHERE id = ?`
 	return s.scanEnrollmentRequest(s.db.QueryRowContext(ctx, s.rebind(query), id))
 }
@@ -944,6 +1020,7 @@ func (s *SQLStore) scanEnrollmentRequest(row scannable) (*EnrollmentRequest, err
 	var created int64
 	var resAt sql.NullInt64
 	var statusVal int
+	var labelsJSON sql.NullString
 	var req EnrollmentRequest
 
 	err := row.Scan(
@@ -952,7 +1029,7 @@ func (s *SQLStore) scanEnrollmentRequest(row scannable) (*EnrollmentRequest, err
 		&req.PublicKey,
 		&req.TokenID,
 		&statusVal,
-		&req.Region,
+		&labelsJSON,
 		&req.BiscuitToken,
 		&created,
 		&resAt,
@@ -962,6 +1039,11 @@ func (s *SQLStore) scanEnrollmentRequest(row scannable) (*EnrollmentRequest, err
 		return nil, ErrNotFound
 	} else if err != nil {
 		return nil, fmt.Errorf("failed to scan enrollment request: %w", err)
+	}
+	if labelsJSON.Valid && labelsJSON.String != "" {
+		if err := json.Unmarshal([]byte(labelsJSON.String), &req.Labels); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal labels: %w", err)
+		}
 	}
 
 	req.CreatedAt = time.Unix(created, 0)
@@ -984,7 +1066,7 @@ func (s *SQLStore) scanEnrollmentRequest(row scannable) (*EnrollmentRequest, err
 
 // ListEnrollmentRequests retrieves all requests.
 func (s *SQLStore) ListEnrollmentRequests(ctx context.Context) ([]EnrollmentRequest, error) {
-	query := `SELECT id, peer_id, public_key, token_id, status, region, biscuit_token, created_at, resolved_at, resolved_by 
+	query := `SELECT id, peer_id, public_key, token_id, status, labels_json, biscuit_token, created_at, resolved_at, resolved_by 
 		FROM enrollment_requests ORDER BY created_at DESC`
 	rows, err := s.db.QueryContext(ctx, s.rebind(query))
 	if err != nil {
@@ -1024,7 +1106,7 @@ func (s *SQLStore) UpdateEnrollmentRequest(ctx context.Context, id string, statu
 
 // ListNodes retrieves all enrolled nodes.
 func (s *SQLStore) ListNodes(ctx context.Context) ([]EnrolledNode, error) {
-	query := s.rebind(`SELECT peer_id, public_key, biscuit_token, role, enrollment_type, claims_json, owner_id, region, enrolled_at, expires_at, banned FROM nodes ORDER BY enrolled_at DESC`)
+	query := s.rebind(`SELECT peer_id, public_key, biscuit_token, role, enrollment_type, claims_json, owner_id, labels_json, enrolled_at, expires_at, banned FROM nodes ORDER BY enrolled_at DESC`)
 	rows, err := s.db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query nodes: %w", err)
@@ -1034,7 +1116,7 @@ func (s *SQLStore) ListNodes(ctx context.Context) ([]EnrolledNode, error) {
 	var nodes []EnrolledNode
 	for rows.Next() {
 		var node EnrolledNode
-		var claimsJSON, ownerID sql.NullString
+		var claimsJSON, ownerID, labelsJSON sql.NullString
 		var enrolledAtUnix, expiresAtUnix int64
 		err := rows.Scan(
 			&node.PeerID,
@@ -1044,7 +1126,7 @@ func (s *SQLStore) ListNodes(ctx context.Context) ([]EnrolledNode, error) {
 			&node.EnrollmentType,
 			&claimsJSON,
 			&ownerID,
-			&node.Region,
+			&labelsJSON,
 			&enrolledAtUnix,
 			&expiresAtUnix,
 			&node.Banned,
@@ -1057,6 +1139,11 @@ func (s *SQLStore) ListNodes(ctx context.Context) ([]EnrolledNode, error) {
 		}
 		if ownerID.Valid {
 			node.OwnerID = ownerID.String
+		}
+		if labelsJSON.Valid && labelsJSON.String != "" {
+			if err := json.Unmarshal([]byte(labelsJSON.String), &node.Labels); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal labels: %w", err)
+			}
 		}
 		node.EnrolledAt = time.UnixMilli(enrolledAtUnix)
 		node.ExpiresAt = time.UnixMilli(expiresAtUnix)

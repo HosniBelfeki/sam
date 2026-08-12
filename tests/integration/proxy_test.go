@@ -53,7 +53,7 @@ func TestSamNodeRunWithStoredIdentity(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		biscuitBytes := createMockBiscuitToken(t, "12D3KooWRHDt3Ajd1t7YikBXyK2Uw1wrJwEX88XbwJhHh1XtBNkx", priv, "sam:role:node")
+		biscuitBytes := createMockBiscuitToken(t, "12D3KooWRHDt3Ajd1t7YikBXyK2Uw1wrJwEX88XbwJhHh1XtBNkx", priv, "sam:role:node", nil)
 		if err := b.Put([]byte("identity_biscuit"), biscuitBytes); err != nil {
 			return err
 		}

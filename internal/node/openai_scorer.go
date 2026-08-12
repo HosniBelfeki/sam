@@ -15,6 +15,7 @@
 package node
 
 import (
+	"fmt"
 	"net/http"
 	"sort"
 	"strings"
@@ -30,38 +31,52 @@ const providerBackoff = 15 * time.Second
 const (
 	reasonPeerRevoked      = "peer_revoked"
 	reasonProviderBackoff  = "provider_backoff"
-	reasonRegionMismatch   = "region_mismatch"
-	reasonRegionUnattested = "region_unattested"
+	reasonLabelMismatch    = "label_mismatch"
+	reasonLabelUnattested  = "label_unattested"
 	reasonNoEligible       = "no_eligible_provider"
 	reasonAttemptsExceeded = "attempts_exceeded"
 )
 
-// parseRequiredRegions splits the X-Sam-Required-Region header value into
-// canonical continent codes; any invalid code rejects the whole request.
-func parseRequiredRegions(h string) ([]string, error) {
+// parseRequiredLabels splits the X-Sam-Required-Labels header value
+// (comma-separated "key=value" pairs) into a label map; any malformed entry
+// rejects the whole request.
+func parseRequiredLabels(h string) (map[string]string, error) {
 	if h == "" {
 		return nil, nil
 	}
-	var out []string
+	var out map[string]string
 	for _, part := range strings.Split(h, ",") {
-		p := api.NormalizeRegion(part)
-		if p == "" {
+		part = strings.TrimSpace(part)
+		if part == "" {
 			continue
 		}
-		if err := api.ValidateRegion(p); err != nil {
+		k, v, ok := strings.Cut(part, "=")
+		if !ok {
+			return nil, fmt.Errorf("invalid label %q: expected key=value", part)
+		}
+		k, v = strings.TrimSpace(k), strings.TrimSpace(v)
+		if err := api.ValidateLabelKey(k); err != nil {
 			return nil, err
 		}
-		out = append(out, p)
+		if err := api.ValidateLabelValue(v); err != nil {
+			return nil, err
+		}
+		if out == nil {
+			out = make(map[string]string)
+		}
+		if _, exists := out[k]; exists {
+			return nil, fmt.Errorf("duplicate label key %q", k)
+		}
+		out[k] = v
 	}
 	return out, nil
 }
 
-// regionAllowed reports whether a provider's claim satisfies any required
-// region (hierarchical, see api.RegionMatches).
-func regionAllowed(required []string, claimed string) bool {
-	claimed = api.NormalizeRegion(claimed)
-	for _, req := range required {
-		if api.RegionMatches(req, claimed) {
+// labelsAllowed reports whether a provider's claimed labels satisfy any
+// required key=value pair (exact match).
+func labelsAllowed(required, claimed map[string]string) bool {
+	for k, v := range required {
+		if claimed[k] == v {
 			return true
 		}
 	}
@@ -72,26 +87,26 @@ func regionAllowed(required []string, claimed string) bool {
 // locals first, then remotes by ascending advertised load. Providers with no
 // load information look idle — without telemetry this degrades to rotation
 // among equals. Every exclusion is accounted per reason.
-func (f *openAIFacade) rankProviders(providers []modelProvider, requiredRegions []string) []modelProvider {
+func (f *openAIFacade) rankProviders(providers []modelProvider, requiredLabels map[string]string) []modelProvider {
 	var locals, remotes []modelProvider
 	for _, p := range providers {
-		region := p.region
-		if p.peerID == "" && f.localRegion != nil {
-			region = f.localRegion()
-		} else if region == "" && p.peerID != "" && f.peerRegion != nil {
+		labels := p.labels
+		if p.peerID == "" && f.localLabels != nil {
+			labels = f.localLabels()
+		} else if len(labels) == 0 && p.peerID != "" && f.peerLabels != nil {
 			// Registry-probed providers carry no labels; the gossip view may
-			// still know the peer's claim.
-			region = f.peerRegion(p.peerID)
+			// still know the peer's claims.
+			labels = f.peerLabels(p.peerID)
 		}
-		// Labels are routing hints: a remote whose own claim mismatches the
+		// Labels are routing hints: a remote whose own claims mismatch the
 		// requirement is dropped early, but an unlabeled remote proceeds to
-		// the region gate, the authoritative fail-closed check on the
-		// provider's biscuit-attested region (see region_gate.go). Locals
-		// have no gate, so their declared region stays fail-closed here.
-		if len(requiredRegions) > 0 {
-			knownMismatch := region != "" && !regionAllowed(requiredRegions, region)
-			if knownMismatch || (p.peerID == "" && !regionAllowed(requiredRegions, region)) {
-				recordFacadeRejection(reasonRegionMismatch)
+		// the label gate, the authoritative fail-closed check on the
+		// provider's biscuit-attested labels (see labels_gate.go). Locals
+		// have no gate, so their declared labels stay fail-closed here.
+		if len(requiredLabels) > 0 {
+			knownMismatch := len(labels) > 0 && !labelsAllowed(requiredLabels, labels)
+			if knownMismatch || (p.peerID == "" && !labelsAllowed(requiredLabels, labels)) {
+				recordFacadeRejection(reasonLabelMismatch)
 				continue
 			}
 		}

@@ -379,11 +379,11 @@ type EnrollRequest struct {
 	PeerId        string                 `protobuf:"bytes,2,opt,name=peer_id,json=peerId,proto3" json:"peer_id,omitempty"`
 	PublicKey     []byte                 `protobuf:"bytes,3,opt,name=public_key,json=publicKey,proto3" json:"public_key,omitempty"`
 	RequestedRole string                 `protobuf:"bytes,4,opt,name=requested_role,json=requestedRole,proto3" json:"requested_role,omitempty"`
-	// Operator-declared region claim (CONTINENT[-COUNTRY[-ZONE]], see
-	// api/region.go). Validated fail-closed by the control plane and, once
-	// attested by the enrollment flow's gates, minted as signed region()
-	// facts in the biscuit. Empty means no claim.
-	Region        string `protobuf:"bytes,5,opt,name=region,proto3" json:"region,omitempty"`
+	// Operator-declared labels (e.g. key "region", see api/labels.go).
+	// Validated fail-closed by the control plane and, once attested by the
+	// enrollment flow's gates, minted as signed label() facts in the
+	// biscuit. Empty means no claims.
+	Labels        map[string]string `protobuf:"bytes,5,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -446,11 +446,11 @@ func (x *EnrollRequest) GetRequestedRole() string {
 	return ""
 }
 
-func (x *EnrollRequest) GetRegion() string {
+func (x *EnrollRequest) GetLabels() map[string]string {
 	if x != nil {
-		return x.Region
+		return x.Labels
 	}
-	return ""
+	return nil
 }
 
 type EnrollResponse struct {
@@ -579,9 +579,9 @@ type BootstrapEnrollRequest struct {
 	PeerId         string                 `protobuf:"bytes,2,opt,name=peer_id,json=peerId,proto3" json:"peer_id,omitempty"`
 	PublicKey      []byte                 `protobuf:"bytes,3,opt,name=public_key,json=publicKey,proto3" json:"public_key,omitempty"`
 	RequestedRole  string                 `protobuf:"bytes,4,opt,name=requested_role,json=requestedRole,proto3" json:"requested_role,omitempty"`
-	// Operator-declared region claim; the admin approving the enrollment
-	// attests it (see EnrollRequest.region).
-	Region        string `protobuf:"bytes,5,opt,name=region,proto3" json:"region,omitempty"`
+	// Operator-declared labels; the admin approving the enrollment attests
+	// them (see EnrollRequest.labels).
+	Labels        map[string]string `protobuf:"bytes,5,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -644,11 +644,11 @@ func (x *BootstrapEnrollRequest) GetRequestedRole() string {
 	return ""
 }
 
-func (x *BootstrapEnrollRequest) GetRegion() string {
+func (x *BootstrapEnrollRequest) GetLabels() map[string]string {
 	if x != nil {
-		return x.Region
+		return x.Labels
 	}
-	return ""
+	return nil
 }
 
 type BootstrapEnrollResponse struct {
@@ -1025,7 +1025,7 @@ type ServiceAnnounce struct {
 	// Routing keys served by this service: model IDs for inference,
 	// tool names for MCP.
 	Keys []string `protobuf:"bytes,4,rep,name=keys,proto3" json:"keys,omitempty"`
-	// Operator-declared labels (e.g. LabelRegion). Operator claims always
+	// Operator-declared labels (e.g. "region"). Operator claims always
 	// take precedence over runtime-derived values.
 	Labels map[string]string `protobuf:"bytes,5,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	// Runtime load hints; zero values mean unknown.
@@ -1912,14 +1912,17 @@ const file_api_sam_proto_rawDesc = "" +
 	"\n" +
 	"\x06BANNED\x10\x00\x12\x10\n" +
 	"\fKEY_ROTATION\x10\x01\x12\x11\n" +
-	"\rPOLICY_UPDATE\x10\x02\"\x98\x01\n" +
+	"\rPOLICY_UPDATE\x10\x02\"\xf6\x01\n" +
 	"\rEnrollRequest\x12\x10\n" +
 	"\x03jwt\x18\x01 \x01(\tR\x03jwt\x12\x17\n" +
 	"\apeer_id\x18\x02 \x01(\tR\x06peerId\x12\x1d\n" +
 	"\n" +
 	"public_key\x18\x03 \x01(\fR\tpublicKey\x12%\n" +
-	"\x0erequested_role\x18\x04 \x01(\tR\rrequestedRole\x12\x16\n" +
-	"\x06region\x18\x05 \x01(\tR\x06region\"\xde\x01\n" +
+	"\x0erequested_role\x18\x04 \x01(\tR\rrequestedRole\x129\n" +
+	"\x06labels\x18\x05 \x03(\v2!.sam.v1.EnrollRequest.LabelsEntryR\x06labels\x1a9\n" +
+	"\vLabelsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xde\x01\n" +
 	"\x0eEnrollResponse\x12#\n" +
 	"\rbiscuit_token\x18\x01 \x01(\fR\fbiscuitToken\x12#\n" +
 	"\rerror_message\x18\x02 \x01(\tR\ferrorMessage\x127\n" +
@@ -1929,14 +1932,17 @@ const file_api_sam_proto_rawDesc = "" +
 	"expiration\x18\x05 \x01(\x03R\n" +
 	"expiration\"2\n" +
 	"\x17EnrollmentStatusRequest\x12\x17\n" +
-	"\apeer_id\x18\x01 \x01(\tR\x06peerId\"\xb8\x01\n" +
+	"\apeer_id\x18\x01 \x01(\tR\x06peerId\"\x9f\x02\n" +
 	"\x16BootstrapEnrollRequest\x12'\n" +
 	"\x0fbootstrap_token\x18\x01 \x01(\tR\x0ebootstrapToken\x12\x17\n" +
 	"\apeer_id\x18\x02 \x01(\tR\x06peerId\x12\x1d\n" +
 	"\n" +
 	"public_key\x18\x03 \x01(\fR\tpublicKey\x12%\n" +
-	"\x0erequested_role\x18\x04 \x01(\tR\rrequestedRole\x12\x16\n" +
-	"\x06region\x18\x05 \x01(\tR\x06region\"\xcd\x02\n" +
+	"\x0erequested_role\x18\x04 \x01(\tR\rrequestedRole\x12B\n" +
+	"\x06labels\x18\x05 \x03(\v2*.sam.v1.BootstrapEnrollRequest.LabelsEntryR\x06labels\x1a9\n" +
+	"\vLabelsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xcd\x02\n" +
 	"\x17BootstrapEnrollResponse\x120\n" +
 	"\x06status\x18\x01 \x01(\x0e2\x18.sam.v1.EnrollmentStatusR\x06status\x12#\n" +
 	"\rbiscuit_token\x18\x02 \x01(\fR\fbiscuitToken\x122\n" +
@@ -2055,7 +2061,7 @@ func file_api_sam_proto_rawDescGZIP() []byte {
 }
 
 var file_api_sam_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_api_sam_proto_msgTypes = make([]protoimpl.MessageInfo, 29)
+var file_api_sam_proto_msgTypes = make([]protoimpl.MessageInfo, 31)
 var file_api_sam_proto_goTypes = []any{
 	(EnrollmentStatus)(0),              // 0: sam.v1.EnrollmentStatus
 	(ServiceType)(0),                   // 1: sam.v1.ServiceType
@@ -2087,27 +2093,31 @@ var file_api_sam_proto_goTypes = []any{
 	(*TokenRefreshResponse)(nil),       // 27: sam.v1.TokenRefreshResponse
 	(*TokenRevokeRequest)(nil),         // 28: sam.v1.TokenRevokeRequest
 	(*TokenRevokeResponse)(nil),        // 29: sam.v1.TokenRevokeResponse
-	nil,                                // 30: sam.v1.CommandBackend.EnvEntry
-	nil,                                // 31: sam.v1.ServiceAnnounce.LabelsEntry
+	nil,                                // 30: sam.v1.EnrollRequest.LabelsEntry
+	nil,                                // 31: sam.v1.BootstrapEnrollRequest.LabelsEntry
+	nil,                                // 32: sam.v1.CommandBackend.EnvEntry
+	nil,                                // 33: sam.v1.ServiceAnnounce.LabelsEntry
 }
 var file_api_sam_proto_depIdxs = []int32{
 	2,  // 0: sam.v1.MeshEvent.type:type_name -> sam.v1.MeshEvent.Type
-	0,  // 1: sam.v1.BootstrapEnrollResponse.status:type_name -> sam.v1.EnrollmentStatus
-	1,  // 2: sam.v1.ServiceInfo.type:type_name -> sam.v1.ServiceType
-	30, // 3: sam.v1.CommandBackend.env:type_name -> sam.v1.CommandBackend.EnvEntry
-	11, // 4: sam.v1.RegisterServiceRequest.service:type_name -> sam.v1.ServiceInfo
-	12, // 5: sam.v1.RegisterServiceRequest.command:type_name -> sam.v1.CommandBackend
-	1,  // 6: sam.v1.ServiceAnnounce.type:type_name -> sam.v1.ServiceType
-	31, // 7: sam.v1.ServiceAnnounce.labels:type_name -> sam.v1.ServiceAnnounce.LabelsEntry
-	19, // 8: sam.v1.PolicyConfigGetResponse.roles:type_name -> sam.v1.PolicyRole
-	20, // 9: sam.v1.PolicyConfigGetResponse.bindings:type_name -> sam.v1.PolicyBinding
-	19, // 10: sam.v1.PolicyConfigUpdateRequest.roles:type_name -> sam.v1.PolicyRole
-	20, // 11: sam.v1.PolicyConfigUpdateRequest.bindings:type_name -> sam.v1.PolicyBinding
-	12, // [12:12] is the sub-list for method output_type
-	12, // [12:12] is the sub-list for method input_type
-	12, // [12:12] is the sub-list for extension type_name
-	12, // [12:12] is the sub-list for extension extendee
-	0,  // [0:12] is the sub-list for field type_name
+	30, // 1: sam.v1.EnrollRequest.labels:type_name -> sam.v1.EnrollRequest.LabelsEntry
+	31, // 2: sam.v1.BootstrapEnrollRequest.labels:type_name -> sam.v1.BootstrapEnrollRequest.LabelsEntry
+	0,  // 3: sam.v1.BootstrapEnrollResponse.status:type_name -> sam.v1.EnrollmentStatus
+	1,  // 4: sam.v1.ServiceInfo.type:type_name -> sam.v1.ServiceType
+	32, // 5: sam.v1.CommandBackend.env:type_name -> sam.v1.CommandBackend.EnvEntry
+	11, // 6: sam.v1.RegisterServiceRequest.service:type_name -> sam.v1.ServiceInfo
+	12, // 7: sam.v1.RegisterServiceRequest.command:type_name -> sam.v1.CommandBackend
+	1,  // 8: sam.v1.ServiceAnnounce.type:type_name -> sam.v1.ServiceType
+	33, // 9: sam.v1.ServiceAnnounce.labels:type_name -> sam.v1.ServiceAnnounce.LabelsEntry
+	19, // 10: sam.v1.PolicyConfigGetResponse.roles:type_name -> sam.v1.PolicyRole
+	20, // 11: sam.v1.PolicyConfigGetResponse.bindings:type_name -> sam.v1.PolicyBinding
+	19, // 12: sam.v1.PolicyConfigUpdateRequest.roles:type_name -> sam.v1.PolicyRole
+	20, // 13: sam.v1.PolicyConfigUpdateRequest.bindings:type_name -> sam.v1.PolicyBinding
+	14, // [14:14] is the sub-list for method output_type
+	14, // [14:14] is the sub-list for method input_type
+	14, // [14:14] is the sub-list for extension type_name
+	14, // [14:14] is the sub-list for extension extendee
+	0,  // [0:14] is the sub-list for field type_name
 }
 
 func init() { file_api_sam_proto_init() }
@@ -2125,7 +2135,7 @@ func file_api_sam_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_api_sam_proto_rawDesc), len(file_api_sam_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   29,
+			NumMessages:   31,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

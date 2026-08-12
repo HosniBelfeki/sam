@@ -586,8 +586,8 @@ func TestWithBiscuitAuth_MutualBiscuit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Server identity: control-plane-minted with an attested region.
-	serverIdentity, err := identity.MintBootstrapBiscuitToken(priv, serverPeer, api.RoleNode, time.Now().Add(time.Hour), nil, "EU-DE")
+	// Server identity: control-plane-minted with an attested label.
+	serverIdentity, err := identity.MintBootstrapBiscuitToken(priv, serverPeer, api.RoleNode, time.Now().Add(time.Hour), nil, map[string]string{"region": "eu-de"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -633,12 +633,12 @@ func TestWithBiscuitAuth_MutualBiscuit(t *testing.T) {
 		t.Error("mutual auth response must carry the server's identity biscuit")
 	}
 
-	// The returned biscuit satisfies the consumer-side region gate.
-	if err := node.checkPeerRegions(resp.Biscuit, serverPeer, []string{"EU"}); err != nil {
-		t.Errorf("region gate rejected the mutual-auth biscuit: %v", err)
+	// The returned biscuit satisfies the consumer-side label gate.
+	if err := node.checkPeerLabels(resp.Biscuit, serverPeer, map[string]string{"region": "eu-de"}); err != nil {
+		t.Errorf("label gate rejected the mutual-auth biscuit: %v", err)
 	}
-	if err := node.checkPeerRegions(resp.Biscuit, serverPeer, []string{"NA"}); err == nil {
-		t.Error("region gate must reject a non-matching requirement")
+	if err := node.checkPeerLabels(resp.Biscuit, serverPeer, map[string]string{"region": "na-us"}); err == nil {
+		t.Error("label gate must reject a non-matching requirement")
 	}
 	<-done
 }

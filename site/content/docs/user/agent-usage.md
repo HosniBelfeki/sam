@@ -107,6 +107,13 @@ straight through untouched and is never used to authenticate to the node itself.
 > proxy (`/sam/<peer>/...`) does **not** accept this fallback — there,
 > `Authorization` is reserved exclusively for the destination's own credential.
 
+### OpenAI Facade & Inference Connectivity
+
+SAM nodes expose two ways for AI clients and OpenAI SDKs to interact with `type: inference` services across the mesh:
+
+1. **OpenAI Facade Interface (Recommended)**: Point standard OpenAI SDKs to `base_url="http://127.0.0.1:8080/v1"`. The facade aggregates available mesh models on `/v1/models` and handles seamless load balancing and failover for `/v1/chat/completions`.
+2. **Raw Egress Proxy Interface**: Power-users who want to explicitly route to a specific peer's inference backend use `/sam/{peer}/inference/{service}`. When targeting an OpenAI-compatible service via raw proxy, ensure `base_url` includes the explicit `/v1` namespace suffix (e.g. `http://127.0.0.1:8080/sam/{peer}/inference/{service}/v1`).
+
 ### Specific Integration Guides
 Explore our step-by-step guides for integrating your node with popular agent clients:
 *   🚀 **[Google Gemini AI Agent](../integrations/gemini.md)**: Connect using Python scripts and the google-genai SDK.

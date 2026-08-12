@@ -26,6 +26,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -254,7 +255,7 @@ func (r *Router) Start() error {
 	r.EventTopic = topic
 
 	// Setup authentication stream handler
-	hostNode.SetStreamHandler(api.AuthProtocolID, r.HandleAuthHandshake)
+	hostNode.SetStreamHandler(api.AuthProtocolID, recoverStreamHandler("AuthHandshake", r.HandleAuthHandshake))
 
 	// Clean authenticated status on peer disconnection
 	hostNode.Network().Notify(&network.NotifyBundle{
@@ -820,6 +821,20 @@ func (r *Router) connectBootstrapRouters() {
 				cancel()
 			}
 		}
+	}
+}
+
+// recoverStreamHandler isolates a panic while processing untrusted peer bytes
+// to the single stream, resetting it instead of crashing the whole router.
+func recoverStreamHandler(name string, next network.StreamHandler) network.StreamHandler {
+	return func(s network.Stream) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				logger.Errorf("[%s] panic recovered from peer %s: %v\n%s", name, s.Conn().RemotePeer(), rec, debug.Stack())
+				_ = s.Reset()
+			}
+		}()
+		next(s)
 	}
 }
 

@@ -136,7 +136,7 @@ type SamNode struct {
 	mu                   sync.Mutex
 	LocalPolicy          *NodeConfigComplete
 	revokedPeers         *lru.Cache[string, int64]
-	peerRegionGate       *lru.Cache[string, time.Time]
+	peerLabelGate        *lru.Cache[string, time.Time]
 	authPeers            sync.Map
 	trustedKeys          []TrustedKey
 	keysMu               sync.RWMutex
@@ -264,9 +264,9 @@ func NewSamNode(cfg Options) (*SamNode, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create revocation cache: %w", err)
 	}
-	node.peerRegionGate, err = lru.New[string, time.Time](regionGateCacheSize)
+	node.peerLabelGate, err = lru.New[string, time.Time](labelGateCacheSize)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create region gate cache: %w", err)
+		return nil, fmt.Errorf("failed to create label gate cache: %w", err)
 	}
 
 	return node, nil
@@ -527,10 +527,10 @@ func (n *SamNode) Start(ctx context.Context) error {
 	go n.startDiscovery(ctx, n.config.MeshID, interval)
 
 	// Layer 3: Open the Lobby Door (Auth Protocol is bypassed by Layer 4)
-	n.Host.SetStreamHandler(api.AuthProtocolID, n.HandleAuthHandshake)
+	n.Host.SetStreamHandler(api.AuthProtocolID, recoverStreamHandler("AuthHandshake", n.HandleAuthHandshake))
 
 	// Layer 3: Wire up MCP handler wrapped in middleware
-	n.Host.SetStreamHandler(api.MCPProtocolID, n.WithBiscuitAuth(n.HandleMCPStream))
+	n.Host.SetStreamHandler(api.MCPProtocolID, recoverStreamHandler("MCP", n.WithBiscuitAuth(n.HandleMCPStream)))
 
 	// Start key pruning
 	n.startKeyPruning(ctx, n.config.KeyGracePeriod)
@@ -1799,6 +1799,9 @@ func (n *SamNode) StartIngressServer(ctx context.Context) error {
 	}
 
 	server := &http.Server{
+		// Bound header-read time only: proxied backend responses can stream.
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			rc := &readCloserWithCount{ReadCloser: r.Body}
 			r.Body = rc

@@ -198,7 +198,7 @@ func (n *SamNode) InteractiveLogin(ctx context.Context, authURL, tokenURL, clien
 			}
 		})
 
-		srv = &http.Server{Handler: mux}
+		srv = &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 		go func() {
 			if err := srv.Serve(listener); err != nil && err != http.ErrServerClosed {
 				select {

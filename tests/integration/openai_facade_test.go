@@ -48,7 +48,7 @@ func TestOpenAIFacadeCUJ(t *testing.T) {
 		"--listen", "/ip4/127.0.0.1/udp/0/quic-v1",
 		"--listen", "/ip4/127.0.0.1/tcp/0",
 		"--discovery-interval", "100ms",
-		"--region", "eu", // exercise the operator region claim end to end
+		"--labels", "region=eu", // exercise the operator label claim end to end
 	)
 	t.Log("Starting Node B (consumer)...")
 	_ = startBackgroundNode(t, nodeBin, hubAddr, homeB,
@@ -133,19 +133,19 @@ func TestOpenAIFacadeCUJ(t *testing.T) {
 		t.Fatalf("unexpected completion: %s", string(body))
 	}
 
-	// CUJ step 2b: a region requirement is enforced end to end — the provider
-	// declared "eu" at enrollment, so its biscuit carries attested region
-	// facts and the consumer's region gate admits it. The region label
-	// arrives via interest-scoped gossip, so poll until it propagates.
+	// CUJ step 2b: a label requirement is enforced end to end — the provider
+	// declared region=eu at enrollment, so its biscuit carries an attested
+	// label fact and the consumer's label gate admits it. The region gossip
+	// hint arrives via interest-scoped gossip, so poll until it propagates.
 	deadline := time.Now().Add(30 * time.Second)
 	for {
 		req, _ = http.NewRequest("POST", "http://"+apiAddrB+"/v1/chat/completions", strings.NewReader(reqBody))
 		req.Header.Set("Authorization", "Bearer "+apiToken)
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set(api.HeaderSamRequiredRegion, "EU")
+		req.Header.Set(api.HeaderSamRequiredLabels, "region=eu")
 		respEU, err := http.DefaultClient.Do(req)
 		if err != nil {
-			t.Fatalf("region-constrained completion request failed: %v", err)
+			t.Fatalf("label-constrained completion request failed: %v", err)
 		}
 		euBody, _ := io.ReadAll(respEU.Body)
 		_ = respEU.Body.Close()
@@ -153,23 +153,23 @@ func TestOpenAIFacadeCUJ(t *testing.T) {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("region-constrained completion status: got %d, body: %s", respEU.StatusCode, string(euBody))
+			t.Fatalf("label-constrained completion status: got %d, body: %s", respEU.StatusCode, string(euBody))
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
 
-	// A finer requirement than the provider's claim fails closed.
+	// A requirement that mismatches the provider's declared label fails closed.
 	req, _ = http.NewRequest("POST", "http://"+apiAddrB+"/v1/chat/completions", strings.NewReader(reqBody))
 	req.Header.Set("Authorization", "Bearer "+apiToken)
-	req.Header.Set(api.HeaderSamRequiredRegion, "EU-DE")
+	req.Header.Set(api.HeaderSamRequiredLabels, "region=us-east-1")
 	respDE, err := http.DefaultClient.Do(req)
 	if err != nil {
-		t.Fatalf("finer-region completion request failed: %v", err)
+		t.Fatalf("mismatched-label completion request failed: %v", err)
 	}
 	defer func() { _ = respDE.Body.Close() }()
 	deBody, _ := io.ReadAll(respDE.Body)
 	if respDE.StatusCode != http.StatusServiceUnavailable {
-		t.Fatalf("finer region must fail closed: got %d, body: %s", respDE.StatusCode, string(deBody))
+		t.Fatalf("mismatched label must fail closed: got %d, body: %s", respDE.StatusCode, string(deBody))
 	}
 
 	// CUJ step 3: unknown models fail with an OpenAI-style error.

@@ -198,16 +198,17 @@ const (
 	// Example Datalog: service("mcp", "calculator")
 	FactService = "service"
 
-	// FactRegion is the control-plane-attested jurisdiction of the token's node,
-	// following the hierarchical model of region.go. The control plane mints one
-	// fact per hierarchy level (RegionPrefixes), so a requirement is a single
-	// exact match: a node attested as "EU-DE" carries region("EU") and
-	// region("EU-DE"), satisfying `check if region("EU")` but never a finer
-	// requirement it cannot guarantee. Distinct from LabelRegion, the
-	// unauthenticated gossip routing hint.
-	// Contains: biscuit.String(regionPrefix)
-	// Example Datalog: check if region("EU")
-	FactRegion = "region"
+	// FactLabel is a control-plane-attested key=value label on the token's
+	// node (see api/labels.go). The control plane mints one fact per
+	// declared label, so a requirement is a single exact match: a node
+	// attested with region="us-east-1" carries label("region", "us-east-1"),
+	// satisfying `check if label("region", "us-east-1")` only — composition
+	// across values is left entirely to the operator (attest as many labels
+	// as needed). Distinct from the unauthenticated gossip routing hint
+	// carried in ServiceAnnounce.labels.
+	// Contains: biscuit.String(key), biscuit.String(value)
+	// Example Datalog: check if label("region", "us-east-1")
+	FactLabel = "label"
 
 	// FactTime defines the current system time injected during evaluation.
 	// Contains: biscuit.Date(currentTime)
@@ -431,36 +432,51 @@ func BuildTargetDatalogFact(targetStr string) biscuit.Fact {
 	}}
 }
 
-// RegionFacts materializes a region claim as one Datalog fact per hierarchy
-// level (see FactRegion and RegionPrefixes). An empty region returns nil.
-func RegionFacts(region string) []biscuit.Fact {
-	prefixes := RegionPrefixes(region)
-	if len(prefixes) == 0 {
+// LabelFacts materializes a label set as one Datalog fact per key=value
+// pair (see FactLabel). Keys are sorted for deterministic fact ordering. An
+// empty set returns nil.
+func LabelFacts(labels map[string]string) []biscuit.Fact {
+	if len(labels) == 0 {
 		return nil
 	}
-	facts := make([]biscuit.Fact, 0, len(prefixes))
-	for _, p := range prefixes {
+	keys := make([]string, 0, len(labels))
+	for k := range labels {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	facts := make([]biscuit.Fact, 0, len(labels))
+	for _, k := range keys {
 		facts = append(facts, biscuit.Fact{Predicate: biscuit.Predicate{
-			Name: FactRegion,
-			IDs:  []biscuit.Term{biscuit.String(p)},
+			Name: FactLabel,
+			IDs:  []biscuit.Term{biscuit.String(k), biscuit.String(labels[k])},
 		}})
 	}
 	return facts
 }
 
-// RegionCheck compiles required regions (canonical, pre-validated with
-// ValidateRegion) into a single fail-closed check satisfied when the token
-// carries any of them: `check if region("EU") or region("NA-US")`.
-func RegionCheck(required []string) (biscuit.Check, error) {
+// LabelCheck compiles a required label set (canonical, pre-validated with
+// ValidateLabels) into a single fail-closed check satisfied when the token
+// carries any of them: `check if label("region", "us-east-1") or
+// label("team", "platform")`.
+func LabelCheck(required map[string]string) (biscuit.Check, error) {
 	if len(required) == 0 {
-		return biscuit.Check{}, fmt.Errorf("no required regions")
+		return biscuit.Check{}, fmt.Errorf("no required labels")
 	}
+	keys := make([]string, 0, len(required))
+	for k := range required {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
 	clauses := make([]string, 0, len(required))
-	for _, r := range required {
-		if err := ValidateRegion(r); err != nil {
+	for _, k := range keys {
+		if err := ValidateLabelKey(k); err != nil {
 			return biscuit.Check{}, err
 		}
-		clauses = append(clauses, fmt.Sprintf("%s(%q)", FactRegion, NormalizeRegion(r)))
+		v := required[k]
+		if err := ValidateLabelValue(v); err != nil {
+			return biscuit.Check{}, err
+		}
+		clauses = append(clauses, fmt.Sprintf("%s(%q, %q)", FactLabel, k, v))
 	}
 	return parser.FromStringCheck("check if " + strings.Join(clauses, " or "))
 }

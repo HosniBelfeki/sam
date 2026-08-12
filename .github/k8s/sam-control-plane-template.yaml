@@ -52,7 +52,10 @@ spec:
         - name: POSTGRES_USER
           value: sam
         - name: POSTGRES_PASSWORD
-          value: sam-secret-password
+          valueFrom:
+            secretKeyRef:
+              name: sam-control-plane-secret-${ENV_NAME}
+              key: db-password
         - name: PGDATA
           value: /var/lib/postgresql/data/pgdata
         ports:
@@ -99,6 +102,11 @@ spec:
               name: sam-control-plane-secret-${ENV_NAME}
               key: admin-token
               optional: true
+        - name: SAM_DB_DSN
+          valueFrom:
+            secretKeyRef:
+              name: sam-control-plane-secret-${ENV_NAME}
+              key: db-dsn
         ports:
         - containerPort: 8080
           protocol: TCP
@@ -120,7 +128,6 @@ spec:
         args:
         - "--bind-address=0.0.0.0:8080"
         - "--db-driver=postgres"
-        - "--db-dsn=postgres://sam:sam-secret-password@sam-db-${ENV_NAME}:5432/sam_mesh?sslmode=disable"
         - "--issuer=https://auth.sam-mesh.dev,https://container.googleapis.com/v1/projects/${GCP_PROJECT_ID}/locations/${CLUSTER_REGION}/clusters/${CLUSTER_NAME}"
         - "--allowed-audiences=sam-mesh-audience,sam-control-plane-audience"
         - "--auto-approve-enrollment"

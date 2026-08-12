@@ -254,6 +254,9 @@ func (g *Gateway) Serve(listener net.Listener) error {
 
 	server := &http.Server{
 		Handler: proxy,
+		// Bound header-read time only: proxied backend responses can stream.
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	var serverErr error

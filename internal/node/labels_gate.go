@@ -18,7 +18,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"fmt"
-	"strings"
+	"sort"
 	"time"
 
 	"github.com/biscuit-auth/biscuit-go/v2"
@@ -30,50 +30,65 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// The region gate is the consumer-side enforcement point for region
+// The label gate is the consumer-side enforcement point for label
 // requirements: gossip labels only rank providers, this gate verifies the
-// provider's control-plane-attested region() facts (api.FactRegion) before
+// provider's control-plane-attested label() facts (api.FactLabel) before
 // any request data leaves this node. Fail-closed: a provider that returns no
 // biscuit or lacks a matching fact is rejected.
 const (
-	regionGateCacheSize = 1024
-	// regionGateTTL bounds how long a positive verification verdict is
+	labelGateCacheSize = 1024
+	// labelGateTTL bounds how long a positive verification verdict is
 	// reused before the provider's biscuit is fetched and checked again.
-	regionGateTTL = 5 * time.Minute
-	// regionGateDialTimeout bounds the biscuit-fetch handshake.
-	regionGateDialTimeout = 10 * time.Second
+	labelGateTTL = 5 * time.Minute
+	// labelGateDialTimeout bounds the biscuit-fetch handshake.
+	labelGateDialTimeout = 10 * time.Second
 )
 
-// VerifyPeerRegions ensures the peer holds a control-plane-attested region
-// satisfying any of the required regions (canonical, pre-validated). A nil
-// requirement passes without network traffic. Positive verdicts are cached.
-func (n *SamNode) VerifyPeerRegions(ctx context.Context, peerID peer.ID, required []string) error {
+// labelGateKey builds a deterministic cache key from a required label set.
+func labelGateKey(peerID peer.ID, required map[string]string) string {
+	keys := make([]string, 0, len(required))
+	for k := range required {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	key := peerID.String()
+	for _, k := range keys {
+		key += "|" + k + "=" + required[k]
+	}
+	return key
+}
+
+// VerifyPeerLabels ensures the peer holds control-plane-attested labels
+// satisfying any of the required key=value pairs (canonical, pre-validated).
+// A nil/empty requirement passes without network traffic. Positive verdicts
+// are cached.
+func (n *SamNode) VerifyPeerLabels(ctx context.Context, peerID peer.ID, required map[string]string) error {
 	if len(required) == 0 {
 		return nil
 	}
-	key := peerID.String() + "|" + strings.Join(required, ",")
-	if until, ok := n.peerRegionGate.Get(key); ok && time.Now().Before(until) {
+	key := labelGateKey(peerID, required)
+	if until, ok := n.peerLabelGate.Get(key); ok && time.Now().Before(until) {
 		return nil
 	}
 
 	providerBiscuit, err := n.fetchPeerBiscuit(ctx, peerID)
 	if err != nil {
-		return fmt.Errorf("provider %s region unverifiable: %w", peerID, err)
+		return fmt.Errorf("provider %s labels unverifiable: %w", peerID, err)
 	}
-	if err := n.checkPeerRegions(providerBiscuit, peerID, required); err != nil {
+	if err := n.checkPeerLabels(providerBiscuit, peerID, required); err != nil {
 		return err
 	}
 
-	n.peerRegionGate.Add(key, time.Now().Add(regionGateTTL))
+	n.peerLabelGate.Add(key, time.Now().Add(labelGateTTL))
 	return nil
 }
 
-// checkPeerRegions verifies the provider's biscuit (control-plane signature,
-// expiry, binding to peerID) and evaluates the compiled region requirement
+// checkPeerLabels verifies the provider's biscuit (control-plane signature,
+// expiry, binding to peerID) and evaluates the compiled label requirement
 // against its attested facts.
-func (n *SamNode) checkPeerRegions(providerBiscuit []byte, peerID peer.ID, required []string) error {
+func (n *SamNode) checkPeerLabels(providerBiscuit []byte, peerID peer.ID, required map[string]string) error {
 	if len(providerBiscuit) == 0 {
-		return fmt.Errorf("provider %s returned no identity biscuit; cannot attest required region %v", peerID, required)
+		return fmt.Errorf("provider %s returned no identity biscuit; cannot attest required labels %v", peerID, required)
 	}
 
 	n.keysMu.RLock()
@@ -99,14 +114,14 @@ func (n *SamNode) checkPeerRegions(providerBiscuit []byte, peerID peer.ID, requi
 	if err != nil {
 		return fmt.Errorf("provider %s authorizer instantiation failed: %w", peerID, err)
 	}
-	check, err := api.RegionCheck(required)
+	check, err := api.LabelCheck(required)
 	if err != nil {
 		return err
 	}
 	authorizer.AddCheck(check)
 	authorizer.AddPolicy(api.AllowIfTruePolicy)
 	if err := authorizer.Authorize(); err != nil {
-		return fmt.Errorf("provider %s has no attested region matching %v: %w", peerID, required, err)
+		return fmt.Errorf("provider %s has no attested label matching %v: %w", peerID, required, err)
 	}
 	return nil
 }
@@ -119,14 +134,14 @@ func (n *SamNode) fetchPeerBiscuit(ctx context.Context, peerID peer.ID) ([]byte,
 		return nil, fmt.Errorf("missing node identity")
 	}
 
-	dialCtx, cancel := context.WithTimeout(ctx, regionGateDialTimeout)
+	dialCtx, cancel := context.WithTimeout(ctx, labelGateDialTimeout)
 	defer cancel()
 	s, err := n.Host.NewStream(dialCtx, peerID, api.AuthProtocolID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open auth stream: %w", err)
 	}
 	defer func() { _ = s.Close() }()
-	_ = s.SetDeadline(time.Now().Add(regionGateDialTimeout))
+	_ = s.SetDeadline(time.Now().Add(labelGateDialTimeout))
 
 	authBytes, err := proto.Marshal(&api.AuthFrame{Biscuit: ourBiscuit})
 	if err != nil {

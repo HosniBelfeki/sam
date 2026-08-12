@@ -62,6 +62,13 @@ The `services` array allows you to register endpoints that remote peers in the S
 | `env` | *(For MCP)* Key-value environment variables passed to the subprocess. |
 | `target_url` | *(For HTTP/Inference)* The upstream local URL to proxy traffic to. |
 
+### Inference Service Path Standards & Proxy Routing
+
+When configuring `target_url` for `type: inference` services (e.g. Ollama, vLLM, OpenAI-compatible backends):
+* **Root Target URL Standard**: Always register `target_url` using the base root URL (e.g. `http://localhost:11434` or `http://localhost:8000`), strictly omitting `/v1`.
+* **OpenAI Facade Access**: Clients connecting via the node's local OpenAI Facade (`http://localhost:8080/v1`) request paths like `/v1/chat/completions`. SAM automatically proxies these to the backend's root URL.
+* **Raw Proxy Access**: If bypassing the Facade and making requests directly via the local egress proxy (`/sam/{peer}/inference/{service}`), the request path must include the explicit `/v1` namespace suffix (e.g. `http://localhost:8080/sam/{peer}/inference/{service}/v1/chat/completions`).
+
 ---
 
 ## 3. Defining Local Security (Target Attenuation)
@@ -80,40 +87,42 @@ You can further restrict access using the `attenuation` block. Local policies de
 
 ---
 
-## 4. Regions & Data Sovereignty
+## 4. Labels & Data Sovereignty
 
-SAM supports jurisdiction constraints so a request never leaves a required region.
+SAM supports attested key=value labels (e.g. `region`, `team`) so a request never leaves a required scope. Cloud providers, on-prem operators, and countries all name regions differently, so SAM imposes no built-in taxonomy or hierarchy: composition (e.g. also attesting a coarser value) is entirely up to the operator.
 
-### Declaring a region (provider)
+### Declaring labels (provider)
 
-Start the node with its operator-declared region, using the hierarchical form `CONTINENT[-COUNTRY[-ZONE]]` (ISO 3166, e.g. `EU`, `EU-DE`, `NA-US-CA`):
+Start the node with its operator-declared labels, a comma-separated `key=value` list:
 
 ```bash
-sam-node run --region EU-DE ...
+sam-node run --labels region=us-east-1,team=platform ...
 ```
 
-The region is declared at enrollment and **attested by the control plane**: for bootstrap enrollments the administrator sees the declared region on the pending request and approving it attests the claim. The control plane then mints one signed `region()` fact per hierarchy level into the node's Biscuit (`region("EU")`, `region("EU-DE")`), so a coarser requirement matches a finer claim, but never the reverse. An invalid region is rejected at enrollment; an empty one means no claim.
+Labels are declared at enrollment and **attested by the control plane**: for bootstrap enrollments the administrator sees the declared labels on the pending request and approving it attests the claims. The control plane then mints one signed `label(key, value)` fact per declared label into the node's Biscuit. Matching is exact and case-sensitive; an empty value means no claim for that key.
 
-### Requiring a region (consumer)
+### Requiring labels (consumer)
 
-On the sidecar's OpenAI-compatible endpoints, constrain a request with the `X-Sam-Required-Region` header (comma-separated, any-of):
+On the sidecar's OpenAI-compatible endpoints, constrain a request with the `X-Sam-Required-Labels` header (comma-separated `key=value` pairs, any-of):
 
 ```bash
 curl http://localhost:8080/v1/chat/completions \
   -H "Authorization: Bearer $SAM_API_TOKEN" \
-  -H "X-Sam-Required-Region: EU" \
+  -H "X-Sam-Required-Labels: region=us-east-1" \
   -d '{"model":"test-model","messages":[{"role":"user","content":"hi"}]}'
 ```
 
-Enforcement is fail-closed and cryptographic: gossiped region labels only rank candidate providers, and before any request data leaves your node the sidecar verifies the provider's control-plane-signed Biscuit and checks its attested `region()` facts. Providers that return no identity or lack a matching fact are rejected.
+The `call_remote_tool` MCP tool accepts the same requirement via its `required_labels` parameter.
 
-### Restricting callers by region (provider)
+Enforcement is fail-closed and cryptographic: gossiped labels only rank candidate providers, and before any request data leaves your node the sidecar verifies the provider's control-plane-signed Biscuit and checks its attested `label()` facts. Providers that return no identity or lack a matching fact are rejected.
 
-Because every enrolled node's token carries its attested region facts, a provider can require callers to be in a region with a single local check in its `attenuation` block:
+### Restricting callers by label (provider)
+
+Because every enrolled node's token carries its attested label facts, a provider can require callers to hold a label with a single local check in its `attenuation` block:
 
 ```yaml
 attenuation:
   checks:
-    - 'check if region("EU");'
+    - 'check if label("region", "us-east-1");'
 ```
 

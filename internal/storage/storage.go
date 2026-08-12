@@ -61,9 +61,9 @@ type EnrolledNode struct {
 	EnrollmentType string
 	ClaimsJSON     string
 	OwnerID        string
-	// Region is the attested region claim minted into the node's biscuit;
-	// kept on the record so token refreshes re-mint it unchanged.
-	Region     string
+	// Labels are the attested key=value claims minted into the node's
+	// biscuit; kept on the record so token refreshes re-mint them unchanged.
+	Labels     map[string]string
 	EnrolledAt time.Time
 	ExpiresAt  time.Time
 	Banned     bool
@@ -89,9 +89,9 @@ type EnrollmentRequest struct {
 	PublicKey []byte
 	TokenID   string
 	Status    api.EnrollmentStatus
-	// Region is the operator-declared region claim, surfaced to the
-	// approving admin; approval attests it into the minted biscuit.
-	Region       string
+	// Labels are the operator-declared key=value claims, surfaced to the
+	// approving admin; approval attests them into the minted biscuit.
+	Labels       map[string]string
 	BiscuitToken []byte
 	CreatedAt    time.Time
 	ResolvedAt   *time.Time
@@ -111,6 +111,19 @@ type Store interface {
 
 	// RotateKeys rotates the current key to a new key pair and sets the expiration of the old key.
 	RotateKeys(ctx context.Context, newPriv ed25519.PrivateKey, newPub ed25519.PublicKey, gracePeriod time.Duration) error
+
+	// ClaimKeyRotation atomically claims the next scheduled key-rotation
+	// window, so multiple control-plane replicas sharing one database rotate
+	// keys exactly once per interval instead of racing independently. It
+	// returns true if the caller won the claim (advancing the deadline by
+	// interval), false if another replica already claimed this window.
+	ClaimKeyRotation(ctx context.Context, now time.Time, interval time.Duration) (bool, error)
+
+	// ReleaseKeyRotationClaim reverts a claim won via ClaimKeyRotation with
+	// the same now/interval back to its pre-claim deadline, so the window
+	// can be retried without waiting a full interval. Callers use this when
+	// the rotation that followed a successful claim failed.
+	ReleaseKeyRotationClaim(ctx context.Context, now time.Time, interval time.Duration) error
 
 	// SaveInitialKey sets the initial key pair if no keys exist yet.
 	SaveInitialKey(ctx context.Context, priv ed25519.PrivateKey, pub ed25519.PublicKey) error

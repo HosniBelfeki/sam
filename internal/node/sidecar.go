@@ -80,6 +80,10 @@ func StartSidecarServer(node *SamNode, addr, token, certFile, keyFile, caFile st
 
 	server := &http.Server{
 		Handler: mux,
+		// Bound header-read time only: bodies/responses can legitimately stream
+		// (MCP sessions, inference completions), so no ReadTimeout/WriteTimeout.
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	listener, err := net.Listen("tcp", addr)
@@ -151,6 +155,9 @@ func StartUnauthSidecarServer(controlPlaneURL, addr, certFile, keyFile string) (
 
 	server := &http.Server{
 		Handler: mux,
+		// Bound header-read time only: MCP sessions can legitimately stream.
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	listener, err := net.Listen("tcp", addr)

@@ -138,3 +138,24 @@ func TestInferenceService_Models_Uninitialized(t *testing.T) {
 		t.Fatal("Models: expected error for uninitialized service, got nil")
 	}
 }
+
+func TestSingleJoiningSlash(t *testing.T) {
+	tests := []struct {
+		name string
+		a    string
+		b    string
+		want string
+	}{
+		{name: "root backend with /v1 path", a: "", b: "/v1/chat/completions", want: "/v1/chat/completions"},
+		{name: "slash backend with /v1 path", a: "/", b: "/v1/chat/completions", want: "/v1/chat/completions"},
+		{name: "prefix backend with /v1 path", a: "/proxy", b: "/v1/chat/completions", want: "/proxy/v1/chat/completions"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := singleJoiningSlash(tt.a, tt.b)
+			if got != tt.want {
+				t.Errorf("singleJoiningSlash(%q, %q) = %q, want %q", tt.a, tt.b, got, tt.want)
+			}
+		})
+	}
+}

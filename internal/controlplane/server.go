@@ -171,6 +171,11 @@ func (s *Server) Start() error {
 
 	s.httpServer = &http.Server{
 		Handler: mux,
+		// Mitigate Slowloris-style resource exhaustion from slow/malicious clients.
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	s.wg.Add(1)
@@ -272,15 +277,37 @@ func (s *Server) runKeyRotationLoop() {
 	for {
 		select {
 		case <-ticker.C:
+			// Replicas share one DB but tick independently; only the replica
+			// that wins this claim may rotate for the current window.
+			now := time.Now()
+			claimed, err := s.store.ClaimKeyRotation(s.ctx, now, s.config.KeyRotationInterval)
+			if err != nil {
+				logger.Errorf("Failed to claim key rotation window: %v", err)
+				continue
+			}
+			if !claimed {
+				logger.Debug("Skipping key rotation: another replica already claimed this window")
+				continue
+			}
+
 			logger.Info("Rotating Biscuit signing keys...")
 			newPub, newPriv, err := ed25519.GenerateKey(rand.Reader)
 			if err != nil {
 				logger.Errorf("Failed to generate key pair for rotation: %v", err)
+				// Give up the window so a retry isn't stuck waiting a full interval.
+				if relErr := s.store.ReleaseKeyRotationClaim(s.ctx, now, s.config.KeyRotationInterval); relErr != nil {
+					logger.Errorf("Failed to release key rotation claim: %v", relErr)
+				}
 				continue
 			}
 			err = s.store.RotateKeys(s.ctx, newPriv, newPub, s.config.KeyGracePeriod)
 			if err != nil {
 				logger.Errorf("Failed to rotate keyring: %v", err)
+				// Same as above: don't let a failed rotation strand the mesh
+				// on unrotated keys until the next full interval.
+				if relErr := s.store.ReleaseKeyRotationClaim(s.ctx, now, s.config.KeyRotationInterval); relErr != nil {
+					logger.Errorf("Failed to release key rotation claim: %v", relErr)
+				}
 			} else {
 				logger.Infof("Key rotation committed. New current public key: %s", hex.EncodeToString(newPub))
 				if err := s.getMeshAdapter().PublishEvent(s.ctx, api.MeshEvent_KEY_ROTATION, "", newPub); err != nil {
@@ -431,14 +458,11 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fail closed on malformed region claims; canonical form is what gets
-	// attested into the biscuit and persisted for refreshes.
-	region := api.NormalizeRegion(req.Region)
-	if region != "" {
-		if err := api.ValidateRegion(region); err != nil {
-			http.Error(w, "Invalid region: "+err.Error(), http.StatusBadRequest)
-			return
-		}
+	// Fail closed on malformed labels; they get attested into the biscuit
+	// and persisted for refreshes.
+	if err := api.ValidateLabels(req.Labels); err != nil {
+		http.Error(w, "Invalid labels: "+err.Error(), http.StatusBadRequest)
+		return
 	}
 
 	policyRoles, bindings, err := s.store.GetMeshPolicy(ctx)
@@ -478,7 +502,7 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request) {
 
 	// Mint token
 	biscuitExpiry := time.Now().Add(api.BiscuitTokenTTL)
-	biscuitData, _, err := identity.MintBiscuitToken(privKey, claims, token, pID, biscuitExpiry, finalRoles, policyRoles, region)
+	biscuitData, _, err := identity.MintBiscuitToken(privKey, claims, token, pID, biscuitExpiry, finalRoles, policyRoles, req.Labels)
 	if err != nil {
 		logger.Errorw("Biscuit minting failed", "peer_id", req.PeerId, "error", err)
 		http.Error(w, "Failed to mint biscuit: "+err.Error(), http.StatusForbidden)
@@ -503,7 +527,7 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request) {
 		Role:           primaryRole,
 		EnrollmentType: "OIDC",
 		ClaimsJSON:     string(claimsBytes),
-		Region:         region,
+		Labels:         req.Labels,
 		EnrolledAt:     time.Now(),
 		ExpiresAt:      sessionExpiresAt,
 	}
@@ -694,7 +718,7 @@ func (s *Server) HandleRefresh(w http.ResponseWriter, r *http.Request) {
 		finalRoles := []string{nodeRecord.Role}
 		finalRoles = append(finalRoles, customAccessRoles...)
 
-		bBytes, _, err := identity.MintBiscuitToken(privKey, claims, nil, pID, biscuitExpiry, finalRoles, policyRoles, nodeRecord.Region)
+		bBytes, _, err := identity.MintBiscuitToken(privKey, claims, nil, pID, biscuitExpiry, finalRoles, policyRoles, nodeRecord.Labels)
 		if err != nil {
 			logger.Errorf("Failed to mint refreshed token for node %s: %v", nodeRecord.PeerID, err)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -703,7 +727,7 @@ func (s *Server) HandleRefresh(w http.ResponseWriter, r *http.Request) {
 		biscuitBytes = bBytes
 	} else {
 		// Bootstrap node
-		bBytes, err := identity.MintBootstrapBiscuitToken(privKey, pID, nodeRecord.Role, biscuitExpiry, policyRoles, nodeRecord.Region)
+		bBytes, err := identity.MintBootstrapBiscuitToken(privKey, pID, nodeRecord.Role, biscuitExpiry, policyRoles, nodeRecord.Labels)
 		if err != nil {
 			logger.Errorf("Failed to mint refreshed token for node %s: %v", nodeRecord.PeerID, err)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -1096,12 +1120,9 @@ func (s *Server) HandleEnroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	region := api.NormalizeRegion(req.Region)
-	if region != "" {
-		if err := api.ValidateRegion(region); err != nil {
-			s.writeEnrollError(w, api.EnrollmentStatus_ENROLLMENT_STATUS_REJECTED, "Invalid region: "+err.Error())
-			return
-		}
+	if err := api.ValidateLabels(req.Labels); err != nil {
+		s.writeEnrollError(w, api.EnrollmentStatus_ENROLLMENT_STATUS_REJECTED, "Invalid labels: "+err.Error())
+		return
 	}
 
 	pID, err := peer.Decode(req.PeerId)
@@ -1143,7 +1164,7 @@ func (s *Server) HandleEnroll(w http.ResponseWriter, r *http.Request) {
 		PublicKey: req.PublicKey,
 		TokenID:   tokenRecord.ID,
 		Status:    api.EnrollmentStatus_ENROLLMENT_STATUS_PENDING,
-		Region:    region,
+		Labels:    req.Labels,
 		CreatedAt: time.Now(),
 	}
 
@@ -1165,7 +1186,7 @@ func (s *Server) HandleEnroll(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
 		}
-		biscuitBytes, err := identity.MintBootstrapBiscuitToken(privKey, pID, tokenRecord.Role, time.Now().Add(api.BiscuitTokenTTL), policyRoles, region)
+		biscuitBytes, err := identity.MintBootstrapBiscuitToken(privKey, pID, tokenRecord.Role, time.Now().Add(api.BiscuitTokenTTL), policyRoles, req.Labels)
 		if err != nil {
 			logger.Errorf("Failed to mint bootstrap biscuit: %v", err)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -1190,7 +1211,7 @@ func (s *Server) HandleEnroll(w http.ResponseWriter, r *http.Request) {
 			Biscuit:        biscuitBytes,
 			Role:           tokenRecord.Role,
 			EnrollmentType: "BOOTSTRAP",
-			Region:         region,
+			Labels:         req.Labels,
 			EnrolledAt:     time.Now(),
 			ExpiresAt:      time.Time{},
 		}
@@ -1515,9 +1536,9 @@ func (s *Server) HandleAdminEnrollmentAction(w http.ResponseWriter, r *http.Requ
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
 		}
-		// Admin approval is the attestation of the operator-declared region
+		// Admin approval is the attestation of the operator-declared labels
 		// recorded on the pending request.
-		biscuitBytes, err := identity.MintBootstrapBiscuitToken(privKey, pID, tokenRecord.Role, time.Now().Add(api.BiscuitTokenTTL), policyRoles, enrollReq.Region)
+		biscuitBytes, err := identity.MintBootstrapBiscuitToken(privKey, pID, tokenRecord.Role, time.Now().Add(api.BiscuitTokenTTL), policyRoles, enrollReq.Labels)
 		if err != nil {
 			logger.Errorf("Failed to mint bootstrap biscuit: %v", err)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -1537,7 +1558,7 @@ func (s *Server) HandleAdminEnrollmentAction(w http.ResponseWriter, r *http.Requ
 			Biscuit:        biscuitBytes,
 			Role:           tokenRecord.Role,
 			EnrollmentType: "BOOTSTRAP",
-			Region:         enrollReq.Region,
+			Labels:         enrollReq.Labels,
 			EnrolledAt:     time.Now(),
 			ExpiresAt:      time.Time{},
 		}

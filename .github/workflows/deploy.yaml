@@ -314,11 +314,15 @@ jobs:
           export ENV_NAME="${VAR_ENV_NAME}"
           export NAMESPACE="sam-${ENV_NAME}"
           if ! kubectl get secret sam-control-plane-secret-${ENV_NAME} -n ${NAMESPACE} >/dev/null 2>&1; then
-            echo "Generating a new random 32-byte hex key for admin-token..."
+            echo "Generating new random secrets for admin-token and the DB..."
             ADMIN_TOKEN=$(openssl rand -hex 32)
+            DB_PASSWORD=$(openssl rand -hex 32)
+            DB_DSN="postgres://sam:${DB_PASSWORD}@sam-db-${ENV_NAME}:5432/sam_mesh?sslmode=disable"
             kubectl create secret generic sam-control-plane-secret-${ENV_NAME} \
               --namespace=${NAMESPACE} \
-              --from-literal=admin-token="${ADMIN_TOKEN}"
+              --from-literal=admin-token="${ADMIN_TOKEN}" \
+              --from-literal=db-password="${DB_PASSWORD}" \
+              --from-literal=db-dsn="${DB_DSN}"
           else
             echo "sam-control-plane-secret-${ENV_NAME} already exists in namespace ${NAMESPACE}. Skipping generation."
           fi

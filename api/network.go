@@ -109,36 +109,17 @@ const (
 	// between a root path "/" and an empty path "".
 	HeaderSamNoTrailingSlash = "X-Sam-No-Trailing-Slash"
 
-	// HeaderSamRequiredRegion constrains an inference request on the sidecar's
-	// OpenAI-compatible endpoints (/v1/*) to providers whose declared region is
-	// in the comma-separated list of continent codes (see ValidateRegion);
-	// invalid codes are rejected with HTTP 400. It can only narrow what mesh
-	// policy allows, never widen it. Absent means any region permitted by
-	// policy.
+	// HeaderSamRequiredLabels constrains an inference request on the sidecar's
+	// OpenAI-compatible endpoints (/v1/*) to providers attested with any of a
+	// comma-separated list of "key=value" label requirements (see
+	// api/labels.go and LabelCheck); invalid entries are rejected with HTTP
+	// 400. It can only narrow what mesh policy allows, never widen it. Absent
+	// means any provider permitted by policy.
 	//
 	// Reserved as part of the sidecar contract; enforced by the provider
-	// scorer. Region declarations are routing hints until attested via the
-	// node's Biscuit (see LabelRegion).
-	HeaderSamRequiredRegion = "X-Sam-Required-Region"
-)
-
-// ============================================================================
-// Well-Known Node Labels
-// ============================================================================
-//
-// Placement rule: anything two nodes must agree on to interoperate (topics,
-// headers, labels, wire caps, canonical value forms) is defined here in api/.
-// Behavioral tuning a node decides alone (intervals, TTLs, table bounds)
-// lives in the package that owns the behavior.
-
-const (
-	// LabelRegion is the operator-declared jurisdiction of a node, as a
-	// continent code validated by ValidateRegion (e.g. "EU"). It is carried in
-	// ServiceAnnounce messages as a routing hint. Absent means the node makes
-	// no region claim, and consumers with a region requirement will never
-	// select it. Operator-declared labels always take precedence over
-	// runtime-derived values.
-	LabelRegion = "region"
+	// scorer. Label declarations are routing hints until attested via the
+	// node's Biscuit (see api/labels.go).
+	HeaderSamRequiredLabels = "X-Sam-Required-Labels"
 )
 
 // ============================================================================

@@ -77,7 +77,7 @@ func TestAnnounceReachesInterestedConsumer(t *testing.T) {
 			Type:   api.ServiceType_SERVICE_TYPE_INFERENCE,
 			Name:   "llm",
 			Keys:   []string{"model-a", "model-b"},
-			Labels: map[string]string{api.LabelRegion: "eu"},
+			Labels: map[string]string{"region": "eu"},
 			Load:   Load{ActiveRequests: 3},
 		}}
 	})
@@ -91,7 +91,7 @@ func TestAnnounceReachesInterestedConsumer(t *testing.T) {
 	for time.Now().Before(deadline) {
 		if ps := consumer.Providers(api.ServiceType_SERVICE_TYPE_INFERENCE, "model-a"); len(ps) == 1 {
 			p := ps[0]
-			if p.Service != "llm" || p.Labels[api.LabelRegion] != "eu" || p.Load.ActiveRequests != 3 {
+			if p.Service != "llm" || p.Labels["region"] != "eu" || p.Load.ActiveRequests != 3 {
 				t.Fatalf("unexpected provider: %+v", p)
 			}
 			if !p.ServesKey("model-b") {
@@ -241,11 +241,11 @@ func TestPeerLabels(t *testing.T) {
 	d.observe(rawMessage(t, signer, &api.ServiceAnnounce{
 		PeerId: signer.String(), Type: api.ServiceType_SERVICE_TYPE_MCP,
 		ServiceName: "reviewer", Keys: []string{"review_pr"},
-		Labels:    map[string]string{api.LabelRegion: "eu"},
+		Labels:    map[string]string{"region": "eu"},
 		Timestamp: time.Now().Unix(),
 	}))
 
-	if got := d.PeerLabels(signer.String()); got[api.LabelRegion] != "eu" {
+	if got := d.PeerLabels(signer.String()); got["region"] != "eu" {
 		t.Errorf("PeerLabels: got %v, want region=eu", got)
 	}
 	if got := d.PeerLabels("unknown-peer"); got != nil {
@@ -279,11 +279,8 @@ func TestValidateServiceAnnounceCaps(t *testing.T) {
 		{"oversized label", func(a *api.ServiceAnnounce) {
 			a.Labels = map[string]string{"k": string(make([]byte, api.MaxAnnounceStringLen+1))}
 		}, true},
-		{"invalid region label", func(a *api.ServiceAnnounce) {
-			a.Labels = map[string]string{api.LabelRegion: "mars"}
-		}, true},
-		{"valid region label", func(a *api.ServiceAnnounce) {
-			a.Labels = map[string]string{api.LabelRegion: "EU-DE"}
+		{"free-form region label", func(a *api.ServiceAnnounce) {
+			a.Labels = map[string]string{"region": "us-east-1"}
 		}, false},
 	}
 	for _, tt := range tests {

@@ -22,6 +22,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -139,6 +141,109 @@ func TestKeyRingOps(t *testing.T) {
 	}
 }
 
+func TestClaimKeyRotation(t *testing.T) {
+	store := newTestStore(t)
+	defer func() { _ = store.Close() }()
+
+	ctx := context.Background()
+	t0 := time.Now()
+	interval := 24 * time.Hour
+
+	// Fresh state: the first replica to tick claims the window.
+	claimed, err := store.ClaimKeyRotation(ctx, t0, interval)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !claimed {
+		t.Fatal("expected first claim to succeed")
+	}
+
+	// A second replica racing for the same window loses.
+	claimed, err = store.ClaimKeyRotation(ctx, t0.Add(time.Second), interval)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if claimed {
+		t.Fatal("expected concurrent claim in the same window to fail")
+	}
+
+	// Once the interval has elapsed, the next window can be claimed again.
+	claimed, err = store.ClaimKeyRotation(ctx, t0.Add(interval+time.Second), interval)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !claimed {
+		t.Fatal("expected claim after the interval elapsed to succeed")
+	}
+}
+
+func TestReleaseKeyRotationClaim(t *testing.T) {
+	store := newTestStore(t)
+	defer func() { _ = store.Close() }()
+
+	ctx := context.Background()
+	t0 := time.Now()
+	interval := 24 * time.Hour
+
+	claimed, err := store.ClaimKeyRotation(ctx, t0, interval)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !claimed {
+		t.Fatal("expected first claim to succeed")
+	}
+
+	// A failed rotation releases the claim instead of stranding the window
+	// for a full interval.
+	if err := store.ReleaseKeyRotationClaim(ctx, t0, interval); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// The window can now be reclaimed immediately, without waiting for the
+	// interval to elapse.
+	claimed, err = store.ClaimKeyRotation(ctx, t0.Add(time.Second), interval)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !claimed {
+		t.Fatal("expected claim to succeed after release")
+	}
+}
+
+func TestClaimKeyRotationConcurrent(t *testing.T) {
+	store := newTestStore(t)
+	defer func() { _ = store.Close() }()
+
+	ctx := context.Background()
+	now := time.Now()
+	interval := 24 * time.Hour
+
+	// Simulate several control-plane replicas racing to claim the same
+	// rotation window concurrently; exactly one must win.
+	const replicas = 10
+	var wg sync.WaitGroup
+	var wins atomic.Int32
+	for i := 0; i < replicas; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			claimed, err := store.ClaimKeyRotation(ctx, now, interval)
+			if err != nil {
+				t.Errorf("unexpected error: %v", err)
+				return
+			}
+			if claimed {
+				wins.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+
+	if got := wins.Load(); got != 1 {
+		t.Fatalf("expected exactly 1 replica to win the claim, got %d", got)
+	}
+}
+
 func TestNodeEnrollmentOps(t *testing.T) {
 	store := newTestStore(t)
 	defer func() { _ = store.Close() }()
@@ -170,7 +275,7 @@ func TestNodeEnrollmentOps(t *testing.T) {
 		Biscuit:        biscuitData,
 		Role:           "node",
 		EnrollmentType: "OIDC",
-		Region:         "EU-DE",
+		Labels:         map[string]string{"region": "eu-de"},
 		EnrolledAt:     time.Now(),
 		ExpiresAt:      expiresAt,
 	}
@@ -187,8 +292,8 @@ func TestNodeEnrollmentOps(t *testing.T) {
 	if n.PeerID != peerID || !bytes.Equal(n.Biscuit, biscuitData) || n.Banned {
 		t.Fatalf("node data mismatch: %+v", n)
 	}
-	if n.Region != "EU-DE" {
-		t.Fatalf("node region mismatch: got %q, want EU-DE", n.Region)
+	if n.Labels["region"] != "eu-de" {
+		t.Fatalf("node labels mismatch: got %+v, want region=eu-de", n.Labels)
 	}
 
 	// Ban node
@@ -402,7 +507,7 @@ func TestBootstrapTokensAndEnrollmentRequestsOps(t *testing.T) {
 		PublicKey:    []byte("my-public-key-bytes"),
 		TokenID:      tok.ID,
 		Status:       api.EnrollmentStatus_ENROLLMENT_STATUS_PENDING,
-		Region:       "NA-US",
+		Labels:       map[string]string{"region": "na-us"},
 		BiscuitToken: nil,
 		CreatedAt:    time.Now().Truncate(time.Second),
 	}
@@ -418,8 +523,8 @@ func TestBootstrapTokensAndEnrollmentRequestsOps(t *testing.T) {
 	if gotReq.ID != req.ID || gotReq.Status != req.Status || !bytes.Equal(gotReq.PublicKey, req.PublicKey) {
 		t.Errorf("retrieved request mismatch: %+v", gotReq)
 	}
-	if gotReq.Region != "NA-US" {
-		t.Errorf("retrieved request region mismatch: got %q, want NA-US", gotReq.Region)
+	if gotReq.Labels["region"] != "na-us" {
+		t.Errorf("retrieved request labels mismatch: got %+v, want region=na-us", gotReq.Labels)
 	}
 
 	gotReqByID, err := store.GetEnrollmentRequestByID(ctx, req.ID)

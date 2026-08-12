@@ -234,7 +234,7 @@ func startMockRouter(t *testing.T) (peer.ID, string) {
 		writer := msgio.NewVarintWriter(s)
 		resp := &api.AuthResponse{
 			Success: true,
-			Biscuit: createMockBiscuitToken(t, h.ID().String(), priv, api.RoleRouter),
+			Biscuit: createMockBiscuitToken(t, h.ID().String(), priv, api.RoleRouter, nil),
 		}
 		respBytes, _ := proto.Marshal(resp)
 		_ = writer.WriteMsg(respBytes)
@@ -265,7 +265,7 @@ func startMockRouter(t *testing.T) (peer.ID, string) {
 		}
 
 		resp := &api.EnrollResponse{
-			BiscuitToken:          createMockBiscuitToken(t, req.PeerId, priv, api.RoleNode, req.Region),
+			BiscuitToken:          createMockBiscuitToken(t, req.PeerId, priv, api.RoleNode, req.Labels),
 			ControlPlanePublicKey: pub,
 			RouterAddresses:       []string{h.Addrs()[0].String() + "/p2p/" + h.ID().String()},
 		}
@@ -315,7 +315,7 @@ func startMockRouterWithOIDC(t *testing.T, oidcIssuerURL string) (peer.ID, strin
 		writer := msgio.NewVarintWriter(s)
 		resp := &api.AuthResponse{
 			Success: true,
-			Biscuit: createMockBiscuitToken(t, h.ID().String(), priv, api.RoleRouter),
+			Biscuit: createMockBiscuitToken(t, h.ID().String(), priv, api.RoleRouter, nil),
 		}
 		respBytes, _ := proto.Marshal(resp)
 		_ = writer.WriteMsg(respBytes)
@@ -365,7 +365,7 @@ func startMockRouterWithOIDC(t *testing.T, oidcIssuerURL string) (peer.ID, strin
 		}
 
 		resp := &api.EnrollResponse{
-			BiscuitToken:          createMockBiscuitToken(t, req.PeerId, priv, api.RoleNode, req.Region),
+			BiscuitToken:          createMockBiscuitToken(t, req.PeerId, priv, api.RoleNode, req.Labels),
 			ControlPlanePublicKey: pub,
 			RouterAddresses:       []string{h.Addrs()[0].String() + "/p2p/" + h.ID().String()},
 		}
@@ -390,18 +390,16 @@ func startMockRouterWithOIDC(t *testing.T, oidcIssuerURL string) (peer.ID, strin
 	return h.ID(), httpServer.URL
 }
 
-func createMockBiscuitToken(t *testing.T, peerID string, priv ed25519.PrivateKey, role string, region ...string) []byte {
+func createMockBiscuitToken(t *testing.T, peerID string, priv ed25519.PrivateKey, role string, labels map[string]string) []byte {
 	builder := biscuit.NewBuilder(priv)
 	err := builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{Name: "target_unrestricted"}})
 	if err != nil {
 		t.Fatalf("failed to add target_unrestricted: %v", err)
 	}
 
-	for _, r := range region {
-		for _, fact := range api.RegionFacts(r) {
-			if err := builder.AddAuthorityFact(fact); err != nil {
-				t.Fatalf("failed to add region fact: %v", err)
-			}
+	for _, fact := range api.LabelFacts(labels) {
+		if err := builder.AddAuthorityFact(fact); err != nil {
+			t.Fatalf("failed to add label fact: %v", err)
 		}
 	}
 

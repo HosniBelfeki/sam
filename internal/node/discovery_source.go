@@ -47,10 +47,7 @@ func capKeys(keys []string) []string {
 // discoverySource builds gossip announcements from the registered services:
 // inference services announce model IDs, MCP services announce tool names.
 func (n *SamNode) discoverySource() []discovery.Announcement {
-	var labels map[string]string
-	if n.config.Region != "" { // normalized and validated at startup
-		labels = map[string]string{api.LabelRegion: n.config.Region}
-	}
+	labels := n.config.Labels // validated at startup
 	var out []discovery.Announcement
 	for _, info := range n.services.List(api.ServiceType_SERVICE_TYPE_UNSPECIFIED) {
 		svc, ok := n.services.Get(info.GetName())

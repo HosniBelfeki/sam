@@ -44,11 +44,6 @@ func ValidateServiceAnnounce(a *ServiceAnnounce) error {
 			return fmt.Errorf("invalid label %q", k)
 		}
 	}
-	if region, ok := a.GetLabels()[LabelRegion]; ok {
-		if err := ValidateRegion(region); err != nil {
-			return err
-		}
-	}
 	if a.GetTimestamp() <= 0 {
 		return fmt.Errorf("missing timestamp")
 	}
