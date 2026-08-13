@@ -242,6 +242,36 @@ func (s *Store) LoadControlPlaneURL() (string, error) {
 	return string(val), err
 }
 
+// ResetMeshIdentity clears everything about a node's mesh membership (its
+// Biscuit, mesh/control-plane config, and OIDC session state) so it can join
+// a different mesh. It keeps the long-lived libp2p key (node_private_key), so
+// the node's PeerID survives the switch.
+func (s *Store) ResetMeshIdentity() error {
+	return s.db.Update(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(bucketIdentity))
+		for _, key := range []string{
+			keyBiscuit,
+			keyIdentityExp,
+			keyRefreshToken,
+			keyOidcIssuer,
+			keyOidcClientID,
+			keyOidcAudience,
+			"control_plane_public_key",
+			"router_addresses",
+			"control_plane_url",
+			// Legacy pre-rename keys, cleared for good measure.
+			"hub_public_key",
+			"hub_addresses",
+			"hub_url",
+		} {
+			if err := b.Delete([]byte(key)); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 func (s *Store) Close() error {
 	return s.db.Close()
 }

@@ -31,6 +31,7 @@ import (
 	"github.com/google/sam/internal/node"
 	"github.com/google/sam/internal/secrets"
 	golog "github.com/ipfs/go-log/v2"
+	"github.com/mattn/go-isatty"
 	"github.com/multiformats/go-multiaddr"
 	madns "github.com/multiformats/go-multiaddr-dns"
 	"github.com/spf13/cobra"
@@ -52,6 +53,7 @@ func init() {
 
 var (
 	controlPlaneAddr          string
+	joinFlag                  bool
 	jwtFlag                   string
 	jwtPathFlag               string
 	bootstrapTokenFlag        string
@@ -118,6 +120,64 @@ func resolveDaemonSecret(name, path, envVar string) string {
 		logger.Fatalf("%v", err)
 	}
 	return secret
+}
+
+// isInteractiveTerminal reports whether stdin is a real terminal (not just a
+// character device like /dev/null), so --join knows it can safely block on
+// an interactive OIDC login prompt.
+func isInteractiveTerminal() bool {
+	fd := os.Stdin.Fd()
+	return isatty.IsTerminal(fd) || isatty.IsCygwinTerminal(fd)
+}
+
+// defaultControlPlane resolves which control plane to use when none was
+// explicitly passed: the previously stored one, or the public testnet.
+func defaultControlPlane(store *node.Store, explicit string) string {
+	if explicit != "" {
+		return explicit
+	}
+	if h, err := store.LoadControlPlaneURL(); err == nil && h != "" {
+		return h
+	}
+	return "https://bananas.sam-mesh.dev"
+}
+
+// normalizeControlPlaneURL adds the https:// scheme if missing and drops any
+// trailing slash.
+func normalizeControlPlaneURL(url string) string {
+	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
+		url = "https://" + url
+	}
+	return strings.TrimSuffix(url, "/")
+}
+
+// interactiveJoin discovers a control plane's OIDC settings and completes an
+// interactive browser/device-code login against it. Shared by "join" and
+// "run --join"; targetControlPlane must already be a normalized URL. store is
+// used to persist the OIDC refresh token when --offline-access is set.
+func interactiveJoin(ctx context.Context, store *node.Store, targetControlPlane string) (string, *api.ControlPlaneInfoResponse, error) {
+	dummyNode := &node.SamNode{Store: store}
+
+	fmt.Printf("Discovering control plane info from %s...\n", targetControlPlane)
+	info, err := node.FetchControlPlaneInfo(ctx, targetControlPlane)
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to discover control plane info: %w", err)
+	}
+
+	fmt.Printf("OIDC Issuer discovered: %s\n", info.OidcIssuer)
+	fmt.Printf("Client ID discovered: %s\n", info.ClientId)
+
+	logger.Info("Discovering OIDC endpoints...")
+	tokenURL, authURL, err := dummyNode.DiscoverEndpoints(ctx, info.OidcIssuer)
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to discover OIDC endpoints: %w", err)
+	}
+
+	jwtStr, err := dummyNode.InteractiveLogin(ctx, authURL, tokenURL, info.ClientId, info.Audience, offlineAccessFlag, headlessFlag)
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to get token: %w", err)
+	}
+	return jwtStr, info, nil
 }
 
 // parseLabelsFlag parses a comma-separated "key=value" list (see
@@ -224,6 +284,7 @@ func main() {
 			var meshNode *node.SamNode
 
 			var jwtStr string
+			var controlPlaneInfo *api.ControlPlaneInfoResponse
 
 			if jwtFlag != "" {
 				jwtStr = jwtFlag
@@ -247,17 +308,54 @@ func main() {
 				}
 			}
 
+			if jwtStr == "" && bootstrapTokenFlag == "" && joinFlag {
+				token, _ := store.LoadIdentity()
+				identityExists := len(token) > 0
+				stored, _ := store.LoadControlPlaneURL()
+				mismatched := identityExists && controlPlaneAddr != "" && stored != "" && normalizeControlPlaneURL(controlPlaneAddr) != normalizeControlPlaneURL(stored)
+				hasUsableIdentity := identityExists && len(controlPlanePubKey) > 0 && !mismatched
+
+				switch {
+				case hasUsableIdentity:
+					logger.Debug("--join set but a usable identity is already stored; ignoring")
+					// Legacy store, never tracked a control-plane URL: start tracking it now.
+					if controlPlaneAddr != "" && stored == "" {
+						if err := store.SaveControlPlaneURL(normalizeControlPlaneURL(controlPlaneAddr)); err != nil {
+							logger.Warnf("Failed to save control plane URL: %v", err)
+						}
+					}
+				case mismatched && !isInteractiveTerminal():
+					logger.Fatalf("--control-plane %q does not match the mesh this node is enrolled with (%s); switching meshes needs to be confirmed interactively. Run %q first, or re-run this interactively.", controlPlaneAddr, stored, "sam-node reset")
+				case !isInteractiveTerminal():
+					logger.Warn("--join set but no interactive terminal available; falling back to out-of-band enrollment via the unauthenticated MCP sidecar")
+				default:
+					if mismatched {
+						fmt.Printf("This node is currently enrolled with %s. Switching to %s replaces its stored identity (keeping the same PeerID). Continue? [y/N]: ", stored, controlPlaneAddr)
+						reader := bufio.NewReader(os.Stdin)
+						resp, _ := reader.ReadString('\n')
+						resp = strings.ToLower(strings.TrimSpace(resp))
+						if resp != "y" && resp != "yes" {
+							logger.Fatal("Aborted: not switching meshes.")
+						}
+						if err := store.ResetMeshIdentity(); err != nil {
+							logger.Fatalf("Failed to reset stored identity: %v", err)
+						}
+					} else if identityExists {
+						logger.Warn("Stored identity is missing its control plane public key; re-joining")
+					}
+					targetControlPlane := normalizeControlPlaneURL(defaultControlPlane(store, controlPlaneAddr))
+					jwtStr, controlPlaneInfo, err = interactiveJoin(ctx, store, targetControlPlane)
+					if err != nil {
+						logger.Fatalf("Failed to join: %v", err)
+					}
+					controlPlaneAddr = targetControlPlane
+				}
+			}
+
 			if jwtStr == "" && bootstrapTokenFlag == "" {
 				token, _ := store.LoadIdentity()
 				if len(token) == 0 {
-					displayControlPlane := controlPlaneAddr
-					if displayControlPlane == "" {
-						if h, err := store.LoadControlPlaneURL(); err == nil && h != "" {
-							displayControlPlane = h
-						} else {
-							displayControlPlane = "https://bananas.sam-mesh.dev"
-						}
-					}
+					displayControlPlane := defaultControlPlane(store, controlPlaneAddr)
 					logger.Infof("No identity found. Starting unauthenticated sidecar for enrollment over MCP...")
 					unauthSrv, err := node.StartUnauthSidecarServer(displayControlPlane, bindAddrFlag, tlsCertFlag, tlsKeyFlag)
 					if err != nil {
@@ -271,8 +369,22 @@ func main() {
 				}
 				logger.Infoln("Using stored identity.")
 
+				if controlPlaneAddr != "" {
+					stored, _ := store.LoadControlPlaneURL()
+					normalizedAddr := normalizeControlPlaneURL(controlPlaneAddr)
+					if stored != "" && normalizedAddr != normalizeControlPlaneURL(stored) {
+						logger.Fatalf("--control-plane %q does not match the mesh this node's stored identity was enrolled with (%s). A node's identity is only valid for the mesh that issued it: re-run with --join to switch interactively (%q clears it non-interactively), rather than pointing this one at a different mesh.", controlPlaneAddr, stored, "sam-node reset")
+					}
+					// Legacy store, never tracked a control-plane URL: start tracking it now.
+					if stored == "" {
+						if err := store.SaveControlPlaneURL(normalizedAddr); err != nil {
+							logger.Warnf("Failed to save control plane URL: %v", err)
+						}
+					}
+				}
+
 				if len(controlPlanePubKey) == 0 {
-					logger.Fatal("Control plane public key not found in store and not provided. Cannot verify peers.")
+					logger.Fatal("Control plane public key not found in store and not provided. Re-run with --join to re-enroll, or pass --control-plane-public-key explicitly.")
 				}
 				priv := node.GetOrGenerateKey(store)
 				meshNode, err = node.NewSamNode(node.Options{
@@ -391,6 +503,11 @@ func main() {
 				if err := store.SaveControlPlaneURL(controlPlaneAddr); err != nil {
 					logger.Warnf("Failed to save control plane URL: %v", err)
 				}
+				if controlPlaneInfo != nil {
+					if err := store.SaveOIDCConfig(controlPlaneInfo.OidcIssuer, controlPlaneInfo.ClientId, controlPlaneInfo.Audience); err != nil {
+						logger.Warnf("Failed to save OIDC config: %v", err)
+					}
+				}
 
 				if teardownErr := meshNode.Teardown(); teardownErr != nil {
 					logger.Errorf("Failed to teardown enrollment node: %v", teardownErr)
@@ -493,10 +610,7 @@ func main() {
 				targetControlPlane = "https://bananas.sam-mesh.dev"
 			}
 
-			if !strings.HasPrefix(targetControlPlane, "http://") && !strings.HasPrefix(targetControlPlane, "https://") {
-				targetControlPlane = "https://" + targetControlPlane
-			}
-			targetControlPlane = strings.TrimSuffix(targetControlPlane, "/")
+			targetControlPlane = normalizeControlPlaneURL(targetControlPlane)
 
 			bootstrapTokenFlag = resolveSecretFlag("bootstrap-token", bootstrapTokenFlag, bootstrapTokenPathFlag)
 
@@ -515,28 +629,12 @@ func main() {
 				}
 			}()
 
-			dummyNode := &node.SamNode{Store: store}
-
-			fmt.Printf("Discovering control plane info from %s...\n", targetControlPlane)
-			controlPlaneInfo, err := node.FetchControlPlaneInfo(ctx, targetControlPlane)
-			if err != nil {
-				logger.Fatalf("Failed to discover control plane info: %v", err)
-			}
-
 			var jwtStr string
+			var controlPlaneInfo *api.ControlPlaneInfoResponse
 			if bootstrapTokenFlag == "" {
-				fmt.Printf("OIDC Issuer discovered: %s\n", controlPlaneInfo.OidcIssuer)
-				fmt.Printf("Client ID discovered: %s\n", controlPlaneInfo.ClientId)
-
-				logger.Info("Discovering OIDC endpoints...")
-				tokenURL, authURL, err := dummyNode.DiscoverEndpoints(ctx, controlPlaneInfo.OidcIssuer)
+				jwtStr, controlPlaneInfo, err = interactiveJoin(ctx, store, targetControlPlane)
 				if err != nil {
-					logger.Fatalf("Failed to discover OIDC endpoints: %v", err)
-				}
-
-				jwtStr, err = dummyNode.InteractiveLogin(ctx, authURL, tokenURL, controlPlaneInfo.ClientId, controlPlaneInfo.Audience, offlineAccessFlag, headlessFlag)
-				if err != nil {
-					logger.Fatalf("Failed to get token: %v", err)
+					logger.Fatalf("Failed to join: %v", err)
 				}
 			}
 
@@ -625,10 +723,31 @@ func main() {
 		},
 	}
 
+	resetCmd := &cobra.Command{
+		Use:   "reset",
+		Short: "Clear this node's stored mesh identity so it can join a different mesh",
+		Run: func(cmd *cobra.Command, args []string) {
+			store, err := node.NewStore(resolveDataDir())
+			if err != nil {
+				logger.Fatalf("Failed to open store: %v", err)
+			}
+			defer func() {
+				if err := store.Close(); err != nil {
+					logger.Errorf("closing store: %v", err)
+				}
+			}()
+			if err := store.ResetMeshIdentity(); err != nil {
+				logger.Fatalf("Failed to reset stored identity: %v", err)
+			}
+			fmt.Println("Cleared stored mesh identity (PeerID unchanged). Run 'sam-node join <control-plane-url>' or 'sam-node run --join' to enroll again.")
+		},
+	}
+
 	// Configure Flags
 	runCmd.Flags().StringSliceVar(&listenAddrs, "listen", []string{"/ip4/0.0.0.0/udp/5001/quic-v1", "/ip4/0.0.0.0/tcp/5002"}, "libp2p Listen Addrs")
 	runCmd.Flags().StringVar(&jwtFlag, "jwt", "", "Pre-fetched JWT token")
 	runCmd.Flags().StringVar(&jwtPathFlag, "jwt-path", "", "Path to file containing JWT token")
+	runCmd.Flags().BoolVar(&joinFlag, "join", false, "Enroll interactively on first run if no identity exists yet (defaults to the public testnet unless --control-plane is set); a no-op on later restarts")
 	runCmd.Flags().StringVar(&bootstrapTokenFlag, "bootstrap-token", "", "Pre-shared bootstrap token for enrollment")
 	runCmd.Flags().StringVar(&bootstrapTokenPathFlag, "bootstrap-token-path", "", "Path to file containing the bootstrap token (recommended over --bootstrap-token)")
 	runCmd.Flags().StringVar(&clientIDFlag, "client-id", "", "OIDC Client ID for M2M")
@@ -647,6 +766,7 @@ func main() {
 	runCmd.Flags().StringVar(&logLevelFlag, "log-level", "info", "Log level (debug, info, warn, error)")
 	runCmd.Flags().DurationVar(&keyGracePeriodFlag, "key-grace-period", 24*time.Hour, "Key grace period for old keys (e.g. 24h)")
 	runCmd.Flags().BoolVar(&allowLoopbackFlag, "allow-loopback", false, "Allow publishing and connecting to loopback/link-local addresses")
+	runCmd.Flags().BoolVar(&offlineAccessFlag, "offline-access", false, "With --join, request OIDC offline access/refresh token for automatic renewal")
 	joinCmd.Flags().BoolVar(&allowLoopbackFlag, "allow-loopback", false, "Allow publishing and connecting to loopback/link-local addresses")
 	joinCmd.Flags().DurationVar(&routerConnectTimeoutFlag, "router-connect-timeout", node.DefaultRouterConnectTimeout, "Timeout for dialing each router address")
 	joinCmd.Flags().BoolVar(&offlineAccessFlag, "offline-access", false, "Request OIDC offline access/refresh token for automatic renewal")
@@ -672,6 +792,7 @@ func main() {
 
 	rootCmd.AddCommand(runCmd)
 	rootCmd.AddCommand(joinCmd)
+	rootCmd.AddCommand(resetCmd)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

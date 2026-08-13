@@ -288,6 +288,62 @@ func TestStore_ControlPlaneURL(t *testing.T) {
 	}
 }
 
+func TestStore_ResetMeshIdentity(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("failed to close store: %v", err)
+		}
+	}()
+
+	if err := store.SaveIdentity([]byte("biscuit")); err != nil {
+		t.Fatalf("SaveIdentity failed: %v", err)
+	}
+	if err := store.SaveMeshConfig([]byte("pubkey"), []string{"/ip4/1.2.3.4/tcp/1"}); err != nil {
+		t.Fatalf("SaveMeshConfig failed: %v", err)
+	}
+	if err := store.SaveControlPlaneURL("https://cp.example.com"); err != nil {
+		t.Fatalf("SaveControlPlaneURL failed: %v", err)
+	}
+	if err := store.SaveOIDCConfig("issuer", "client", "audience"); err != nil {
+		t.Fatalf("SaveOIDCConfig failed: %v", err)
+	}
+	key := []byte("node-private-key-bytes")
+	if err := store.SaveKey(key); err != nil {
+		t.Fatalf("SaveKey failed: %v", err)
+	}
+
+	if err := store.ResetMeshIdentity(); err != nil {
+		t.Fatalf("ResetMeshIdentity failed: %v", err)
+	}
+
+	if _, err := store.LoadIdentity(); err == nil {
+		t.Error("expected identity to be cleared")
+	}
+	if pubKey, _, _ := store.LoadMeshConfig(); len(pubKey) != 0 {
+		t.Errorf("expected mesh config pubkey to be cleared, got %v", pubKey)
+	}
+	if url, _ := store.LoadControlPlaneURL(); url != "" {
+		t.Errorf("expected control plane URL to be cleared, got %q", url)
+	}
+	issuer, _, _, _ := store.LoadOIDCConfig()
+	if issuer != "" {
+		t.Errorf("expected OIDC config to be cleared, got issuer %q", issuer)
+	}
+
+	// The libp2p private key must survive the reset so the PeerID is stable.
+	loadedKey, err := store.LoadKey()
+	if err != nil {
+		t.Fatalf("LoadKey failed: %v", err)
+	}
+	if string(loadedKey) != string(key) {
+		t.Errorf("expected private key to survive reset, got %v want %v", loadedKey, key)
+	}
+}
+
 func TestStore_IsBanned(t *testing.T) {
 	store, err := NewStore(t.TempDir())
 	if err != nil {
