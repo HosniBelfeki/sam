@@ -66,7 +66,7 @@ func NewServer(cfg Config) (*Server, error) {
 		}
 
 		if info.OidcIssuer != "" && info.ClientId != "" {
-			provider, err = oidc.NewProvider(context.Background(), info.OidcIssuer)
+			provider, err = discoverProviderWithRetry(context.Background(), info.OidcIssuer, oidcDiscoveryMaxAttempts, oidcDiscoveryBaseDelay, oidcDiscoveryMaxDelay)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Warning: failed OIDC discovery on %s: %v\n", info.OidcIssuer, err)
 			} else if provider.Endpoint().AuthURL != "" && provider.Endpoint().TokenURL != "" {
@@ -84,7 +84,6 @@ func NewServer(cfg Config) (*Server, error) {
 		provider: provider,
 		clientID: clientID,
 	}
-
 	// Create reverse proxy to the control plane
 	proxy := &httputil.ReverseProxy{
 		Rewrite: func(r *httputil.ProxyRequest) {
@@ -125,6 +124,43 @@ func NewServer(cfg Config) (*Server, error) {
 	s.mux.HandleFunc("/info", s.HandleInfo)
 
 	return s, nil
+}
+
+// Defaults for discoverProviderWithRetry; matches sam-control-plane's
+// discoverProviders so a transient hiccup during rollout (e.g. Dex still
+// starting up) doesn't permanently disable console OIDC login, since the
+// console's /info reports healthy either way and Kubernetes won't restart it.
+const (
+	oidcDiscoveryMaxAttempts = 5
+	oidcDiscoveryBaseDelay   = 1 * time.Second
+	oidcDiscoveryMaxDelay    = 8 * time.Second
+)
+
+// discoverProviderWithRetry retries OIDC discovery with exponential backoff so a
+// transient upstream hiccup (e.g. the identity provider mid-rollout) doesn't
+// permanently disable the console's OIDC login endpoints.
+func discoverProviderWithRetry(ctx context.Context, issuer string, maxAttempts int, baseDelay, maxDelay time.Duration) (*oidc.Provider, error) {
+	var lastErr error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if attempt > 0 {
+			delay := baseDelay * time.Duration(1<<uint(attempt-1))
+			if delay > maxDelay {
+				delay = maxDelay
+			}
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(delay):
+			}
+		}
+		provider, err := oidc.NewProvider(ctx, issuer)
+		if err == nil {
+			return provider, nil
+		}
+		lastErr = err
+		fmt.Fprintf(os.Stderr, "Warning: OIDC discovery attempt %d/%d for %s failed: %v\n", attempt+1, maxAttempts, issuer, err)
+	}
+	return nil, lastErr
 }
 
 func (s *Server) Handler() http.Handler {
