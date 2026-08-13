@@ -312,12 +312,18 @@ func main() {
 				token, _ := store.LoadIdentity()
 				identityExists := len(token) > 0
 				stored, _ := store.LoadControlPlaneURL()
-				mismatched := identityExists && controlPlaneAddr != "" && (stored == "" || normalizeControlPlaneURL(controlPlaneAddr) != normalizeControlPlaneURL(stored))
+				mismatched := identityExists && controlPlaneAddr != "" && stored != "" && normalizeControlPlaneURL(controlPlaneAddr) != normalizeControlPlaneURL(stored)
 				hasUsableIdentity := identityExists && len(controlPlanePubKey) > 0 && !mismatched
 
 				switch {
 				case hasUsableIdentity:
 					logger.Debug("--join set but a usable identity is already stored; ignoring")
+					// Legacy store, never tracked a control-plane URL: start tracking it now.
+					if controlPlaneAddr != "" && stored == "" {
+						if err := store.SaveControlPlaneURL(normalizeControlPlaneURL(controlPlaneAddr)); err != nil {
+							logger.Warnf("Failed to save control plane URL: %v", err)
+						}
+					}
 				case mismatched && !isInteractiveTerminal():
 					logger.Fatalf("--control-plane %q does not match the mesh this node is enrolled with (%s); switching meshes needs to be confirmed interactively. Run %q first, or re-run this interactively.", controlPlaneAddr, stored, "sam-node reset")
 				case !isInteractiveTerminal():
@@ -365,12 +371,15 @@ func main() {
 
 				if controlPlaneAddr != "" {
 					stored, _ := store.LoadControlPlaneURL()
-					if stored == "" || normalizeControlPlaneURL(controlPlaneAddr) != normalizeControlPlaneURL(stored) {
-						storedDisplay := stored
-						if storedDisplay == "" {
-							storedDisplay = "unknown (pre-dates control-plane URL tracking)"
+					normalizedAddr := normalizeControlPlaneURL(controlPlaneAddr)
+					if stored != "" && normalizedAddr != normalizeControlPlaneURL(stored) {
+						logger.Fatalf("--control-plane %q does not match the mesh this node's stored identity was enrolled with (%s). A node's identity is only valid for the mesh that issued it: re-run with --join to switch interactively (%q clears it non-interactively), rather than pointing this one at a different mesh.", controlPlaneAddr, stored, "sam-node reset")
+					}
+					// Legacy store, never tracked a control-plane URL: start tracking it now.
+					if stored == "" {
+						if err := store.SaveControlPlaneURL(normalizedAddr); err != nil {
+							logger.Warnf("Failed to save control plane URL: %v", err)
 						}
-						logger.Fatalf("--control-plane %q does not match the mesh this node's stored identity was enrolled with (%s). A node's identity is only valid for the mesh that issued it: re-run with --join to switch interactively (%q clears it non-interactively), rather than pointing this one at a different mesh.", controlPlaneAddr, storedDisplay, "sam-node reset")
 					}
 				}
 

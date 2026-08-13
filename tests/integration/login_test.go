@@ -324,3 +324,85 @@ func TestSamNodeRunControlPlaneMismatch(t *testing.T) {
 	}
 }
 
+// TestSamNodeRunLegacyStoreNoFalseMismatch covers nodes enrolled before
+// control-plane URL tracking existed (stored URL empty, identity/pubkey
+// still valid): passing --control-plane matching reality must not be
+// treated as a mismatch (this would break unattended upgrades/restarts of
+// pre-existing deployments), and the URL should be backfilled for next time.
+func TestSamNodeRunLegacyStoreNoFalseMismatch(t *testing.T) {
+	nodeBin := buildBinary(t, "./cmd/sam-node")
+	tmpHome := t.TempDir()
+	env := []string{
+		"HOME=" + tmpHome,
+		"XDG_CONFIG_HOME=" + filepath.Join(tmpHome, ".config"),
+	}
+
+	_, routerAddr := startMockRouter(t)
+
+	stdout, stderr, err := runCommand(
+		t, repoRoot(t), 3*time.Second, env, "",
+		nodeBin, "run", "--control-plane", routerAddr, "--jwt", "test-jwt",
+		"--listen", "/ip4/127.0.0.1/udp/0/quic-v1",
+		"--listen", "/ip4/127.0.0.1/tcp/0",
+		"--bind-addr", "127.0.0.1:0",
+		"--api-token-path", tokenPath(t, "dummy-token"),
+	)
+	if err != context.DeadlineExceeded {
+		t.Fatalf("expected initial enroll+run to keep running, got: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+
+	// Simulate a legacy store: clear just the tracked control-plane URL,
+	// keeping the identity, pubkey, and router addresses.
+	dataDir := filepath.Join(tmpHome, ".config", "sam-mesh")
+	store, err := node.NewStore(dataDir)
+	if err != nil {
+		t.Fatalf("failed to open store: %v", err)
+	}
+	if err := store.SaveControlPlaneURL(""); err != nil {
+		t.Fatalf("failed to clear control plane URL: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("failed to close store: %v", err)
+	}
+
+	// Passing the (correct) --control-plane on this now-legacy-shaped store
+	// must not be treated as a mismatch.
+	stdout, stderr, err = runCommand(
+		t, repoRoot(t), 3*time.Second, env, "",
+		nodeBin, "run", "--control-plane", routerAddr,
+		"--listen", "/ip4/127.0.0.1/udp/0/quic-v1",
+		"--listen", "/ip4/127.0.0.1/tcp/0",
+		"--bind-addr", "127.0.0.1:0",
+		"--api-token-path", tokenPath(t, "dummy-token"),
+	)
+	if err != context.DeadlineExceeded {
+		t.Fatalf("expected legacy store + matching --control-plane to keep running, got: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	if out := stdout + stderr; strings.Contains(out, "does not match the mesh") {
+		t.Fatalf("legacy store must not be treated as a mismatch:\n%s", out)
+	}
+
+	// The URL should now be backfilled for future runs.
+	store, err = node.NewStore(dataDir)
+	if err != nil {
+		t.Fatalf("failed to reopen store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	got, err := store.LoadControlPlaneURL()
+	if err != nil {
+		t.Fatalf("LoadControlPlaneURL: %v", err)
+	}
+	if got != normalizeControlPlaneURLForTest(routerAddr) {
+		t.Errorf("expected control plane URL to be backfilled to %q, got %q", normalizeControlPlaneURLForTest(routerAddr), got)
+	}
+}
+
+// normalizeControlPlaneURLForTest mirrors cmd/sam-node's normalizeControlPlaneURL,
+// duplicated here since that's an unexported function in package main.
+func normalizeControlPlaneURLForTest(url string) string {
+	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
+		url = "https://" + url
+	}
+	return strings.TrimSuffix(url, "/")
+}
+
