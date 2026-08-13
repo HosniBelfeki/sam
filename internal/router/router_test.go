@@ -794,3 +794,11 @@ func TestRouterConnectionManagerWatermarks(t *testing.T) {
 		t.Fatalf("expected default watermarks 1000/4000, got Low: %d, High: %d", defaultOpts.LowWaterMark, defaultOpts.HighWaterMark)
 	}
 }
+
+func TestRouterDefaultBiscuitTimeout(t *testing.T) {
+	opts := Options{}
+	opts.Default()
+	if opts.BiscuitTimeout != identity.DefaultAuthorizerTimeout {
+		t.Fatalf("expected default biscuit timeout %v, got %v", identity.DefaultAuthorizerTimeout, opts.BiscuitTimeout)
+	}
+}

@@ -302,9 +302,15 @@ func (n *SamNode) InteractiveLogin(ctx context.Context, authURL, tokenURL, clien
 	return tokenResp.AccessToken, nil
 }
 
+// oidcDiscoveryTimeout bounds a single OIDC discovery HTTP call so an
+// unresponsive issuer can't hang "join"/"run --join" indefinitely. A var
+// (not const) so tests can shrink it instead of waiting out the real value.
+var oidcDiscoveryTimeout = 10 * time.Second
+
 // DiscoverTokenURL discovers the token URL from the OIDC issuer.
 func (n *SamNode) DiscoverTokenURL(ctx context.Context, issuerURL string) (string, error) {
-	provider, err := oidc.NewProvider(ctx, issuerURL)
+	client := &http.Client{Timeout: oidcDiscoveryTimeout}
+	provider, err := oidc.NewProvider(oidc.ClientContext(ctx, client), issuerURL)
 	if err != nil {
 		return "", fmt.Errorf("failed to create OIDC provider: %w", err)
 	}
@@ -322,7 +328,8 @@ func (n *SamNode) DiscoverTokenURL(ctx context.Context, issuerURL string) (strin
 
 // DiscoverEndpoints discovers both token and authorization endpoints.
 func (n *SamNode) DiscoverEndpoints(ctx context.Context, issuerURL string) (tokenURL, authURL string, err error) {
-	provider, err := oidc.NewProvider(ctx, issuerURL)
+	client := &http.Client{Timeout: oidcDiscoveryTimeout}
+	provider, err := oidc.NewProvider(oidc.ClientContext(ctx, client), issuerURL)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to create OIDC provider: %w", err)
 	}

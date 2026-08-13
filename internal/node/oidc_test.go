@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -106,6 +107,46 @@ func TestDiscoverEndpoints(t *testing.T) {
 	}
 	if authURL != server.URL+"/auth" {
 		t.Errorf("Expected authURL %s, got %s", server.URL+"/auth", authURL)
+	}
+}
+
+// TestDiscoverEndpointsDoesNotHangOnUnresponsiveIssuer guards against an
+// unbounded hang: DiscoverEndpoints/DiscoverTokenURL used to call
+// oidc.NewProvider with no client timeout, so an issuer that accepts a
+// connection but never responds could block "join"/"run --join" forever.
+func TestDiscoverEndpointsDoesNotHangOnUnresponsiveIssuer(t *testing.T) {
+	origTimeout := oidcDiscoveryTimeout
+	oidcDiscoveryTimeout = 50 * time.Millisecond
+	defer func() { oidcDiscoveryTimeout = origTimeout }()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			_ = conn // accepted but deliberately never responds, to simulate a hang
+		}
+	}()
+
+	node := &SamNode{}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if _, _, err := node.DiscoverEndpoints(context.Background(), "http://"+ln.Addr().String()); err == nil {
+			t.Error("expected DiscoverEndpoints to fail against an unresponsive issuer")
+		}
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("DiscoverEndpoints hung on an unresponsive issuer instead of timing out")
 	}
 }
 
