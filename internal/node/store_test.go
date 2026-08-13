@@ -16,6 +16,7 @@ package node
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -285,6 +286,25 @@ func TestStore_ControlPlaneURL(t *testing.T) {
 
 	if loaded != controlPlaneURL {
 		t.Errorf("Expected loaded control plane URL %q, got %q", controlPlaneURL, loaded)
+	}
+}
+
+func TestStore_ErrStoreLocked(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewStore(dir)
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("failed to close store: %v", err)
+		}
+	}()
+
+	// The CLI relies on this sentinel to tell "a node is already running" from
+	// a genuine store failure, so it must survive the wrapping in NewStore.
+	if _, err := NewStore(dir); !errors.Is(err, ErrStoreLocked) {
+		t.Errorf("opening a locked data directory: got %v, want ErrStoreLocked", err)
 	}
 }
 

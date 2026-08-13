@@ -75,6 +75,35 @@ Use `-it` for this first run so you can complete the browser/device-code login; 
 
 By default `--join` enrolls with the public testnet (`bananas.sam-mesh.dev`); pass `--control-plane <url>` to join a different mesh.
 
+#### Running It in the Background
+
+`sam-node run` stays in the foreground. Add `--daemonize` to start it detached and return as soon as its local API answers — useful when an AI agent is driving the setup, or when you don't want a terminal dedicated to the node:
+
+```bash
+sam-node run --daemonize
+```
+```text
+sam-node is running in the background.
+  PID       48213
+  Endpoint  http://127.0.0.1:8080/mcp
+  Token     /home/you/.config/sam-mesh/api-token
+  Logs      /home/you/.config/sam-mesh/sam-node.log
+  Stop      kill 48213
+```
+
+If no API token is configured (`SAM_API_TOKEN` or `--api-token-path`), `--daemonize` generates one under the data directory and reuses it on later starts. The command is idempotent: re-run it to confirm a node is up. Enrollment still needs a one-time login, so on a node with no identity it tells you to run `sam-node join --headless <control-plane-url>` first.
+
+#### Starting Over
+
+A node reuses whatever is already in its data directory, which is what you want day to day but not when you are testing setup flows. Two levels of reset:
+
+```bash
+sam-node reset             # forget the mesh identity only, keep the PeerID
+sam-node reset --all       # delete every file the node keeps, including its key
+```
+
+`--all` asks for confirmation, and needs `--yes` when there is no terminal to ask on. Both refuse while a node is still running, so stop it first (`kill <pid>` from the `--daemonize` output). After `--all` the node generates a new PeerID and has to enroll again.
+
 ### Alternative: Join and Run Separately
 
 If you're deploying headlessly with a pre-issued bootstrap token, or just prefer explicit steps, you can join and run as two commands instead.
@@ -194,3 +223,29 @@ mcp-client -url http://localhost:8080/mcp \
   -tool call_remote_tool \
   -args '{"peer_id":"<target-peer-id>","tool_name":"everything.get-sum","arguments":{"a":12.5,"b":7.5}}'
 ```
+
+## 4. Teach Your AI Agent to Use the Mesh
+
+Knowing the tools exist is not the same as knowing when and how to use them. `sam-node` ships an [agent skill](https://agentskills.io) that tells your agent how to bring a node online, discover mesh services, call remote tools, and reach mesh inference models. Install it once:
+
+```bash
+sam-node skill install
+```
+
+This writes `SKILL.md` into the per-user skill directories your agents scan:
+
+| Agent | Path |
+| :--- | :--- |
+| Claude Code, Claude Desktop | `~/.claude/skills/sam-mesh/SKILL.md` |
+| Google Antigravity | `~/.gemini/config/skills/sam-mesh/SKILL.md` |
+
+Useful variants:
+
+```bash
+sam-node skill install --project   # install into this project (./.claude and ./.agents)
+sam-node skill install --dir DIR   # install into a specific skills directory
+sam-node skill list                # show where it is installed and whether it is current
+sam-node skill show                # print the document, for agents with a different layout
+```
+
+Re-run `sam-node skill install` after upgrading `sam-node` to refresh the document. Then connect your agent to the node's MCP endpoint — see the [integration guides](../integrations/) — and restart it so both the skill and the tools load.

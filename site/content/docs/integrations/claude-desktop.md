@@ -47,6 +47,10 @@ Add the node through the `mcp-remote` bridge (replace `<YOUR_TOKEN>` with your t
 
 Restart Claude Desktop for the change to take effect. The `sam-node` tools — `discover_remote_services`, `find_remote_tools`, `describe_remote_tool`, and `call_remote_tool` — then appear in the MCP tools menu (the connectors / plug icon).
 
+## Install the SAM Skill
+
+The MCP tools let Claude reach the mesh; the SAM skill tells it when and how to use them. Install it once with `sam-node skill install`, which writes `~/.claude/skills/sam-mesh/SKILL.md`, then restart Claude Desktop.
+
 ## Discovering and Invoking Remote Tools
 
 The tool flow is identical to the [Claude Code guide](./claude-code/#discovering-and-invoking-remote-tools):

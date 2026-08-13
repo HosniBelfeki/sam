@@ -28,6 +28,9 @@ import (
 )
 
 const (
+	// StoreFile is the node database inside the data directory.
+	StoreFile = "agent.db"
+
 	bucketIdentity  = "identity"
 	keyBiscuit      = "identity_biscuit"
 	keyPrivKey      = "node_private_key"
@@ -41,6 +44,10 @@ const (
 type Store struct {
 	db *bbolt.DB
 }
+
+// ErrStoreLocked reports that another process already holds the data
+// directory, which for a node data directory means a node is running.
+var ErrStoreLocked = errors.New("another sam-node instance is using this data directory")
 
 func GetDefaultDataDir() (string, error) {
 	base, err := os.UserConfigDir()
@@ -58,11 +65,11 @@ func NewStore(dir string) (*Store, error) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, fmt.Errorf("failed to create data directory: %w", err)
 	}
-	dbPath := filepath.Join(dir, "agent.db")
+	dbPath := filepath.Join(dir, StoreFile)
 	db, err := bbolt.Open(dbPath, 0600, &bbolt.Options{Timeout: 5 * time.Second})
 	if err != nil {
 		if errors.Is(err, bbolterrors.ErrTimeout) {
-			return nil, fmt.Errorf("timeout waiting for file lock, is another instance of sam-node running?")
+			return nil, fmt.Errorf("%w: timed out waiting for the file lock on %s", ErrStoreLocked, dbPath)
 		}
 		return nil, err
 	}

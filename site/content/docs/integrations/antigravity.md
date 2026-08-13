@@ -15,7 +15,28 @@ Antigravity natively supports Streamable HTTP MCP servers via the `serverUrl` co
 
 ## Running the Node Alongside Antigravity
 
-Antigravity talks to `sam-node` as a plain HTTP server rather than launching it itself (unlike a `stdio` MCP server, which the harness spawns and manages). That means `sam-node run` has to already be listening on the configured port *before* Antigravity starts, and keep running for the whole session — in practice, two separate long-running processes.
+Antigravity talks to `sam-node` as a plain HTTP server rather than launching it itself (unlike a `stdio` MCP server, which the harness spawns and manages). That means `sam-node run` has to already be listening on the configured port *before* Antigravity starts, and keep running for the whole session.
+
+### Recommended: `--daemonize`
+
+`--daemonize` starts the node in the background and returns once its local API answers, so there is no second terminal to keep open. It also generates an API token under the data directory if you have not configured one:
+
+```bash
+sam-node run --daemonize
+```
+
+```text
+sam-node is running in the background.
+  PID       48213
+  Endpoint  http://127.0.0.1:8080/mcp
+  Token     /home/you/.config/sam-mesh/api-token
+  Logs      /home/you/.config/sam-mesh/sam-node.log
+  Stop      kill 48213
+```
+
+The command is idempotent: re-run it any time to make sure a node is up. Enrollment still needs a one-time login, so if the node has no identity yet the command tells you to run `sam-node join --headless <control-plane-url>` first, which prints a URL and a code to complete in your browser.
+
+### Alternative: a dedicated terminal
 
 On the very first run, `--join` needs an interactive terminal to complete the browser/device-code login; after that, the identity is stored and `--join` is a no-op, so the node can be started detached/hidden freely.
 
@@ -29,16 +50,9 @@ SAM_API_TOKEN=my-secret-token sam-node run --join --bind-addr 127.0.0.1:8080
 # Terminal 2
 agy
 ```
-Or background it in the same shell once you've completed the first interactive login:
-```bash
-SAM_API_TOKEN=my-secret-token nohup sam-node run --join --bind-addr 127.0.0.1:8080 > sam-node.log 2>&1 &
-```
 
 ### Windows
-PowerShell and cmd.exe don't have a direct equivalent of Unix job control (`&`), so the straightforward option is the same as macOS/Linux: run `sam-node.exe run --join` in one Windows Terminal/PowerShell tab and leave it running, then open a second tab for Antigravity. To start it detached instead (after the first interactive login):
-```powershell
-Start-Process sam-node.exe -ArgumentList "run","--join","--bind-addr","127.0.0.1:8080" -WindowStyle Hidden
-```
+PowerShell and cmd.exe don't have a direct equivalent of Unix job control (`&`), so either use `sam-node.exe run --daemonize` or run `sam-node.exe run --join` in one Windows Terminal/PowerShell tab and leave it running, then open a second tab for Antigravity.
 
 ### Any OS: Docker
 The Docker image already runs detached, so it doesn't need a second terminal at all — pass `-it` instead of `-d` only for the first run, to complete the interactive login:
@@ -74,6 +88,16 @@ Add the node directly using its HTTP endpoint (replace `<YOUR_TOKEN>` with your 
 ```
 
 Antigravity will automatically discover the change. The `sam-node` tools — `discover_remote_services`, `find_remote_tools`, `describe_remote_tool`, and `call_remote_tool` — will then be available.
+
+## Install the SAM Skill
+
+The MCP tools give Antigravity the ability to reach the mesh; the [SAM skill](https://antigravity.google/docs/skills) tells it when and how to use them, including how to reach mesh inference models. Install it once:
+
+```bash
+sam-node skill install
+```
+
+This writes `~/.gemini/config/skills/sam-mesh/SKILL.md`, Antigravity's global skills location, so it applies to every workspace. Use `sam-node skill install --project` instead to check it into the current workspace at `.agents/skills/sam-mesh/SKILL.md`, and `sam-node skill list` to see whether an installed copy is current. The agent picks the skill up on its own when a task needs the mesh.
 
 ## Discovering and Invoking Remote Tools
 

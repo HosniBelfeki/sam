@@ -71,6 +71,9 @@ var (
 	audienceFlag              string
 	dataDirFlag               string
 	headlessFlag              bool
+	daemonizeFlag             bool
+	resetAllFlag              bool
+	assumeYesFlag             bool
 	offlineAccessFlag         bool
 	logLevelFlag              string
 	keyGracePeriodFlag        time.Duration
@@ -217,6 +220,13 @@ func main() {
 		Short: "Start the sovereign mesh node",
 		Run: func(cmd *cobra.Command, args []string) {
 			ctx := cmd.Context()
+			if daemonizeFlag {
+				if err := daemonizeRun(); err != nil {
+					fmt.Fprintln(os.Stderr, err)
+					os.Exit(1)
+				}
+				return
+			}
 			// Configure logging to duplicate to ring buffer
 			cfg := golog.GetConfig()
 			cfg.URL = "ringbuffer://"
@@ -726,8 +736,35 @@ func main() {
 	resetCmd := &cobra.Command{
 		Use:   "reset",
 		Short: "Clear this node's stored mesh identity so it can join a different mesh",
+		Long: "Clear this node's stored mesh identity so it can join a different mesh.\n" +
+			"The node keeps its PeerID and any generated API token.\n\n" +
+			"Use --all for a clean slate instead: it deletes every file the node keeps\n" +
+			"in its data directory, including the key behind its PeerID, so the next\n" +
+			"start behaves like a first start.",
 		Run: func(cmd *cobra.Command, args []string) {
-			store, err := node.NewStore(resolveDataDir())
+			dataDir := resolveDataDir()
+			if resetAllFlag {
+				if err := confirmPurge(dataDir); err != nil {
+					fmt.Fprintln(os.Stderr, err)
+					os.Exit(1)
+				}
+				removed, err := purgeDataDir(dataDir)
+				if err != nil {
+					fmt.Fprintln(os.Stderr, err)
+					os.Exit(1)
+				}
+				if len(removed) == 0 {
+					fmt.Printf("No local node state found in %s.\n", dataDir)
+					return
+				}
+				fmt.Println("Deleted all local node state:")
+				for _, path := range removed {
+					fmt.Printf("  %s\n", path)
+				}
+				fmt.Println("The next start generates a new PeerID and needs to enroll again.")
+				return
+			}
+			store, err := node.NewStore(dataDir)
 			if err != nil {
 				logger.Fatalf("Failed to open store: %v", err)
 			}
@@ -742,6 +779,8 @@ func main() {
 			fmt.Println("Cleared stored mesh identity (PeerID unchanged). Run 'sam-node join <control-plane-url>' or 'sam-node run --join' to enroll again.")
 		},
 	}
+	resetCmd.Flags().BoolVar(&resetAllFlag, "all", false, "Delete every file the node keeps in its data directory, not just the mesh identity")
+	resetCmd.Flags().BoolVar(&assumeYesFlag, "yes", false, "Skip the confirmation prompt for --all")
 
 	// Configure Flags
 	runCmd.Flags().StringSliceVar(&listenAddrs, "listen", []string{"/ip4/0.0.0.0/udp/5001/quic-v1", "/ip4/0.0.0.0/tcp/5002"}, "libp2p Listen Addrs")
@@ -763,6 +802,7 @@ func main() {
 	runCmd.Flags().DurationVar(&autoRelayBackoffFlag, "autorelay-backoff", 3*time.Second, "AutoRelay Backoff")
 	runCmd.Flags().DurationVar(&routerConnectTimeoutFlag, "router-connect-timeout", node.DefaultRouterConnectTimeout, "Timeout for dialing each router address")
 	runCmd.Flags().BoolVar(&enableRelayFlag, "enable-relay", false, "Allow this node to serve as a relay for others")
+	runCmd.Flags().BoolVar(&daemonizeFlag, "daemonize", false, "Run the node in the background and return once its local API answers (writes sam-node.log and sam-node.pid to the data directory, and generates an API token there if none is configured)")
 	runCmd.Flags().StringVar(&logLevelFlag, "log-level", "info", "Log level (debug, info, warn, error)")
 	runCmd.Flags().DurationVar(&keyGracePeriodFlag, "key-grace-period", 24*time.Hour, "Key grace period for old keys (e.g. 24h)")
 	runCmd.Flags().BoolVar(&allowLoopbackFlag, "allow-loopback", false, "Allow publishing and connecting to loopback/link-local addresses")
@@ -793,6 +833,7 @@ func main() {
 	rootCmd.AddCommand(runCmd)
 	rootCmd.AddCommand(joinCmd)
 	rootCmd.AddCommand(resetCmd)
+	rootCmd.AddCommand(newSkillCmd())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

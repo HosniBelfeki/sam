@@ -6,6 +6,10 @@ setup() {
   export SAM_ROUTER_BINARY="${SAM_ROUTER_BINARY:-./bin/sam-router}"
   export MCP_CLIENT_BINARY="${MCP_CLIENT_BINARY:-./bin/mcp-client}"
 
+  # Kept so helpers built with "go run" reuse the real module cache instead of
+  # filling the sandboxed HOME with read-only files.
+  export REAL_HOME="$HOME"
+
   export TEST_TMPDIR
   TEST_TMPDIR="$(mktemp -d)"
   export HOME="$TEST_TMPDIR/home"
@@ -16,7 +20,7 @@ setup() {
 }
 
 teardown() {
-
+  chmod -R +w "$TEST_TMPDIR" || true
   rm -rf "$TEST_TMPDIR"
 }
 
@@ -55,6 +59,67 @@ teardown() {
 }
 
 
+
+@test "sam-node skill install writes the agent skill and reports it as current" {
+  local skills_dir="$TEST_TMPDIR/skills"
+
+  run "$SAM_NODE_BINARY" skill install --dir "$skills_dir"
+  [[ "$status" -eq 0 ]]
+  [[ "$output" == *"installed"* ]]
+  [[ -f "$skills_dir/sam-mesh/SKILL.md" ]]
+  grep -q "^name: sam-mesh$" "$skills_dir/sam-mesh/SKILL.md"
+
+  run "$SAM_NODE_BINARY" skill list --dir "$skills_dir"
+  [[ "$status" -eq 0 ]]
+  [[ "$output" == *"up to date"* ]]
+}
+
+@test "sam-node run --daemonize without an identity points at join instead of backgrounding" {
+  run "$SAM_NODE_BINARY" run --daemonize --bind-addr "127.0.0.1:8086"
+  [[ "$status" -eq 1 ]]
+  [[ "$output" == *"not enrolled yet"* ]]
+  [[ "$output" == *"sam-node join --headless"* ]]
+  [[ ! -f "$XDG_CONFIG_HOME/sam-mesh/sam-node.pid" ]]
+}
+
+@test "sam-node run --daemonize starts a background node and reports why it stopped" {
+  HOME="$REAL_HOME" go run tests/e2e/gen_db.go "$XDG_CONFIG_HOME/sam-mesh/agent.db"
+
+  # No control plane is reachable here, so the backgrounded node exits during
+  # startup: the parent must notice, surface the child's log, and fail.
+  run "$SAM_NODE_BINARY" run --daemonize \
+    --bind-addr "127.0.0.1:8086" \
+    --router-connect-timeout 2s \
+    --listen /ip4/127.0.0.1/udp/0/quic-v1 --listen /ip4/127.0.0.1/tcp/0
+  [[ "$status" -eq 1 ]]
+  [[ "$output" == *"the background node exited during startup"* ]]
+  [[ "$output" == *"Last lines of"* ]]
+
+  # The child ran detached with a generated token and its own log.
+  [[ -f "$XDG_CONFIG_HOME/sam-mesh/api-token" ]]
+  [[ -s "$XDG_CONFIG_HOME/sam-mesh/sam-node.log" ]]
+  [[ "$(stat -c %a "$XDG_CONFIG_HOME/sam-mesh/api-token")" == "600" ]]
+}
+
+@test "sam-node reset --all needs confirmation and then clears the data directory" {
+  HOME="$REAL_HOME" go run tests/e2e/gen_db.go "$XDG_CONFIG_HOME/sam-mesh/agent.db"
+
+  # </dev/null keeps this deterministic: with no terminal to prompt on, the
+  # command must refuse rather than block.
+  run "$SAM_NODE_BINARY" reset --all </dev/null
+  [[ "$status" -eq 1 ]]
+  [[ "$output" == *"--yes"* ]]
+  [[ -f "$XDG_CONFIG_HOME/sam-mesh/agent.db" ]]
+
+  run "$SAM_NODE_BINARY" reset --all --yes </dev/null
+  [[ "$status" -eq 0 ]]
+  [[ "$output" == *"Deleted all local node state"* ]]
+  [[ ! -f "$XDG_CONFIG_HOME/sam-mesh/agent.db" ]]
+
+  run "$SAM_NODE_BINARY" reset --all --yes </dev/null
+  [[ "$status" -eq 0 ]]
+  [[ "$output" == *"No local node state found"* ]]
+}
 
 @test "sam-control-plane --help returns success" {
   run "$SAM_CONTROL_PLANE_BINARY" --help
