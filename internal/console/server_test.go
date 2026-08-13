@@ -5,12 +5,14 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/google/sam/api"
 	"google.golang.org/protobuf/proto"
 )
@@ -202,6 +204,42 @@ func TestDiscoverProviderWithRetry(t *testing.T) {
 
 		if _, err := discoverProviderWithRetry(context.Background(), srv.URL, 3, time.Millisecond, 5*time.Millisecond); err == nil {
 			t.Fatal("expected discovery to fail after exhausting retries")
+		}
+	})
+
+	// A hung connection (issuer accepts but never responds) must not block
+	// discovery forever: the client attached via oidc.ClientContext needs its
+	// own timeout, since neither the retry loop nor context.Background() bound
+	// a single attempt's duration on their own.
+	t.Run("does not hang on an unresponsive issuer", func(t *testing.T) {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("failed to listen: %v", err)
+		}
+		defer func() { _ = ln.Close() }()
+		go func() {
+			for {
+				conn, err := ln.Accept()
+				if err != nil {
+					return
+				}
+				_ = conn // accepted but deliberately never responds, to simulate a hang
+			}
+		}()
+
+		client := &http.Client{Timeout: 50 * time.Millisecond}
+		ctx := oidc.ClientContext(context.Background(), client)
+
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			_, _ = discoverProviderWithRetry(ctx, "http://"+ln.Addr().String(), 2, time.Millisecond, 5*time.Millisecond)
+		}()
+
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("discoverProviderWithRetry hung on an unresponsive issuer instead of timing out")
 		}
 	})
 }

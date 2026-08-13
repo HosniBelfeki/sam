@@ -66,7 +66,10 @@ func NewServer(cfg Config) (*Server, error) {
 		}
 
 		if info.OidcIssuer != "" && info.ClientId != "" {
-			provider, err = discoverProviderWithRetry(context.Background(), info.OidcIssuer, oidcDiscoveryMaxAttempts, oidcDiscoveryBaseDelay, oidcDiscoveryMaxDelay)
+			// Bound the discovery client so an unresponsive issuer can't hang startup.
+			oidcClient := &http.Client{Timeout: 10 * time.Second}
+			discoveryCtx := oidc.ClientContext(context.Background(), oidcClient)
+			provider, err = discoverProviderWithRetry(discoveryCtx, info.OidcIssuer, oidcDiscoveryMaxAttempts, oidcDiscoveryBaseDelay, oidcDiscoveryMaxDelay)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Warning: failed OIDC discovery on %s: %v\n", info.OidcIssuer, err)
 			} else if provider.Endpoint().AuthURL != "" && provider.Endpoint().TokenURL != "" {
@@ -267,7 +270,9 @@ func (s *Server) HandleCallback(w http.ResponseWriter, r *http.Request) {
 		Scopes:      []string{oidc.ScopeOpenID, "profile", "email"},
 	}
 
-	oauth2Token, err := oauth2Config.Exchange(r.Context(), code,
+	exchangeCtx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	oauth2Token, err := oauth2Config.Exchange(exchangeCtx, code,
 		oauth2.SetAuthURLParam("code_verifier", verifierCookie.Value),
 	)
 	if err != nil {
