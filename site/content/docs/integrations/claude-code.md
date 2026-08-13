@@ -54,6 +54,16 @@ claude mcp get p2p-mesh-node
 
 A healthy server reports `✔ Connected`. MCP tools are loaded at session start, so start (or restart) Claude Code and run `/mcp` to see `p2p-mesh-node` and its tools.
 
+## Install the SAM Skill
+
+The MCP tools give Claude Code the ability to reach the mesh; the SAM skill tells it when and how to use them. Install it once:
+
+```bash
+sam-node skill install
+```
+
+This writes the skill to `~/.claude/skills/sam-mesh/SKILL.md`, available in every project. Use `sam-node skill install --project` instead to commit it to the current repository (`./.claude/skills/sam-mesh/SKILL.md`), and `sam-node skill list` to check whether an installed copy is current. Restart Claude Code afterwards, then run `/skills` to confirm `sam-mesh` is loaded.
+
 ## Discovering and Invoking Remote Tools
 
 Claude Code calls the tools `sam-node` exposes like any other tool. The flow mirrors the local MCP API:
