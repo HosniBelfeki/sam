@@ -1210,6 +1210,7 @@ func (s *Server) HandleEnroll(w http.ResponseWriter, r *http.Request) {
 			PublicKey:      req.PublicKey,
 			Biscuit:        biscuitBytes,
 			Role:           tokenRecord.Role,
+			OwnerID:        tokenRecord.OwnerID,
 			EnrollmentType: "BOOTSTRAP",
 			Labels:         req.Labels,
 			EnrolledAt:     time.Now(),
@@ -1557,6 +1558,7 @@ func (s *Server) HandleAdminEnrollmentAction(w http.ResponseWriter, r *http.Requ
 			PublicKey:      enrollReq.PublicKey,
 			Biscuit:        biscuitBytes,
 			Role:           tokenRecord.Role,
+			OwnerID:        tokenRecord.OwnerID,
 			EnrollmentType: "BOOTSTRAP",
 			Labels:         enrollReq.Labels,
 			EnrolledAt:     time.Now(),
@@ -1796,6 +1798,7 @@ func (s *Server) HandleUserBootstrapTokens(w http.ResponseWriter, r *http.Reques
 
 	var req struct {
 		Role        string `json:"role"`
+		OwnerID     string `json:"owner_id"`
 		TTLHours    int    `json:"ttl_hours"`
 		MaxUsages   int    `json:"max_usages"`
 		Description string `json:"description"`
@@ -1814,6 +1817,12 @@ func (s *Server) HandleUserBootstrapTokens(w http.ResponseWriter, r *http.Reques
 
 	if user.Role != "admin" && req.Role != api.RoleNode && req.Role != api.RoleSamBox {
 		http.Error(w, "Forbidden: Standard users can only generate tokens for node or box roles", http.StatusForbidden)
+		return
+	}
+
+	ownerID, status, err := s.resolveTokenOwner(r.Context(), user, req.OwnerID)
+	if err != nil {
+		http.Error(w, err.Error(), status)
 		return
 	}
 
@@ -1836,7 +1845,7 @@ func (s *Server) HandleUserBootstrapTokens(w http.ResponseWriter, r *http.Reques
 		ID:          tokenID,
 		TokenHash:   tokenID,
 		Role:        req.Role,
-		OwnerID:     user.ID,
+		OwnerID:     ownerID,
 		MaxUsages:   req.MaxUsages,
 		UsagesCount: 0,
 		Description: req.Description,
@@ -1856,8 +1865,29 @@ func (s *Server) HandleUserBootstrapTokens(w http.ResponseWriter, r *http.Reques
 		"id":         tokenRecord.ID,
 		"token":      tokenVal,
 		"role":       tokenRecord.Role,
+		"owner_id":   tokenRecord.OwnerID,
 		"expires_at": tokenRecord.ExpiresAt.Format(time.RFC3339),
 	})
+}
+
+// resolveTokenOwner determines which user a bootstrap token is issued on behalf of.
+// The owner defaults to the caller; only admins may override it, and only with a
+// user that already exists. Returns the owner plus an HTTP status to use on error.
+func (s *Server) resolveTokenOwner(ctx context.Context, caller *storage.User, requested string) (string, int, error) {
+	requested = strings.TrimSpace(requested)
+	if requested == "" || requested == caller.ID {
+		return caller.ID, 0, nil
+	}
+	if caller.Role != "admin" {
+		return "", http.StatusForbidden, errors.New("forbidden: only admins may issue tokens on behalf of another user")
+	}
+	if _, err := s.store.GetUser(ctx, requested); err != nil {
+		if err == storage.ErrNotFound {
+			return "", http.StatusBadRequest, fmt.Errorf("unknown owner_id %q: the user must have logged in at least once", requested)
+		}
+		return "", http.StatusInternalServerError, errors.New("failed to look up owner")
+	}
+	return requested, 0, nil
 }
 
 func (s *Server) HandleUserRevoke(w http.ResponseWriter, r *http.Request) {

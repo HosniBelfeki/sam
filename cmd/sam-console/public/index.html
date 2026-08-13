@@ -262,8 +262,9 @@
                                 </select>
                             </div>
                             <div class="input-group" style="display: flex; flex-direction: column; gap: 4px;">
-                                <label for="token-owner" style="font-size: 0.85rem; color: var(--text-secondary);">Owner ID</label>
-                                <input type="text" id="token-owner" placeholder="e.g. system:serviceaccount:sam-kind:node-a-sa" style="background: rgba(0,0,0,0.2); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 4px; padding: 8px;" required>
+                                <label for="token-owner" style="font-size: 0.85rem; color: var(--text-secondary);">Owner ID <span style="opacity: 0.7;">(optional)</span></label>
+                                <input type="text" id="token-owner" placeholder="Leave blank to use your own identity" style="background: rgba(0,0,0,0.2); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 4px; padding: 8px;">
+                                <small id="token-owner-hint" style="font-size: 0.75rem; color: var(--text-secondary); opacity: 0.8;">Admins only: issue this token on behalf of another user. The user must have logged in at least once.</small>
                             </div>
                             <div class="input-group" style="display: flex; flex-direction: column; gap: 4px;">
                                 <label for="token-usages" style="font-size: 0.85rem; color: var(--text-secondary);">Max Usages</label>
@@ -279,6 +280,19 @@
                             </div>
                             <button type="submit" class="btn btn-primary" style="margin-top: 12px; max-width: 200px;">Generate Token</button>
                         </form>
+                        <div id="token-result" hidden style="margin-top: 1.5rem; max-width: 500px; border: 1px solid var(--border-color); border-radius: 6px; padding: 1rem; background: rgba(0,0,0,0.2);">
+                            <div style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 8px;">
+                                Token generated for owner <code id="token-result-owner"></code>. Copy it now &mdash; it is not stored and will not be shown again.
+                            </div>
+                            <div style="display: flex; gap: 8px; align-items: center;">
+                                <input type="text" id="token-result-value" readonly onfocus="this.select();"
+                                       style="flex: 1; font-family: monospace; background: rgba(0,0,0,0.35); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 4px; padding: 8px;">
+                                <button type="button" class="btn" id="token-copy-btn" onclick="copyGeneratedToken();">Copy</button>
+                            </div>
+                            <div style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 8px;">
+                                Join a node with: <code id="token-result-cmd"></code>
+                            </div>
+                        </div>
                     </div>
                     <div class="card">
                         <h3>Active Tokens</h3>

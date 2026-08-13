@@ -360,13 +360,11 @@ function updateUIForRole(role, userId) {
     if (ownerInput) {
         const group = ownerInput.closest('.input-group');
         if (group) {
-            if (role === 'admin') {
-                group.style.display = 'flex';
-                ownerInput.required = true;
-            } else {
-                group.style.display = 'none';
-                ownerInput.required = false;
-                ownerInput.value = userId; // Scoped to user implicitly
+            // Only admins may set an owner; for everyone else the server infers it
+            // from the session, so the field is hidden and left empty.
+            group.style.display = role === 'admin' ? 'flex' : 'none';
+            if (role !== 'admin') {
+                ownerInput.value = '';
             }
         }
     }
@@ -467,29 +465,62 @@ function renderBootstrapTokensTable(tokens) {
 
 window.generateBootstrapToken = async function() {
     const role = document.getElementById('token-role').value;
-    const owner_id = document.getElementById('token-owner').value;
+    const owner_id = document.getElementById('token-owner').value.trim();
     const max_usages = parseInt(document.getElementById('token-usages').value, 10);
     const ttl_hours = parseInt(document.getElementById('token-ttl').value, 10) || 24;
     const description = document.getElementById('token-desc').value;
 
     const payload = {
         role,
-        owner_id,
         max_usages,
         ttl_hours,
         description
     };
+    // Omitted entirely so the server falls back to the authenticated session.
+    if (owner_id) {
+        payload.owner_id = owner_id;
+    }
 
     try {
         const res = await actionRequest('api/user/bootstrap-tokens', 'POST', payload);
         if (res && res.token) {
-            alert('Bootstrap Token Generated Successfully!\n\nToken: ' + res.token + '\n\nCopy this token now. It will not be shown again.');
+            showGeneratedToken(res);
             document.getElementById('form-generate-token').reset();
             loadData();
         }
     } catch (err) {
         // actionRequest already alerts on failure
     }
+};
+
+function showGeneratedToken(res) {
+    const panel = document.getElementById('token-result');
+    const input = document.getElementById('token-result-value');
+    input.value = res.token;
+    document.getElementById('token-result-owner').textContent = res.owner_id || 'you';
+    document.getElementById('token-result-cmd').textContent =
+        'sam-node join --bootstrap-token ' + res.token + ' <control-plane-url>';
+    panel.hidden = false;
+    input.focus();
+    input.select();
+}
+
+window.copyGeneratedToken = async function() {
+    const input = document.getElementById('token-result-value');
+    const btn = document.getElementById('token-copy-btn');
+    input.select();
+    try {
+        // Only available on secure origins; execCommand covers plain-HTTP deployments.
+        if (navigator.clipboard && window.isSecureContext) {
+            await navigator.clipboard.writeText(input.value);
+        } else if (!document.execCommand('copy')) {
+            throw new Error('copy command rejected');
+        }
+        btn.textContent = 'Copied';
+    } catch (err) {
+        btn.textContent = 'Press Ctrl+C';
+    }
+    setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
 };
 
 function writeVarint(value) {

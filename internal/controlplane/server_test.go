@@ -1386,3 +1386,78 @@ func TestAuthDenialPaths(t *testing.T) {
 		}
 	})
 }
+
+// TestBootstrapTokenOwnerPropagatesToNode ensures a node enrolled with a user-owned
+// bootstrap token is attributed to that user, which is what makes the console's
+// per-user node listing work.
+func TestBootstrapTokenOwnerPropagatesToNode(t *testing.T) {
+	issuer, mintToken := startCustomMockOIDC(t)
+	srv, store, baseURL := setupTestServer(t, issuer)
+	defer func() {
+		_ = srv.Close()
+		_ = store.Close()
+	}()
+	srv.config.AutoApproveEnrollment = true
+
+	ctx := context.Background()
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	const ownerSub = "owner-sub-id"
+	userJWT := mintToken(map[string]interface{}{"sub": ownerSub, "email": "owner@example.com"})
+
+	req, _ := http.NewRequest(http.MethodPost, baseURL+"/user/bootstrap-tokens",
+		bytes.NewBufferString(`{"role":"`+api.RoleNode+`","max_usages":1}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+userJWT)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("failed to create bootstrap token: %v", err)
+	}
+	if resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		t.Fatalf("unexpected status creating token: %s (%s)", resp.Status, body)
+	}
+	var tokenDetails struct {
+		Token   string `json:"token"`
+		OwnerID string `json:"owner_id"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&tokenDetails)
+	_ = resp.Body.Close()
+
+	if tokenDetails.OwnerID != ownerSub {
+		t.Fatalf("token owner = %q, want %q", tokenDetails.OwnerID, ownerSub)
+	}
+
+	privNode, pubNode, err := crypto.GenerateKeyPair(crypto.Ed25519, -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pID, _ := peer.IDFromPrivateKey(privNode)
+	pubBytes, _ := crypto.MarshalPublicKey(pubNode)
+
+	enrollData, _ := proto.Marshal(&api.BootstrapEnrollRequest{
+		BootstrapToken: tokenDetails.Token,
+		PeerId:         pID.String(),
+		PublicKey:      pubBytes,
+		RequestedRole:  api.RoleNode,
+	})
+	resp, err = client.Post(baseURL+"/enroll", "application/x-protobuf", bytes.NewBuffer(enrollData))
+	if err != nil {
+		t.Fatalf("failed to enroll: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		t.Fatalf("unexpected enroll status: %s (%s)", resp.Status, body)
+	}
+	_ = resp.Body.Close()
+
+	enrolled, err := store.GetNode(ctx, pID.String())
+	if err != nil {
+		t.Fatalf("failed to load enrolled node: %v", err)
+	}
+	if enrolled.OwnerID != ownerSub {
+		t.Errorf("enrolled node owner = %q, want %q", enrolled.OwnerID, ownerSub)
+	}
+}

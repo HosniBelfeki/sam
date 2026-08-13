@@ -1,0 +1,11 @@
+{
+  "name": "sam-console-ui-tests",
+  "private": true,
+  "description": "Playwright smoke test for the SAM console UI",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.58.0"
+  }
+}
