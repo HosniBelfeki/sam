@@ -153,9 +153,10 @@ func normalizeControlPlaneURL(url string) string {
 
 // interactiveJoin discovers a control plane's OIDC settings and completes an
 // interactive browser/device-code login against it. Shared by "join" and
-// "run --join"; targetControlPlane must already be a normalized URL.
-func interactiveJoin(ctx context.Context, targetControlPlane string) (string, *api.ControlPlaneInfoResponse, error) {
-	dummyNode := &node.SamNode{}
+// "run --join"; targetControlPlane must already be a normalized URL. store is
+// used to persist the OIDC refresh token when --offline-access is set.
+func interactiveJoin(ctx context.Context, store *node.Store, targetControlPlane string) (string, *api.ControlPlaneInfoResponse, error) {
+	dummyNode := &node.SamNode{Store: store}
 
 	fmt.Printf("Discovering control plane info from %s...\n", targetControlPlane)
 	info, err := node.FetchControlPlaneInfo(ctx, targetControlPlane)
@@ -337,7 +338,7 @@ func main() {
 						logger.Warn("Stored identity is missing its control plane public key; re-joining")
 					}
 					targetControlPlane := normalizeControlPlaneURL(defaultControlPlane(store, controlPlaneAddr))
-					jwtStr, controlPlaneInfo, err = interactiveJoin(ctx, targetControlPlane)
+					jwtStr, controlPlaneInfo, err = interactiveJoin(ctx, store, targetControlPlane)
 					if err != nil {
 						logger.Fatalf("Failed to join: %v", err)
 					}
@@ -622,7 +623,7 @@ func main() {
 			var jwtStr string
 			var controlPlaneInfo *api.ControlPlaneInfoResponse
 			if bootstrapTokenFlag == "" {
-				jwtStr, controlPlaneInfo, err = interactiveJoin(ctx, targetControlPlane)
+				jwtStr, controlPlaneInfo, err = interactiveJoin(ctx, store, targetControlPlane)
 				if err != nil {
 					logger.Fatalf("Failed to join: %v", err)
 				}

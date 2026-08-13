@@ -24,6 +24,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/sam/internal/node"
 )
 
 func TestSamNodeJoin(t *testing.T) {
@@ -117,6 +119,85 @@ func TestSamNodeJoin(t *testing.T) {
 		t.Fatalf("node did not use stored identity:\n%s", out)
 	}
 }
+
+// TestSamNodeJoinOfflineAccessSavesRefreshToken guards against a real bug:
+// interactiveJoin used a *node.SamNode with no Store, so InteractiveLogin's
+// "if n.Store != nil" guard silently skipped persisting the refresh token,
+// breaking --offline-access for both "join" and "run --join".
+func TestSamNodeJoinOfflineAccessSavesRefreshToken(t *testing.T) {
+	nodeBin := buildBinary(t, "./cmd/sam-node")
+	tmpHome := t.TempDir()
+	env := append(os.Environ(),
+		"HOME="+tmpHome,
+		"XDG_CONFIG_HOME="+filepath.Join(tmpHome, ".config"),
+		"BROWSER=echo",
+	)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]interface{}{
+			"issuer":                 "http://" + r.Host,
+			"token_endpoint":         "http://" + r.Host + "/token",
+			"authorization_endpoint": "http://" + r.Host + "/auth",
+		}); err != nil {
+			t.Errorf("Failed to encode response: %v", err)
+		}
+	})
+	mux.HandleFunc("/device/code", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]interface{}{
+			"device_code":               "dev_code_123",
+			"user_code":                 "ABCD-1234",
+			"verification_uri":          "http://example.com/verify",
+			"verification_uri_complete": "http://example.com/verify?code=ABCD-1234",
+			"expires_in":                60,
+			"interval":                  1,
+		}); err != nil {
+			t.Errorf("Failed to encode response: %v", err)
+		}
+	})
+	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]string{
+			"access_token":  "test-jwt-token",
+			"id_token":      "test-jwt-token",
+			"refresh_token": "test-refresh-token",
+		}); err != nil {
+			t.Errorf("Failed to encode response: %v", err)
+		}
+	})
+	oidcServer := httptest.NewServer(mux)
+	defer oidcServer.Close()
+
+	_, routerAddr := startMockRouterWithOIDC(t, oidcServer.URL)
+
+	stdout, stderr, err := runCommandWithCallback(
+		t, repoRoot(t), 5*time.Second, env, "",
+		nodeBin, "join", "--offline-access", routerAddr,
+	)
+	if err != nil {
+		t.Fatalf("join command failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	if !strings.Contains(stdout+stderr, "Successfully joined the Sovereign Agent Mesh!") {
+		t.Fatalf("join did not succeed:\n%s", stdout+stderr)
+	}
+
+	store, err := node.NewStore(filepath.Join(tmpHome, ".config", "sam-mesh"))
+	if err != nil {
+		t.Fatalf("failed to open store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	refreshToken, err := store.LoadRefreshToken()
+	if err != nil {
+		t.Fatalf("expected a refresh token to be saved after --offline-access join, got error: %v", err)
+	}
+	if refreshToken != "test-refresh-token" {
+		t.Errorf("expected saved refresh token %q, got %q", "test-refresh-token", refreshToken)
+	}
+}
+
 
 // TestSamNodeRunJoinNonInteractive covers the safe fallback: since the test
 // harness gives the child process no TTY (stdin defaults to /dev/null),
