@@ -309,13 +309,31 @@ func main() {
 
 			if jwtStr == "" && bootstrapTokenFlag == "" && joinFlag {
 				token, _ := store.LoadIdentity()
+				identityExists := len(token) > 0
+				stored, _ := store.LoadControlPlaneURL()
+				mismatched := identityExists && controlPlaneAddr != "" && (stored == "" || normalizeControlPlaneURL(controlPlaneAddr) != normalizeControlPlaneURL(stored))
+				hasUsableIdentity := identityExists && len(controlPlanePubKey) > 0 && !mismatched
+
 				switch {
-				case len(token) > 0 && len(controlPlanePubKey) > 0:
+				case hasUsableIdentity:
 					logger.Debug("--join set but a usable identity is already stored; ignoring")
+				case mismatched && !isInteractiveTerminal():
+					logger.Fatalf("--control-plane %q does not match the mesh this node is enrolled with (%s); switching meshes needs to be confirmed interactively. Run %q first, or re-run this interactively.", controlPlaneAddr, stored, "sam-node reset")
 				case !isInteractiveTerminal():
 					logger.Warn("--join set but no interactive terminal available; falling back to out-of-band enrollment via the unauthenticated MCP sidecar")
 				default:
-					if len(token) > 0 {
+					if mismatched {
+						fmt.Printf("This node is currently enrolled with %s. Switching to %s replaces its stored identity (keeping the same PeerID). Continue? [y/N]: ", stored, controlPlaneAddr)
+						reader := bufio.NewReader(os.Stdin)
+						resp, _ := reader.ReadString('\n')
+						resp = strings.ToLower(strings.TrimSpace(resp))
+						if resp != "y" && resp != "yes" {
+							logger.Fatal("Aborted: not switching meshes.")
+						}
+						if err := store.ResetMeshIdentity(); err != nil {
+							logger.Fatalf("Failed to reset stored identity: %v", err)
+						}
+					} else if identityExists {
 						logger.Warn("Stored identity is missing its control plane public key; re-joining")
 					}
 					targetControlPlane := normalizeControlPlaneURL(defaultControlPlane(store, controlPlaneAddr))
@@ -343,6 +361,17 @@ func main() {
 					return
 				}
 				logger.Infoln("Using stored identity.")
+
+				if controlPlaneAddr != "" {
+					stored, _ := store.LoadControlPlaneURL()
+					if stored == "" || normalizeControlPlaneURL(controlPlaneAddr) != normalizeControlPlaneURL(stored) {
+						storedDisplay := stored
+						if storedDisplay == "" {
+							storedDisplay = "unknown (pre-dates control-plane URL tracking)"
+						}
+						logger.Fatalf("--control-plane %q does not match the mesh this node's stored identity was enrolled with (%s). A node's identity is only valid for the mesh that issued it: re-run with --join to switch interactively (%q clears it non-interactively), rather than pointing this one at a different mesh.", controlPlaneAddr, storedDisplay, "sam-node reset")
+					}
+				}
 
 				if len(controlPlanePubKey) == 0 {
 					logger.Fatal("Control plane public key not found in store and not provided. Re-run with --join to re-enroll, or pass --control-plane-public-key explicitly.")
@@ -684,6 +713,26 @@ func main() {
 		},
 	}
 
+	resetCmd := &cobra.Command{
+		Use:   "reset",
+		Short: "Clear this node's stored mesh identity so it can join a different mesh",
+		Run: func(cmd *cobra.Command, args []string) {
+			store, err := node.NewStore(resolveDataDir())
+			if err != nil {
+				logger.Fatalf("Failed to open store: %v", err)
+			}
+			defer func() {
+				if err := store.Close(); err != nil {
+					logger.Errorf("closing store: %v", err)
+				}
+			}()
+			if err := store.ResetMeshIdentity(); err != nil {
+				logger.Fatalf("Failed to reset stored identity: %v", err)
+			}
+			fmt.Println("Cleared stored mesh identity (PeerID unchanged). Run 'sam-node join <control-plane-url>' or 'sam-node run --join' to enroll again.")
+		},
+	}
+
 	// Configure Flags
 	runCmd.Flags().StringSliceVar(&listenAddrs, "listen", []string{"/ip4/0.0.0.0/udp/5001/quic-v1", "/ip4/0.0.0.0/tcp/5002"}, "libp2p Listen Addrs")
 	runCmd.Flags().StringVar(&jwtFlag, "jwt", "", "Pre-fetched JWT token")
@@ -733,6 +782,7 @@ func main() {
 
 	rootCmd.AddCommand(runCmd)
 	rootCmd.AddCommand(joinCmd)
+	rootCmd.AddCommand(resetCmd)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
