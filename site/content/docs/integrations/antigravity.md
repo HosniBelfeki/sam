@@ -10,7 +10,47 @@ Antigravity natively supports Streamable HTTP MCP servers via the `serverUrl` co
 
 ## Prerequisites
 
-- A running `sam-node` (default `http://localhost:8080`) and its the node API token (`SAM_API_TOKEN` env or `--api-token-path`).
+- `sam-node` installed and able to join a mesh (see the [Quick Start](../quickstart/)).
+- The node API token (`SAM_API_TOKEN` env or `--api-token-path`) you'll launch it with.
+
+## Running the Node Alongside Antigravity
+
+Antigravity talks to `sam-node` as a plain HTTP server rather than launching it itself (unlike a `stdio` MCP server, which the harness spawns and manages). That means `sam-node run` has to already be listening on the configured port *before* Antigravity starts, and keep running for the whole session — in practice, two separate long-running processes.
+
+On the very first run, `--join` needs an interactive terminal to complete the browser/device-code login; after that, the identity is stored and `--join` is a no-op, so the node can be started detached/hidden freely.
+
+### macOS / Linux
+Simplest: leave the node running in its own terminal tab, then open a second tab for Antigravity:
+```bash
+# Terminal 1 — leave running
+SAM_API_TOKEN=my-secret-token sam-node run --join --bind-addr 127.0.0.1:8080
+```
+```bash
+# Terminal 2
+agy
+```
+Or background it in the same shell once you've completed the first interactive login:
+```bash
+SAM_API_TOKEN=my-secret-token nohup sam-node run --join --bind-addr 127.0.0.1:8080 > sam-node.log 2>&1 &
+```
+
+### Windows
+PowerShell and cmd.exe don't have a direct equivalent of Unix job control (`&`), so the straightforward option is the same as macOS/Linux: run `sam-node.exe run --join` in one Windows Terminal/PowerShell tab and leave it running, then open a second tab for Antigravity. To start it detached instead (after the first interactive login):
+```powershell
+Start-Process sam-node.exe -ArgumentList "run","--join","--bind-addr","127.0.0.1:8080" -WindowStyle Hidden
+```
+
+### Any OS: Docker
+The Docker image already runs detached, so it doesn't need a second terminal at all — pass `-it` instead of `-d` only for the first run, to complete the interactive login:
+```bash
+docker run -d --name sam-node \
+  --user "$(id -u):$(id -g)" \
+  -v $(pwd)/sam-data:/data \
+  -p 5001:5001/udp -p 5002:5002 -p 8080:8080 \
+  -e SAM_API_TOKEN=my-secret-token \
+  ghcr.io/google/sam-node:latest \
+  run --join --data-dir /data --bind-addr 0.0.0.0:8080
+```
 
 ## Configuration
 

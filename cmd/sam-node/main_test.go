@@ -14,7 +14,11 @@
 
 package main
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/google/sam/internal/node"
+)
 
 func TestParseLabelsFlag(t *testing.T) {
 	if got, err := parseLabelsFlag(""); got != nil || err != nil {
@@ -32,5 +36,40 @@ func TestParseLabelsFlag(t *testing.T) {
 
 	if _, err := parseLabelsFlag("region=us-east-1,region=us-west-1"); err == nil {
 		t.Error("duplicate label key must be rejected")
+	}
+}
+
+func TestNormalizeControlPlaneURL(t *testing.T) {
+	cases := map[string]string{
+		"bananas.sam-mesh.dev":          "https://bananas.sam-mesh.dev",
+		"http://localhost:8080":         "http://localhost:8080",
+		"https://bananas.sam-mesh.dev/": "https://bananas.sam-mesh.dev",
+	}
+	for in, want := range cases {
+		if got := normalizeControlPlaneURL(in); got != want {
+			t.Errorf("normalizeControlPlaneURL(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestDefaultControlPlane(t *testing.T) {
+	store, err := node.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	if got := defaultControlPlane(store, "https://example.com"); got != "https://example.com" {
+		t.Errorf("explicit control plane should win: got %q", got)
+	}
+	if got := defaultControlPlane(store, ""); got != "https://bananas.sam-mesh.dev" {
+		t.Errorf("no explicit and no stored URL should default to the testnet: got %q", got)
+	}
+
+	if err := store.SaveControlPlaneURL("https://stored.example.com"); err != nil {
+		t.Fatalf("SaveControlPlaneURL: %v", err)
+	}
+	if got := defaultControlPlane(store, ""); got != "https://stored.example.com" {
+		t.Errorf("no explicit should fall back to the stored URL: got %q", got)
 	}
 }

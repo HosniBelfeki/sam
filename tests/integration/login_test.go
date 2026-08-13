@@ -117,3 +117,42 @@ func TestSamNodeJoin(t *testing.T) {
 		t.Fatalf("node did not use stored identity:\n%s", out)
 	}
 }
+
+// TestSamNodeRunJoinNonInteractive covers the safe fallback: since the test
+// harness gives the child process no TTY (stdin defaults to /dev/null),
+// "run --join" must not attempt (and block on) an interactive OIDC login; it
+// should fall back to the same unauthenticated MCP sidecar as plain "run".
+func TestSamNodeRunJoinNonInteractive(t *testing.T) {
+	nodeBin := buildBinary(t, "./cmd/sam-node")
+	tmpHome := t.TempDir()
+	env := []string{
+		"HOME=" + tmpHome,
+		"XDG_CONFIG_HOME=" + filepath.Join(tmpHome, ".config"),
+	}
+
+	_, routerAddr := startMockRouter(t)
+
+	stdout, stderr, err := runCommand(
+		t,
+		repoRoot(t),
+		3*time.Second,
+		env,
+		"", // no stdin: child sees no TTY, same as a container without -it
+		nodeBin,
+		"run", "--join", "--control-plane", routerAddr,
+		"--listen", "/ip4/127.0.0.1/udp/0/quic-v1",
+		"--listen", "/ip4/127.0.0.1/tcp/0",
+		"--bind-addr", "127.0.0.1:0",
+	)
+	if err != context.DeadlineExceeded {
+		t.Fatalf("expected run --join to keep running via the unauthenticated sidecar, got: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+
+	out := stdout + stderr
+	if !strings.Contains(out, "no interactive terminal available") {
+		t.Fatalf("expected --join to warn about falling back without a TTY:\n%s", out)
+	}
+	if !strings.Contains(out, "Starting unauthenticated sidecar for enrollment over MCP") {
+		t.Fatalf("expected the unauthenticated sidecar to start:\n%s", out)
+	}
+}
