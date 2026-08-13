@@ -142,6 +142,11 @@ test-python-e2e: build docker-build
 e2e-test: build docker-build
 	bats -j 10 --verbose-run $(if $(WHAT),--filter "$(WHAT)") tests/e2e/
 
+.PHONY: ui-test
+ui-test: build
+	chmod +x ./tests/ui/run.sh
+	./tests/ui/run.sh $(if $(WHAT),--grep "$(WHAT)")
+
 test-e2e: build docker-build
 	@command -v bats >/dev/null 2>&1 || { \
 		echo "bats not found; attempting install"; \

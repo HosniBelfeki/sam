@@ -38,6 +38,11 @@ bin/
 /sam-box
 /sam-router
 /sam-console
+
+# Playwright console UI tests
+node_modules/
+tests/ui/playwright-report/
+tests/ui/test-results/
 /sam-control-plane
 /mcp-client
 /nano-init
