@@ -31,6 +31,22 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
+// DefaultAuthorizerTimeout bounds Datalog evaluation when no timeout is configured.
+// biscuit-go defaults to 2ms of wall-clock time, of which a single authorization of
+// a realistic token already spends ~0.14ms (~1.1ms under -race), so ordinary
+// scheduling noise turns into a spurious denial. The amount of work is bounded by
+// the fact and iteration limits; this deadline only caps how long the caller waits.
+const DefaultAuthorizerTimeout = 1 * time.Second
+
+// AuthorizerOptions returns the authorizer options enforcing a Datalog evaluation
+// budget. A non-positive timeout falls back to DefaultAuthorizerTimeout.
+func AuthorizerOptions(timeout time.Duration) []biscuit.AuthorizerOption {
+	if timeout <= 0 {
+		timeout = DefaultAuthorizerTimeout
+	}
+	return []biscuit.AuthorizerOption{biscuit.WithWorldOptions(datalog.WithMaxDuration(timeout))}
+}
+
 // MintBiscuitToken generates a signed Biscuit token for a peer with policy rules based on JWT claims.
 // labels are control-plane-attested key=value claims (canonical, pre-validated); empty means no claims.
 func MintBiscuitToken(signingKey ed25519.PrivateKey, claims jwt.MapClaims, token *oidc.IDToken, remotePeer peer.ID, biscuitExpiry time.Time, roles []string, policyRoles []*api.PolicyRole, labels map[string]string) ([]byte, []string, error) {
@@ -225,10 +241,7 @@ func VerifyBiscuitAndGetKey(biscuitData []byte, expectedPeer peer.ID, trustedPub
 		return nil, nil, fmt.Errorf("malformed biscuit: %w", err)
 	}
 
-	var authOpts []biscuit.AuthorizerOption
-	if timeout > 0 {
-		authOpts = append(authOpts, biscuit.WithWorldOptions(datalog.WithMaxDuration(timeout)))
-	}
+	authOpts := AuthorizerOptions(timeout)
 
 	var lastErr error
 	var authorized bool
@@ -356,10 +369,7 @@ func VerifyAndExtractPeerID(trustedPublicKeys []ed25519.PublicKey, biscuitData [
 		return "", fmt.Errorf("malformed biscuit: %w", err)
 	}
 
-	var authOpts []biscuit.AuthorizerOption
-	if timeout > 0 {
-		authOpts = append(authOpts, biscuit.WithWorldOptions(datalog.WithMaxDuration(timeout)))
-	}
+	authOpts := AuthorizerOptions(timeout)
 
 	var authorizer biscuit.Authorizer
 	var verified bool
@@ -420,13 +430,13 @@ func VerifyAndExtractPeerID(trustedPublicKeys []ed25519.PublicKey, biscuitData [
 
 // VerifyBiscuitRole checks that the biscuit is signed by the control plane's public key
 // and contains the specified role fact.
-func VerifyBiscuitRole(biscuitData []byte, controlPlanePubKey ed25519.PublicKey, expectedRole string) error {
+func VerifyBiscuitRole(biscuitData []byte, controlPlanePubKey ed25519.PublicKey, expectedRole string, timeout time.Duration) error {
 	b, err := biscuit.Unmarshal(biscuitData)
 	if err != nil {
 		return fmt.Errorf("malformed biscuit: %w", err)
 	}
 
-	authorizer, err := b.Authorizer(controlPlanePubKey)
+	authorizer, err := b.Authorizer(controlPlanePubKey, AuthorizerOptions(timeout)...)
 	if err != nil {
 		return fmt.Errorf("failed to create authorizer: %w", err)
 	}

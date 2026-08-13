@@ -17,6 +17,7 @@ package identity
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -572,5 +573,38 @@ func TestVerifyAndExtractPeerID_MultipleTrustedKeys(t *testing.T) {
 
 	if extractedPeer != dummyPeer {
 		t.Errorf("expected peer ID %s, got %s", dummyPeer, extractedPeer)
+	}
+}
+
+func TestVerifyBiscuitRole_TimeoutIsHonored(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	privNode, _, err := crypto.GenerateKeyPair(crypto.Ed25519, -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dummyPeer, err := peer.IDFromPrivateKey(privNode)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	biscuitData, err := MintBootstrapBiscuitToken(priv, dummyPeer, api.RoleRouter, time.Now().Add(1*time.Hour), nil, nil)
+	if err != nil {
+		t.Fatalf("MintBootstrapBiscuitToken failed: %v", err)
+	}
+
+	// A zero timeout must fall back to the generous default, not to the 2ms
+	// biscuit-go default which spuriously fails under load.
+	if err := VerifyBiscuitRole(biscuitData, pub, api.RoleRouter, 0); err != nil {
+		t.Errorf("VerifyBiscuitRole with zero timeout failed: %v", err)
+	}
+
+	// An explicit timeout must reach the Datalog world.
+	err = VerifyBiscuitRole(biscuitData, pub, api.RoleRouter, time.Nanosecond)
+	if !errors.Is(err, datalog.ErrWorldRunLimitTimeout) {
+		t.Errorf("expected datalog timeout error, got %v", err)
 	}
 }

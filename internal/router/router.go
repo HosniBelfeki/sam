@@ -326,7 +326,7 @@ func (r *Router) enroll(peerID peer.ID) error {
 	r.trustedPublicKeys = []ed25519.PublicKey{enrollResp.ControlPlanePublicKey}
 	r.keysMu.Unlock()
 
-	if err := identity.VerifyBiscuitRole(enrollResp.BiscuitToken, enrollResp.ControlPlanePublicKey, r.config.RequiredRole); err != nil {
+	if err := identity.VerifyBiscuitRole(enrollResp.BiscuitToken, enrollResp.ControlPlanePublicKey, r.config.RequiredRole, r.config.BiscuitTimeout); err != nil {
 		return fmt.Errorf("enrolled biscuit token lacks required role %q: %w", r.config.RequiredRole, err)
 	}
 
@@ -448,7 +448,7 @@ func (r *Router) enrollBootstrap(peerID peer.ID) error {
 	r.trustedPublicKeys = []ed25519.PublicKey{enrollResp.ControlPlanePublicKey}
 	r.keysMu.Unlock()
 
-	if err := identity.VerifyBiscuitRole(enrollResp.BiscuitToken, enrollResp.ControlPlanePublicKey, r.config.RequiredRole); err != nil {
+	if err := identity.VerifyBiscuitRole(enrollResp.BiscuitToken, enrollResp.ControlPlanePublicKey, r.config.RequiredRole, r.config.BiscuitTimeout); err != nil {
 		return fmt.Errorf("enrolled biscuit token lacks required role %q: %w", r.config.RequiredRole, err)
 	}
 
@@ -939,7 +939,7 @@ func (r *Router) performMutualAuth(s network.Stream) error {
 	}
 
 	// Enforce required role inside the biscuit
-	authorizer, err := b.Authorizer(trustedKeys[0])
+	authorizer, err := b.Authorizer(trustedKeys[0], identity.AuthorizerOptions(r.config.BiscuitTimeout)...)
 	if err != nil {
 		return fmt.Errorf("authorizer instantiation failed: %w", err)
 	}

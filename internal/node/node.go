@@ -36,7 +36,6 @@ import (
 	"time"
 
 	"github.com/biscuit-auth/biscuit-go/v2"
-	"github.com/biscuit-auth/biscuit-go/v2/datalog"
 	"github.com/google/sam/api"
 	"github.com/google/sam/internal/identity"
 	samdiscovery "github.com/google/sam/internal/node/discovery"
@@ -277,7 +276,7 @@ func (n *SamNode) Start(ctx context.Context) error {
 	if biscuitBytes := n.GetIdentity(); len(biscuitBytes) > 0 {
 		controlPlanePubKeyBytes, _, err := n.Store.LoadMeshConfig()
 		if err == nil && len(controlPlanePubKeyBytes) > 0 {
-			if err := identity.VerifyBiscuitRole(biscuitBytes, ed25519.PublicKey(controlPlanePubKeyBytes), n.config.RequiredRole); err != nil {
+			if err := identity.VerifyBiscuitRole(biscuitBytes, ed25519.PublicKey(controlPlanePubKeyBytes), n.config.RequiredRole, n.BiscuitTimeout); err != nil {
 				return fmt.Errorf("loaded identity fails role requirement %q: %w", n.config.RequiredRole, err)
 			}
 		}
@@ -829,7 +828,7 @@ func (n *SamNode) performRouterAuthHandshake(s network.Stream, biscuitBytes []by
 	}
 
 	// Enforce role("router") inside the biscuit
-	authorizer, err := b.Authorizer(trustedKeys[0])
+	authorizer, err := b.Authorizer(trustedKeys[0], identity.AuthorizerOptions(n.BiscuitTimeout)...)
 	if err != nil {
 		return false, fmt.Errorf("authorizer instantiation failed: %w", err)
 	}
@@ -1435,9 +1434,7 @@ func (n *SamNode) verifyBiscuit(biscuitData []byte, remotePeer peer.ID) (*biscui
 		if len(tk.Key) != ed25519.PublicKeySize {
 			continue
 		}
-		authorizer, err := b.Authorizer(tk.Key, biscuit.WithWorldOptions(
-			datalog.WithMaxDuration(5*time.Second),
-		))
+		authorizer, err := b.Authorizer(tk.Key, identity.AuthorizerOptions(n.BiscuitTimeout)...)
 		if err != nil {
 			lastErr = fmt.Errorf("authorizer error: %w", err)
 			continue

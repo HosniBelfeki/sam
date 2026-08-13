@@ -198,7 +198,6 @@ func TestSamNodeJoinOfflineAccessSavesRefreshToken(t *testing.T) {
 	}
 }
 
-
 // TestSamNodeRunJoinNonInteractive covers the safe fallback: since the test
 // harness gives the child process no TTY (stdin defaults to /dev/null),
 // "run --join" must not attempt (and block on) an interactive OIDC login; it
@@ -405,4 +404,3 @@ func normalizeControlPlaneURLForTest(url string) string {
 	}
 	return strings.TrimSuffix(url, "/")
 }
-

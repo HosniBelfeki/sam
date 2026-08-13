@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/google/sam/api"
+	"github.com/google/sam/internal/identity"
 )
 
 // Options holds configuration details for the sam-router.
@@ -69,7 +70,7 @@ func (o *Options) Default() {
 		o.KeysDBPath = "router.key"
 	}
 	if o.BiscuitTimeout <= 0 {
-		o.BiscuitTimeout = 100 * time.Millisecond
+		o.BiscuitTimeout = identity.DefaultAuthorizerTimeout
 	}
 	if o.RequiredRole == "" {
 		o.RequiredRole = api.RoleRouter

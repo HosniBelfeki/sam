@@ -136,7 +136,7 @@ func (n *SamNode) processEnrollResponse(resp *http.Response) (*api.EnrollRespons
 	}
 
 	if n.config.RequiredRole != "" {
-		if err := identity.VerifyBiscuitRole(enrollResp.BiscuitToken, ed25519.PublicKey(enrollResp.ControlPlanePublicKey), n.config.RequiredRole); err != nil {
+		if err := identity.VerifyBiscuitRole(enrollResp.BiscuitToken, ed25519.PublicKey(enrollResp.ControlPlanePublicKey), n.config.RequiredRole, n.BiscuitTimeout); err != nil {
 			return nil, fmt.Errorf("enrolled biscuit token lacks required role %q: %w", n.config.RequiredRole, err)
 		}
 	}
@@ -317,7 +317,7 @@ func (n *SamNode) EnrollBootstrap(ctx context.Context, controlPlaneURL string, b
 		return fmt.Errorf("received invalid control plane public key size: %d bytes", len(enrollResp.ControlPlanePublicKey))
 	}
 
-	if err := identity.VerifyBiscuitRole(enrollResp.BiscuitToken, ed25519.PublicKey(enrollResp.ControlPlanePublicKey), n.config.RequiredRole); err != nil {
+	if err := identity.VerifyBiscuitRole(enrollResp.BiscuitToken, ed25519.PublicKey(enrollResp.ControlPlanePublicKey), n.config.RequiredRole, n.BiscuitTimeout); err != nil {
 		return fmt.Errorf("enrolled biscuit token lacks required role %q: %w", n.config.RequiredRole, err)
 	}
 

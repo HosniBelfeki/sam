@@ -845,7 +845,7 @@ func (s *Server) HandleRouterLease(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Enforce role("router") or role("bootstrap") inside the biscuit
-	authorizer, err := b.Authorizer(verifyingKey)
+	authorizer, err := b.Authorizer(verifyingKey, identity.AuthorizerOptions(s.config.BiscuitTimeout)...)
 	if err != nil {
 		http.Error(w, "Internal authorizer error", http.StatusInternalServerError)
 		return

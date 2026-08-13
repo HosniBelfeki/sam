@@ -21,8 +21,8 @@ import (
 	"sync/atomic"
 
 	"github.com/biscuit-auth/biscuit-go/v2"
-	"github.com/biscuit-auth/biscuit-go/v2/datalog"
 	"github.com/google/sam/api"
+	"github.com/google/sam/internal/identity"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-msgio"
@@ -194,11 +194,7 @@ func (n *SamNode) Authorize(rawToken []byte, req RequestContext, pubKey ed25519.
 		return fmt.Errorf("invalid biscuit: %w", err)
 	}
 
-	var authOpts []biscuit.AuthorizerOption
-	if n.BiscuitTimeout > 0 {
-		authOpts = append(authOpts, biscuit.WithWorldOptions(datalog.WithMaxDuration(n.BiscuitTimeout)))
-	}
-	authorizer, err := b.Authorizer(pubKey, authOpts...)
+	authorizer, err := b.Authorizer(pubKey, identity.AuthorizerOptions(n.BiscuitTimeout)...)
 	if err != nil {
 		return err
 	}
@@ -340,10 +336,7 @@ func (n *SamNode) injectIdentityFacts(authorizer biscuit.Authorizer, pubKey ed25
 	copy(keys, n.trustedKeys)
 	n.keysMu.RUnlock()
 
-	var authOpts []biscuit.AuthorizerOption
-	if n.BiscuitTimeout > 0 {
-		authOpts = append(authOpts, biscuit.WithWorldOptions(datalog.WithMaxDuration(n.BiscuitTimeout)))
-	}
+	authOpts := identity.AuthorizerOptions(n.BiscuitTimeout)
 
 	var auth biscuit.Authorizer
 	var authErr error

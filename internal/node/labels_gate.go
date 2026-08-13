@@ -21,8 +21,6 @@ import (
 	"sort"
 	"time"
 
-	"github.com/biscuit-auth/biscuit-go/v2"
-	"github.com/biscuit-auth/biscuit-go/v2/datalog"
 	"github.com/google/sam/api"
 	"github.com/google/sam/internal/identity"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -106,11 +104,7 @@ func (n *SamNode) checkPeerLabels(providerBiscuit []byte, peerID peer.ID, requir
 		return fmt.Errorf("provider %s biscuit verification failed: %w", peerID, err)
 	}
 
-	var authOpts []biscuit.AuthorizerOption
-	if n.BiscuitTimeout > 0 {
-		authOpts = append(authOpts, biscuit.WithWorldOptions(datalog.WithMaxDuration(n.BiscuitTimeout)))
-	}
-	authorizer, err := b.Authorizer(key, authOpts...)
+	authorizer, err := b.Authorizer(key, identity.AuthorizerOptions(n.BiscuitTimeout)...)
 	if err != nil {
 		return fmt.Errorf("provider %s authorizer instantiation failed: %w", peerID, err)
 	}
