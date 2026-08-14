@@ -15,10 +15,52 @@
 package main
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/google/sam/internal/node"
+	"github.com/spf13/cobra"
 )
+
+func TestResolveSocketPath(t *testing.T) {
+	originalDataDir, originalSocketPath := dataDirFlag, socketPathFlag
+	t.Cleanup(func() { dataDirFlag, socketPathFlag = originalDataDir, originalSocketPath })
+	dataDirFlag = t.TempDir()
+
+	newRunCmd := func() *cobra.Command {
+		cmd := &cobra.Command{Use: "run"}
+		socketPathFlag = ""
+		cmd.Flags().StringVar(&socketPathFlag, "socket-path", "", "")
+		return cmd
+	}
+
+	t.Run("defaults into the data directory", func(t *testing.T) {
+		want := filepath.Join(dataDirFlag, node.DefaultSocketName)
+		if got := resolveSocketPath(newRunCmd()); got != want {
+			t.Errorf("resolveSocketPath() = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("honors an explicit path", func(t *testing.T) {
+		cmd := newRunCmd()
+		if err := cmd.Flags().Set("socket-path", "/tmp/custom.sock"); err != nil {
+			t.Fatalf("Set: %v", err)
+		}
+		if got := resolveSocketPath(cmd); got != "/tmp/custom.sock" {
+			t.Errorf("resolveSocketPath() = %q, want /tmp/custom.sock", got)
+		}
+	})
+
+	t.Run("an explicitly empty path disables the socket", func(t *testing.T) {
+		cmd := newRunCmd()
+		if err := cmd.Flags().Set("socket-path", ""); err != nil {
+			t.Fatalf("Set: %v", err)
+		}
+		if got := resolveSocketPath(cmd); got != "" {
+			t.Errorf("resolveSocketPath() = %q, want empty", got)
+		}
+	})
+}
 
 func TestParseLabelsFlag(t *testing.T) {
 	if got, err := parseLabelsFlag(""); got != nil || err != nil {

@@ -16,6 +16,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -44,11 +45,11 @@ const (
 // daemonizeRun re-executes this binary as a detached background node and
 // returns once its local API answers, so a single non-blocking command is
 // enough to bring the mesh up.
-func daemonizeRun() error {
+func daemonizeRun(socketPath string) error {
 	dataDir := resolveDataDir()
-	probe := localProbeAddr(bindAddrFlag)
+	probe := probeTarget{addr: localProbeAddr(bindAddrFlag), socketPath: socketPath}
 
-	if probeReady(probe, time.Second) {
+	if probe.ready(time.Second) {
 		fmt.Printf("sam-node is already running and listening on %s\n", probe)
 		return nil
 	}
@@ -159,10 +160,10 @@ func ensureDaemonToken(dataDir string) ([]string, string, error) {
 
 // waitForDaemon blocks until the background node answers, it exits, or the
 // startup budget runs out.
-func waitForDaemon(probe string, exited <-chan error) error {
+func waitForDaemon(probe probeTarget, exited <-chan error) error {
 	deadline := time.After(daemonReadyTimeout)
 	for {
-		if probeReady(probe, daemonPollInterval) {
+		if probe.ready(daemonPollInterval) {
 			return nil
 		}
 		select {
@@ -173,6 +174,29 @@ func waitForDaemon(probe string, exited <-chan error) error {
 		case <-time.After(daemonPollInterval):
 		}
 	}
+}
+
+// probeTarget is where a freshly started node is expected to answer. A node
+// can serve on a TCP address, on a Unix socket, or on both, so either endpoint
+// answering means it is up.
+type probeTarget struct {
+	addr       string
+	socketPath string
+}
+
+func (p probeTarget) String() string {
+	if p.addr == "" {
+		return p.socketPath
+	}
+	return p.addr
+}
+
+// ready reports whether the node's local API is answering.
+func (p probeTarget) ready(timeout time.Duration) bool {
+	if p.addr != "" && probeReady(p.addr, timeout) {
+		return true
+	}
+	return p.socketPath != "" && socketProbeReady(p.socketPath, timeout)
 }
 
 // probeReady reports whether the node's local API is answering on addr.
@@ -187,6 +211,26 @@ func probeReady(addr string, timeout time.Duration) bool {
 	}
 	client := &http.Client{Timeout: timeout}
 	resp, err := client.Get("http://" + addr + "/healthz")
+	if err != nil {
+		return false
+	}
+	_ = resp.Body.Close()
+	return resp.StatusCode == http.StatusOK
+}
+
+// socketProbeReady reports whether the node's local API is answering on its
+// Unix socket. The host in the URL is ignored once the dialer targets a socket.
+func socketProbeReady(path string, timeout time.Duration) bool {
+	client := &http.Client{
+		Timeout: timeout,
+		Transport: &http.Transport{
+			DisableKeepAlives: true,
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				return (&net.Dialer{Timeout: timeout}).DialContext(ctx, "unix", path)
+			},
+		},
+	}
+	resp, err := client.Get("http://localhost/healthz")
 	if err != nil {
 		return false
 	}
@@ -330,14 +374,24 @@ func tailFile(path string, maxBytes int64, maxLines int) string {
 	return strings.Join(lines, "\n")
 }
 
-func printDaemonSummary(pid int, probe, tokenPath, logPath string) {
+func printDaemonSummary(pid int, probe probeTarget, tokenPath, logPath string) {
 	fmt.Printf("sam-node is running in the background.\n")
 	fmt.Printf("  PID       %d\n", pid)
-	fmt.Printf("  Endpoint  http://%s/mcp\n", probe)
+	if probe.addr != "" {
+		fmt.Printf("  Endpoint  http://%s/mcp\n", probe.addr)
+	}
+	if probe.socketPath != "" {
+		fmt.Printf("  Socket    %s\n", probe.socketPath)
+	}
 	if tokenPath != "" {
 		fmt.Printf("  Token     %s\n", tokenPath)
 	}
 	fmt.Printf("  Logs      %s\n", logPath)
 	fmt.Printf("  Stop      kill %d\n", pid)
-	fmt.Printf("\nAuthenticate to it with the header \"X-Sam-Authentication: Bearer <token>\".\n")
+	if probe.socketPath != "" {
+		fmt.Printf("\nCall it over the socket without a token, e.g.\n  curl --unix-socket %s http://localhost/healthz\n", probe.socketPath)
+	}
+	if probe.addr != "" {
+		fmt.Printf("\nOver TCP, authenticate with the header \"X-Sam-Authentication: Bearer <token>\".\n")
+	}
 }

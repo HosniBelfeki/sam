@@ -114,7 +114,7 @@ func StartNode(configJSON string) error {
 		if bindAddr == "" {
 			bindAddr = "127.0.0.1:8080"
 		}
-		srv, err := node.StartUnauthSidecarServer(displayControlPlane, bindAddr, "", "")
+		srv, err := node.StartUnauthSidecarServer(displayControlPlane, bindAddr, "", "", "")
 		if err != nil {
 			_ = store.Close()
 			activeStore = nil
@@ -193,7 +193,7 @@ func StartNode(configJSON string) error {
 	if bindAddr == "" {
 		bindAddr = "127.0.0.1:8080"
 	}
-	sidecarSrv, err = node.StartSidecarServer(samNode, bindAddr, config.ApiToken, "", "", "")
+	sidecarSrv, err = node.StartSidecarServer(samNode, bindAddr, "", config.ApiToken, "", "", "")
 	if err != nil {
 		_ = stopNodeInternal()
 		return fmt.Errorf("failed to start sidecar server: %w", err)

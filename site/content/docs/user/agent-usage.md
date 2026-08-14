@@ -76,8 +76,9 @@ SAM_API_TOKEN="my-agent-super-token-123" sam-node run --bind-addr "127.0.0.1:808
 ```
 
 ### Key CLI Parameters
-*   `--bind-addr`: The local TCP address where the node's local HTTP server runs (default: `127.0.0.1:8080`).
-*   API token (`SAM_API_TOKEN` env or `--api-token-path` file): a security token required by any local AI agent attempting to connect to your node.
+*   `--bind-addr`: The local TCP address where the node's local HTTP server runs (default: `127.0.0.1:8080`). Pass an empty value to serve only on the Unix socket.
+*   `--socket-path`: Unix socket serving the same API (default: `<data-dir>/sam.sock`). Pass an empty value to disable it.
+*   API token (`SAM_API_TOKEN` env or `--api-token-path` file): a security token required by any local AI agent attempting to connect to your node over TCP.
 *   `--data-dir`: Custom path to store configurations and Biscuit tokens (defaults to `~/.config/sam-mesh` or env `SAM_DATA_DIR`).
 
 ---
@@ -89,6 +90,28 @@ Your AI agent connects to the node's local MCP server. The local server translat
 ### Exposing the API
 The local MCP endpoint is served via **HTTP Server-Sent Events (SSE)** at:
 `http://127.0.0.1:8080/mcp`
+
+The node serves the very same API on a Unix socket, `<data-dir>/sam.sock`
+(usually `~/.config/sam-mesh/sam.sock`). Reaching that socket already proves
+the caller is the user who owns it — the same bar as reading the token file —
+so requests over it need no token, exactly like `docker.sock`:
+
+```bash
+curl --unix-socket ~/.config/sam-mesh/sam.sock \
+  http://localhost/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model": "mistralai/mistral-7b-instruct", "messages": [{"role": "user", "content": "Write a haiku about a decentralized mesh network."}]}'
+```
+
+(`http://localhost` is a placeholder host that clients ignore once they dial a
+socket.) The socket is created with `0600` permissions inside the `0700` data
+directory, and removed when the node stops.
+
+Most MCP clients speak only stdio or HTTP, so the TCP listener stays on by
+default and the socket is an addition rather than a replacement. Use
+`--socket-path ""` to run without it, or `--bind-addr ""` to drop the TCP port
+and serve the API exclusively over the socket, which leaves the node with no
+listening port and no shared secret to manage.
 
 ### Authentication
 When configuring your agent client, you must pass the API token in a SAM-specific

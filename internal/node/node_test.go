@@ -25,7 +25,81 @@ import (
 	"github.com/google/sam/api"
 	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/libp2p/go-libp2p/core/crypto"
+	"github.com/multiformats/go-multiaddr"
 )
+
+func TestAnnounceFilter(t *testing.T) {
+	const (
+		loopback  = "/ip4/127.0.0.1/tcp/5002"
+		linkLocal = "/ip4/169.254.10.1/tcp/5002"
+		private   = "/ip4/192.168.94.13/tcp/5002"
+		public    = "/ip4/34.91.220.211/udp/8192/quic-v1"
+		// Relay path whose router sits on a private address, as in an on-premises mesh.
+		circuit = "/ip4/10.0.0.7/tcp/4501/p2p/12D3KooWG1pA6goegCncqwbZLSr8pnjUZ6JMAAe6SmnHTgUNCk88/p2p-circuit"
+	)
+	input := []multiaddr.Multiaddr{}
+	for _, s := range []string{loopback, linkLocal, private, public, circuit} {
+		ma, err := multiaddr.NewMultiaddr(s)
+		if err != nil {
+			t.Fatalf("failed to parse %s: %v", s, err)
+		}
+		input = append(input, ma)
+	}
+
+	announce := true
+	suppress := false
+
+	tests := []struct {
+		name            string
+		allowLoopback   bool
+		announcePrivate *bool
+		want            []string
+	}{
+		{
+			name: "default keeps private addresses so LAN meshes stay reachable",
+			want: []string{private, public, circuit},
+		},
+		{
+			name:            "explicit announce private matches the default",
+			announcePrivate: &announce,
+			want:            []string{private, public, circuit},
+		},
+		{
+			name:            "suppressing private addresses still announces relay paths",
+			announcePrivate: &suppress,
+			want:            []string{public, circuit},
+		},
+		{
+			name:          "allow loopback publishes everything",
+			allowLoopback: true,
+			want:          []string{loopback, linkLocal, private, public, circuit},
+		},
+		{
+			name:            "allow loopback combined with suppressed private addresses",
+			allowLoopback:   true,
+			announcePrivate: &suppress,
+			want:            []string{loopback, linkLocal, public, circuit},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			n := &SamNode{config: Options{
+				AllowLoopback:        tt.allowLoopback,
+				AnnouncePrivateAddrs: tt.announcePrivate,
+			}}
+			got := n.announceFilter(input)
+			if len(got) != len(tt.want) {
+				t.Fatalf("got %v, want %v", got, tt.want)
+			}
+			for i, addr := range got {
+				if addr.String() != tt.want[i] {
+					t.Errorf("addr %d: got %s, want %s", i, addr, tt.want[i])
+				}
+			}
+		})
+	}
+}
 
 func TestHandleBannedEvent(t *testing.T) {
 	revokedCache, _ := lru.New[string, int64](10)

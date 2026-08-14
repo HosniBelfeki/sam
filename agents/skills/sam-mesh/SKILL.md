@@ -43,6 +43,20 @@ approve it before running anything.
    `~/.gemini/config/mcp_config.json`.
 5. Tell the user to restart the agent session, since MCP tools load at startup.
 
+MCP clients need that HTTP endpoint, but the node serves the same API on a Unix
+socket too, printed by step 2 and by default `~/.config/sam-mesh/sam.sock`. For
+shell commands prefer the socket: only the user who owns it can connect, so it
+needs no token at all and no secret ends up in a command line or in the
+transcript.
+
+```bash
+curl --unix-socket ~/.config/sam-mesh/sam.sock http://localhost/healthz
+```
+
+The host in the URL is a placeholder that curl ignores once it dials a socket.
+If the socket is missing, the node was started with `--socket-path ""`, and the
+TCP endpoint with the token header is the way in.
+
 If setup is stuck in a half-configured state, ask the user before starting over:
 stop the node, run `sam-node reset --all --yes` for a clean slate, then go back
 to step 2. That deletes the node's identity and its PeerID, and enrolling again
@@ -138,6 +152,15 @@ Authenticate to the node with `X-Sam-Authentication: Bearer <node token>`; the
 as its `api_key`. Send a separate `Authorization` header only when the
 destination model service needs its own credential: it passes through to that
 service untouched.
+
+Over the Unix socket no token is needed, which keeps it out of shell history:
+
+```bash
+curl --unix-socket ~/.config/sam-mesh/sam.sock \
+  http://localhost/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model": "<model>", "messages": [{"role": "user", "content": "..."}]}'
+```
 
 Ask the user before sending private or sensitive content to a mesh model, and
 say which provider will receive it.
