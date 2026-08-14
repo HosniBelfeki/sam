@@ -42,6 +42,14 @@ jobs:
           GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
           GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
         run: make mobile-app-apk
+      - name: Restore files rewritten by the Flutter build
+        # `flutter build` re-resolves pubspec.lock (and may rewrite
+        # analysis_options.yaml), leaving the tree dirty and failing
+        # GoReleaser's git state validation. Build outputs are untracked, so
+        # restoring tracked files keeps the APK available for the upload step.
+        run: |
+          git -C mobile/sam-node-app checkout -- .
+          git status --porcelain
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
