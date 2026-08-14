@@ -208,6 +208,9 @@ func (n *SamNode) handleGetMeshInfo(ctx context.Context, req *mcp.CallToolReques
 		"dht_size":        dhtSize,
 		"router_peer_id":  n.RouterPeerID.String(),
 	}
+	if n.BoundSocketPath != "" {
+		resData["local_api_socket"] = n.BoundSocketPath
+	}
 	responseBytes, err := json.Marshal(resData)
 	if err != nil {
 		return nil, nil, err
