@@ -33,17 +33,22 @@ const (
 
 // Options holds all configuration options for a SamNode.
 type Options struct {
-	PrivKey              crypto.PrivKey
-	ControlPlanePubKey   ed25519.PublicKey
-	RouterAddrs          []multiaddr.Multiaddr
-	Store                *Store
-	MeshID               string
-	DiscoveryInterval    string
-	ListenAddrs          []string
-	EnableRelay          bool
-	NodeConfig           *NodeConfigComplete
-	KeyGracePeriod       time.Duration
-	AllowLoopback        bool
+	PrivKey            crypto.PrivKey
+	ControlPlanePubKey ed25519.PublicKey
+	RouterAddrs        []multiaddr.Multiaddr
+	Store              *Store
+	MeshID             string
+	DiscoveryInterval  string
+	ListenAddrs        []string
+	EnableRelay        bool
+	NodeConfig         *NodeConfigComplete
+	KeyGracePeriod     time.Duration
+	AllowLoopback      bool
+	// AnnouncePrivateAddrs controls whether RFC1918/ULA addresses are published
+	// to the mesh. Nil means true: private meshes reach each other over exactly
+	// those addresses. Set false on nodes that are only reachable via routers or
+	// public addresses, so peers do not learn the host's internal topology.
+	AnnouncePrivateAddrs *bool
 	MonitorBootstrap     time.Duration
 	MonitorInterval      time.Duration
 	AutoRelayMinInterval time.Duration
@@ -102,6 +107,10 @@ func (o *Options) Default() {
 	}
 	if len(o.ListenAddrs) == 0 {
 		o.ListenAddrs = []string{"/ip4/0.0.0.0/udp/5001/quic-v1", "/ip4/0.0.0.0/tcp/5002"}
+	}
+	if o.AnnouncePrivateAddrs == nil {
+		announce := true
+		o.AnnouncePrivateAddrs = &announce
 	}
 	if o.RequiredRole == "" {
 		o.RequiredRole = api.RoleNode

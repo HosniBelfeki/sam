@@ -78,6 +78,7 @@ var (
 	logLevelFlag              string
 	keyGracePeriodFlag        time.Duration
 	allowLoopbackFlag         bool
+	announcePrivateFlag       bool
 	monitorBootstrapFlag      time.Duration
 	monitorCheckIntervalFlag  time.Duration
 	autoRelayMinIntervalFlag  time.Duration
@@ -409,6 +410,7 @@ func main() {
 					NodeConfig:           nodeConfig,
 					KeyGracePeriod:       keyGracePeriodFlag,
 					AllowLoopback:        allowLoopbackFlag,
+					AnnouncePrivateAddrs: &announcePrivateFlag,
 					MonitorBootstrap:     monitorBootstrapFlag,
 					MonitorInterval:      monitorCheckIntervalFlag,
 					AutoRelayMinInterval: autoRelayMinIntervalFlag,
@@ -475,6 +477,7 @@ func main() {
 					NodeConfig:           nodeConfig,
 					KeyGracePeriod:       keyGracePeriodFlag,
 					AllowLoopback:        allowLoopbackFlag,
+					AnnouncePrivateAddrs: &announcePrivateFlag,
 					MonitorBootstrap:     monitorBootstrapFlag,
 					MonitorInterval:      monitorCheckIntervalFlag,
 					AutoRelayMinInterval: autoRelayMinIntervalFlag,
@@ -543,6 +546,7 @@ func main() {
 					NodeConfig:           nodeConfig,
 					KeyGracePeriod:       keyGracePeriodFlag,
 					AllowLoopback:        allowLoopbackFlag,
+					AnnouncePrivateAddrs: &announcePrivateFlag,
 					MonitorBootstrap:     monitorBootstrapFlag,
 					MonitorInterval:      monitorCheckIntervalFlag,
 					AutoRelayMinInterval: autoRelayMinIntervalFlag,
@@ -695,6 +699,7 @@ func main() {
 				NodeConfig:           nodeConfig,
 				KeyGracePeriod:       keyGracePeriodFlag,
 				AllowLoopback:        allowLoopbackFlag,
+				AnnouncePrivateAddrs: &announcePrivateFlag,
 				MonitorBootstrap:     2 * time.Minute,
 				MonitorInterval:      1 * time.Minute,
 				AutoRelayMinInterval: 30 * time.Second,
@@ -806,8 +811,10 @@ func main() {
 	runCmd.Flags().StringVar(&logLevelFlag, "log-level", "info", "Log level (debug, info, warn, error)")
 	runCmd.Flags().DurationVar(&keyGracePeriodFlag, "key-grace-period", 24*time.Hour, "Key grace period for old keys (e.g. 24h)")
 	runCmd.Flags().BoolVar(&allowLoopbackFlag, "allow-loopback", false, "Allow publishing and connecting to loopback/link-local addresses")
+	runCmd.Flags().BoolVar(&announcePrivateFlag, "announce-private", true, "Publish this host's private (RFC1918/ULA) addresses to the mesh; keep enabled for LAN or on-premises meshes, disable when peers are only reachable through routers or public addresses")
 	runCmd.Flags().BoolVar(&offlineAccessFlag, "offline-access", false, "With --join, request OIDC offline access/refresh token for automatic renewal")
 	joinCmd.Flags().BoolVar(&allowLoopbackFlag, "allow-loopback", false, "Allow publishing and connecting to loopback/link-local addresses")
+	joinCmd.Flags().BoolVar(&announcePrivateFlag, "announce-private", true, "Publish this host's private (RFC1918/ULA) addresses to the mesh; keep enabled for LAN or on-premises meshes, disable when peers are only reachable through routers or public addresses")
 	joinCmd.Flags().DurationVar(&routerConnectTimeoutFlag, "router-connect-timeout", node.DefaultRouterConnectTimeout, "Timeout for dialing each router address")
 	joinCmd.Flags().BoolVar(&offlineAccessFlag, "offline-access", false, "Request OIDC offline access/refresh token for automatic renewal")
 	joinCmd.Flags().StringVar(&bootstrapTokenFlag, "bootstrap-token", "", "Pre-shared bootstrap token for enrollment")

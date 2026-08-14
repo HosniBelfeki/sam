@@ -324,18 +324,7 @@ func (n *SamNode) Start(ctx context.Context) error {
 		libp2p.EnableHolePunching(),
 		libp2p.ConnectionManager(cm),
 		libp2p.SwarmOpts(swarm.WithDialTimeout(15 * time.Second)),
-		libp2p.AddrsFactory(func(addrs []multiaddr.Multiaddr) []multiaddr.Multiaddr {
-			if n.config.AllowLoopback {
-				return addrs
-			}
-			var filtered []multiaddr.Multiaddr
-			for _, addr := range addrs {
-				if !isLoopbackOrLinkLocal(addr) {
-					filtered = append(filtered, addr)
-				}
-			}
-			return filtered
-		}),
+		libp2p.AddrsFactory(n.announceFilter),
 	}
 
 	// If we have routers, configure them as our static fallback relays for NAT hole-punching
@@ -1928,6 +1917,32 @@ func (n *SamNode) StartIngressServer(ctx context.Context) error {
 	}()
 
 	return nil
+}
+
+// announceFilter selects which of the host's addresses are published to the
+// mesh (via Identify and DHT provider records). Relay addresses always pass:
+// their IP belongs to the router, and dropping one would strand a node behind
+// NAT.
+func (n *SamNode) announceFilter(addrs []multiaddr.Multiaddr) []multiaddr.Multiaddr {
+	announcePrivate := n.config.AnnouncePrivateAddrs == nil || *n.config.AnnouncePrivateAddrs
+	if n.config.AllowLoopback && announcePrivate {
+		return addrs
+	}
+	var filtered []multiaddr.Multiaddr
+	for _, addr := range addrs {
+		if hasCircuit(addr) {
+			filtered = append(filtered, addr)
+			continue
+		}
+		if !n.config.AllowLoopback && isLoopbackOrLinkLocal(addr) {
+			continue
+		}
+		if !announcePrivate && isPrivateIP(addr) {
+			continue
+		}
+		filtered = append(filtered, addr)
+	}
+	return filtered
 }
 
 func isLoopbackOrLinkLocal(addr multiaddr.Multiaddr) bool {
