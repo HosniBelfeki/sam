@@ -224,6 +224,7 @@ func socketProbeReady(path string, timeout time.Duration) bool {
 	client := &http.Client{
 		Timeout: timeout,
 		Transport: &http.Transport{
+			DisableKeepAlives: true,
 			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 				return (&net.Dialer{Timeout: timeout}).DialContext(ctx, "unix", path)
 			},
