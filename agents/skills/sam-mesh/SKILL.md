@@ -13,6 +13,8 @@ Pick the path that matches the need:
 
 - The `sam-node` MCP tools are not callable yet:
   [Bootstrap A Node](#bootstrap-a-node).
+- The task needs a plain HTTP call to the node, such as inference or a
+  `local_proxy_url`: [Talk To The Node Over HTTP](#talk-to-the-node-over-http).
 - The task needs a remote tool or capability:
   [Inspect The Mesh](#inspect-the-mesh).
 - The task needs a model completion:
@@ -43,19 +45,10 @@ approve it before running anything.
    `~/.gemini/config/mcp_config.json`.
 5. Tell the user to restart the agent session, since MCP tools load at startup.
 
-MCP clients need that HTTP endpoint, but the node serves the same API on a Unix
-socket too, printed by step 2 and by default `~/.config/sam-mesh/sam.sock`. For
-shell commands prefer the socket: only the user who owns it can connect, so it
-needs no token at all and no secret ends up in a command line or in the
-transcript.
-
-```bash
-curl --unix-socket ~/.config/sam-mesh/sam.sock http://localhost/healthz
-```
-
-The host in the URL is a placeholder that curl ignores once it dials a socket.
-If the socket is missing, the node was started with `--socket-path ""`, and the
-TCP endpoint with the token header is the way in.
+MCP clients need that HTTP endpoint. For everything else — shell commands and
+direct HTTP calls to the node — see
+[Talk To The Node Over HTTP](#talk-to-the-node-over-http): the Unix socket gets
+you in without a token.
 
 If setup is stuck in a half-configured state, ask the user before starting over:
 stop the node, run `sam-node reset --all --yes` for a clean slate, then go back
@@ -64,6 +57,42 @@ needs another login, so never do it to work around an unexplained error.
 
 Put the node API token only in the agent's MCP configuration. Do not echo it
 into the transcript, and do not commit it.
+
+## Talk To The Node Over HTTP
+
+The MCP tools need none of this. It applies when a task needs a plain HTTP
+request to the node: the OpenAI-compatible `/v1` endpoints, or a
+`local_proxy_url` returned by `discover_remote_services`.
+
+There are two ways in. Try them in this order.
+
+**1. The Unix socket, whenever there is one.** `get_mesh_info` reports it as
+`local_api_socket`, by default `~/.config/sam-mesh/sam.sock`. It serves the same
+API and takes no token at all: only the user who owns the socket can connect to
+it, so the filesystem has already done the authenticating. Prefer it, because no
+secret reaches a command line, the shell history, or the transcript.
+
+```bash
+curl --unix-socket ~/.config/sam-mesh/sam.sock http://localhost/v1/models
+```
+
+The host in the URL is a placeholder that curl ignores once it dials a socket.
+
+**2. The TCP endpoint, with the node API token.** Use this when `get_mesh_info`
+reports no `local_api_socket`, or when that path is not reachable from where you
+run, for example a node inside a container. You already hold that token: it is
+the header you were configured with to reach this MCP server in the first place.
+Read it back from your own MCP client configuration — the `sam-mesh` entry in,
+for example, `~/.gemini/config/mcp_config.json` or `~/.claude.json` — rather than
+asking the user for it or reading the node's token file.
+
+```bash
+curl http://127.0.0.1:8080/v1/models -H "X-Sam-Authentication: Bearer <token>"
+```
+
+Never print the token or echo it into the transcript. `Authorization` is not the
+node's credential: send it only when the destination service needs its own, and
+it passes through to that service untouched.
 
 ## Inspect The Mesh
 
@@ -147,13 +176,11 @@ To pin one specific provider instead of letting the facade choose, call
 `discover_remote_services` with `{"type":"inference"}` and send the request to
 the returned `local_proxy_url` (append `/v1/chat/completions`).
 
-Authenticate to the node with `X-Sam-Authentication: Bearer <node token>`; the
-`/v1` endpoints also accept it as `Authorization`, so an OpenAI SDK can pass it
-as its `api_key`. Send a separate `Authorization` header only when the
-destination model service needs its own credential: it passes through to that
-service untouched.
-
-Over the Unix socket no token is needed, which keeps it out of shell history:
+Authenticate as described in
+[Talk To The Node Over HTTP](#talk-to-the-node-over-http): over the socket when
+there is one, otherwise with the token from your own MCP configuration. The
+`/v1` endpoints also accept that token as `Authorization`, so an OpenAI SDK can
+pass it as its `api_key`.
 
 ```bash
 curl --unix-socket ~/.config/sam-mesh/sam.sock \
