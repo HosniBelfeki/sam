@@ -144,6 +144,7 @@ type SamNode struct {
 	rateLimiter          *PeerRateLimiter
 	services             *ServiceRegistry
 	BoundHTTPAddr        string
+	BoundSocketPath      string
 	AllowLoopback        bool
 
 	authSuccess      chan struct{}
@@ -1548,8 +1549,13 @@ func (n *SamNode) FindProvidersByType(ctx context.Context, serviceType api.Servi
 
 // localProxyURL builds the loopback URL clients use to reach a remote service.
 func (n *SamNode) localProxyURL(peerID peer.ID, typeStr, serviceName string) string {
+	host := n.BoundHTTPAddr
+	if host == "" {
+		// Socket-only node: any host works once the caller dials the socket.
+		host = "localhost"
+	}
 	return fmt.Sprintf("http://%s/sam/%s/%s/%s",
-		n.BoundHTTPAddr, peerID.String(), typeStr, serviceName)
+		host, peerID.String(), typeStr, serviceName)
 }
 
 // DiscoverRemoteServices dispatches to the named or type-only path

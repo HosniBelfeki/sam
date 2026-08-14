@@ -29,6 +29,8 @@ const (
 	DefaultDiscoveryInterval    = "30s"
 	DefaultConfigFile           = "sam-node.yaml"
 	DefaultRouterConnectTimeout = 5 * time.Second
+	// DefaultSocketName is the local API socket the node creates in its data directory.
+	DefaultSocketName = "sam.sock"
 )
 
 // Options holds all configuration options for a SamNode.

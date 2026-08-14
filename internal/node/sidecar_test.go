@@ -18,8 +18,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -33,6 +36,204 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"google.golang.org/protobuf/encoding/protojson"
 )
+
+// socketClient talks HTTP over a Unix socket; the host in the URL is ignored.
+func socketClient(path string) *http.Client {
+	return &http.Client{
+		Timeout: 2 * time.Second,
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				return (&net.Dialer{}).DialContext(ctx, "unix", path)
+			},
+		},
+	}
+}
+
+func waitForSocket(t *testing.T, path string) *http.Client {
+	t.Helper()
+	client := socketClient(path)
+	for i := 0; i < 50; i++ {
+		resp, err := client.Get("http://localhost/healthz")
+		if err == nil {
+			_ = resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				return client
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("sidecar socket %s never answered", path)
+	return nil
+}
+
+// TestSidecarSocketAuthorizesWithoutToken pins the socket's trust model: the
+// file's owner-only permissions are the credential, while the TCP listener on
+// the very same server keeps demanding the token.
+func TestSidecarSocketAuthorizesWithoutToken(t *testing.T) {
+	node := &SamNode{
+		BiscuitTimeout: 500 * time.Millisecond,
+		services:       NewServiceRegistry(&fakeDHT{}),
+	}
+	socketPath := filepath.Join(t.TempDir(), "sam.sock")
+
+	srv, err := StartSidecarServer(node, "127.0.0.1:0", socketPath, "test-token", "", "", "")
+	if err != nil {
+		t.Fatalf("failed to start sidecar server: %v", err)
+	}
+	defer func() { _ = srv.Close() }()
+
+	client := waitForSocket(t, socketPath)
+
+	info, err := os.Stat(socketPath)
+	if err != nil {
+		t.Fatalf("failed to stat socket: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0600 {
+		t.Errorf("socket permissions are %#o, want 0600", perm)
+	}
+	if node.BoundSocketPath != socketPath {
+		t.Errorf("BoundSocketPath = %q, want %q", node.BoundSocketPath, socketPath)
+	}
+
+	// 503 means the request cleared the auth gate and was only stopped by the
+	// node not being connected to a mesh.
+	resp, err := client.Get("http://localhost/sam/service/discover?type=mcp&name=test")
+	if err != nil {
+		t.Fatalf("socket request failed: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("untokened socket request: got status %d, want %d", resp.StatusCode, http.StatusServiceUnavailable)
+	}
+
+	tcpClient := &http.Client{Timeout: 2 * time.Second}
+	tcpResp, err := tcpClient.Get("http://" + node.BoundHTTPAddr + "/sam/service/discover?type=mcp&name=test")
+	if err != nil {
+		t.Fatalf("tcp request failed: %v", err)
+	}
+	defer func() { _ = tcpResp.Body.Close() }()
+	if tcpResp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("untokened TCP request: got status %d, want %d", tcpResp.StatusCode, http.StatusUnauthorized)
+	}
+}
+
+// TestSidecarSocketOnly covers a node with no TCP listener at all, where no API
+// token exists to demand.
+func TestSidecarSocketOnly(t *testing.T) {
+	node := &SamNode{
+		BiscuitTimeout: 500 * time.Millisecond,
+		services:       NewServiceRegistry(&fakeDHT{}),
+	}
+	socketPath := filepath.Join(t.TempDir(), "sam.sock")
+
+	srv, err := StartSidecarServer(node, "", socketPath, "", "", "", "")
+	if err != nil {
+		t.Fatalf("failed to start socket-only sidecar server: %v", err)
+	}
+	defer func() { _ = srv.Close() }()
+
+	waitForSocket(t, socketPath)
+
+	if node.BoundHTTPAddr != "" {
+		t.Errorf("BoundHTTPAddr = %q, want empty with no TCP listener", node.BoundHTTPAddr)
+	}
+}
+
+func TestStartSidecarServerRequiresAListener(t *testing.T) {
+	node := &SamNode{services: NewServiceRegistry(&fakeDHT{})}
+	if _, err := StartSidecarServer(node, "", "", "token", "", "", ""); err == nil {
+		t.Fatal("expected an error when neither a TCP address nor a socket is configured")
+	}
+}
+
+// TestSidecarSocketFailureKeepsTCPServing pins that the socket stays optional:
+// an unusable path degrades to a warning as long as TCP is still serving, but
+// is fatal for a node that has no other way in.
+func TestSidecarSocketFailureKeepsTCPServing(t *testing.T) {
+	unusable := filepath.Join(t.TempDir(), "missing-parent")
+	if err := os.WriteFile(unusable, []byte("not a directory"), 0600); err != nil {
+		t.Fatalf("failed to write the blocking file: %v", err)
+	}
+	socketPath := filepath.Join(unusable, "sam.sock")
+
+	node := &SamNode{
+		BiscuitTimeout: 500 * time.Millisecond,
+		services:       NewServiceRegistry(&fakeDHT{}),
+	}
+	srv, err := StartSidecarServer(node, "127.0.0.1:0", socketPath, "test-token", "", "", "")
+	if err != nil {
+		t.Fatalf("a bad socket path must not stop a TCP-serving node: %v", err)
+	}
+	defer func() { _ = srv.Close() }()
+	if node.BoundHTTPAddr == "" {
+		t.Error("expected the TCP listener to be bound")
+	}
+	if node.BoundSocketPath != "" {
+		t.Errorf("BoundSocketPath = %q, want empty after a failed socket", node.BoundSocketPath)
+	}
+
+	socketOnly := &SamNode{services: NewServiceRegistry(&fakeDHT{})}
+	if _, err := StartSidecarServer(socketOnly, "", socketPath, "", "", "", ""); err == nil {
+		t.Error("expected an error when the socket is the only configured listener")
+	}
+}
+
+func TestListenLocalSocket(t *testing.T) {
+	t.Run("replaces a socket left behind by a crashed node", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "sam.sock")
+		stale, err := net.Listen("unix", path)
+		if err != nil {
+			t.Fatalf("failed to create the stale socket: %v", err)
+		}
+		// Closing without unlinking is what a crash leaves behind.
+		if unixListener, ok := stale.(*net.UnixListener); ok {
+			unixListener.SetUnlinkOnClose(false)
+		}
+		_ = stale.Close()
+
+		listener, err := listenLocalSocket(path)
+		if err != nil {
+			t.Fatalf("listenLocalSocket on a stale socket: %v", err)
+		}
+		_ = listener.Close()
+	})
+
+	t.Run("refuses a socket a live node is using", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "sam.sock")
+		live, err := net.Listen("unix", path)
+		if err != nil {
+			t.Fatalf("failed to create the live socket: %v", err)
+		}
+		defer func() { _ = live.Close() }()
+		go func() {
+			for {
+				conn, err := live.Accept()
+				if err != nil {
+					return
+				}
+				_ = conn.Close()
+			}
+		}()
+
+		if _, err := listenLocalSocket(path); err == nil {
+			t.Fatal("expected an error when another node is listening on the socket")
+		}
+	})
+
+	t.Run("refuses to remove a file that is not a socket", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "sam.sock")
+		if err := os.WriteFile(path, []byte("precious"), 0600); err != nil {
+			t.Fatalf("failed to write the file: %v", err)
+		}
+
+		if _, err := listenLocalSocket(path); err == nil {
+			t.Fatal("expected an error for an existing non-socket file")
+		}
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("the existing file must be left alone: %v", err)
+		}
+	})
+}
 
 func TestWithAuth(t *testing.T) {
 	token := "test-token"
@@ -170,7 +371,7 @@ func TestSidecarServerAuthEnforcement(t *testing.T) {
 	token := "test-token"
 
 	// Start sidecar on an ephemeral port
-	sidecarSrv, err := StartSidecarServer(node, "127.0.0.1:0", token, "", "", "")
+	sidecarSrv, err := StartSidecarServer(node, "127.0.0.1:0", "", token, "", "", "")
 	if err != nil {
 		t.Fatalf("Failed to start sidecar server: %v", err)
 	}
@@ -254,7 +455,7 @@ func TestSidecarAuthorizationFallbackScope(t *testing.T) {
 	}
 	token := "test-token"
 
-	sidecarSrv, err := StartSidecarServer(node, "127.0.0.1:0", token, "", "", "")
+	sidecarSrv, err := StartSidecarServer(node, "127.0.0.1:0", "", token, "", "", "")
 	if err != nil {
 		t.Fatalf("Failed to start sidecar server: %v", err)
 	}
@@ -657,7 +858,7 @@ func TestStartSidecarServer_TokenMandatory(t *testing.T) {
 	node := &SamNode{BiscuitTimeout: 500 * time.Millisecond}
 
 	// Test case: No token, no TLS
-	_, err := StartSidecarServer(node, "127.0.0.1:0", "", "", "", "")
+	_, err := StartSidecarServer(node, "127.0.0.1:0", "", "", "", "", "")
 	if err == nil {
 		t.Fatal("Expected StartSidecarServer to fail without token and TLS, but it succeeded")
 	}
@@ -666,7 +867,7 @@ func TestStartSidecarServer_TokenMandatory(t *testing.T) {
 	}
 
 	// Test case: Token provided, should not fail immediately
-	sidecarSrv, err := StartSidecarServer(node, "127.0.0.1:0", "some-token", "", "", "")
+	sidecarSrv, err := StartSidecarServer(node, "127.0.0.1:0", "", "some-token", "", "", "")
 	if err == nil {
 		defer func() { _ = sidecarSrv.Close() }()
 	} else {

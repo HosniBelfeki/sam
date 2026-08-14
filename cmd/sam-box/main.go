@@ -218,7 +218,7 @@ func main() {
 						}
 					}
 					logger.Infof("No identity found. Starting unauthenticated sidecar for enrollment over MCP...")
-					unauthSrv, err := node.StartUnauthSidecarServer(displayControlPlane, "127.0.0.1:8080", "", "")
+					unauthSrv, err := node.StartUnauthSidecarServer(displayControlPlane, "127.0.0.1:8080", "", "", "")
 					if err != nil {
 						logger.Fatalf("Failed to start unauthenticated sidecar: %v", err)
 					}

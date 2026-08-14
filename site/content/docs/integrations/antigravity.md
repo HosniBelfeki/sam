@@ -29,12 +29,19 @@ sam-node run --daemonize
 sam-node is running in the background.
   PID       48213
   Endpoint  http://127.0.0.1:8080/mcp
+  Socket    /home/you/.config/sam-mesh/sam.sock
   Token     /home/you/.config/sam-mesh/api-token
   Logs      /home/you/.config/sam-mesh/sam-node.log
   Stop      kill 48213
 ```
 
 The command is idempotent: re-run it any time to make sure a node is up. Enrollment still needs a one-time login, so if the node has no identity yet the command tells you to run `sam-node join --headless <control-plane-url>` first, which prints a URL and a code to complete in your browser.
+
+Antigravity's MCP client needs the HTTP endpoint, but the socket serves the same API for anything the agent runs in a shell — including mesh inference — without a token to pass around:
+
+```bash
+curl --unix-socket ~/.config/sam-mesh/sam.sock http://localhost/v1/models
+```
 
 ### Alternative: a dedicated terminal
 

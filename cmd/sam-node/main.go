@@ -23,6 +23,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -61,6 +62,7 @@ var (
 	clientSecretFlag          string
 	controlPlanePublicKeyFlag string
 	bindAddrFlag              string
+	socketPathFlag            string
 	meshFlag                  string
 	discoveryIntervalFlag     string
 	listenAddrs               []string
@@ -222,7 +224,7 @@ func main() {
 		Run: func(cmd *cobra.Command, args []string) {
 			ctx := cmd.Context()
 			if daemonizeFlag {
-				if err := daemonizeRun(); err != nil {
+				if err := daemonizeRun(resolveSocketPath(cmd)); err != nil {
 					fmt.Fprintln(os.Stderr, err)
 					os.Exit(1)
 				}
@@ -368,7 +370,7 @@ func main() {
 				if len(token) == 0 {
 					displayControlPlane := defaultControlPlane(store, controlPlaneAddr)
 					logger.Infof("No identity found. Starting unauthenticated sidecar for enrollment over MCP...")
-					unauthSrv, err := node.StartUnauthSidecarServer(displayControlPlane, bindAddrFlag, tlsCertFlag, tlsKeyFlag)
+					unauthSrv, err := node.StartUnauthSidecarServer(displayControlPlane, bindAddrFlag, resolveSocketPath(cmd), tlsCertFlag, tlsKeyFlag)
 					if err != nil {
 						logger.Fatalf("Failed to start unauthenticated sidecar: %v", err)
 					}
@@ -578,7 +580,7 @@ func main() {
 			meshNode.Host.SetStreamHandler(api.AuthProtocolID, meshNode.HandleAuthHandshake)
 
 			// Start Sidecar API Server (multiplexed with MCP)
-			sidecarSrv, err := node.StartSidecarServer(meshNode, bindAddrFlag, apiTokenFlag, tlsCertFlag, tlsKeyFlag, tlsCAFlag)
+			sidecarSrv, err := node.StartSidecarServer(meshNode, bindAddrFlag, resolveSocketPath(cmd), apiTokenFlag, tlsCertFlag, tlsKeyFlag, tlsCAFlag)
 			if err != nil {
 				logger.Fatalf("Failed to start sidecar server: %v", err)
 			}
@@ -797,7 +799,8 @@ func main() {
 	runCmd.Flags().StringVar(&clientIDFlag, "client-id", "", "OIDC Client ID for M2M")
 	runCmd.Flags().StringVar(&clientSecretPathFlag, "client-secret-path", "", "Path to file containing the OIDC client secret (or env SAM_CLIENT_SECRET)")
 	runCmd.Flags().StringVar(&controlPlanePublicKeyFlag, "control-plane-public-key", "", "Control plane public key (32-byte Hex)")
-	runCmd.Flags().StringVar(&bindAddrFlag, "bind-addr", "127.0.0.1:8080", "Local TCP address for the HTTP server (MCP and Sidecar API)")
+	runCmd.Flags().StringVar(&bindAddrFlag, "bind-addr", "127.0.0.1:8080", "Local TCP address for the HTTP server (MCP and Sidecar API); pass an empty value to serve only on the Unix socket")
+	runCmd.Flags().StringVar(&socketPathFlag, "socket-path", "", "Unix socket serving the same API, where the socket's owner-only permissions replace the API token (defaults to <data-dir>/"+node.DefaultSocketName+"; pass an empty value to disable)")
 	runCmd.Flags().StringVar(&meshFlag, "mesh", node.DefaultMeshName, "Mesh federation name")
 	runCmd.Flags().StringVar(&discoveryIntervalFlag, "discovery-interval", node.DefaultDiscoveryInterval, "Polling interval for DHT discovery")
 	runCmd.Flags().DurationVar(&monitorBootstrapFlag, "monitor-bootstrap", 2*time.Minute, "Initial wait before monitoring router connection")
@@ -875,4 +878,13 @@ func resolveDataDir() string {
 		logger.Fatalf("Failed to create data directory: %v", err)
 	}
 	return dir
+}
+
+// resolveSocketPath places the local API socket in the data directory unless
+// the operator names another path, or asks for no socket with --socket-path "".
+func resolveSocketPath(cmd *cobra.Command) string {
+	if cmd.Flags().Changed("socket-path") {
+		return socketPathFlag
+	}
+	return filepath.Join(resolveDataDir(), node.DefaultSocketName)
 }

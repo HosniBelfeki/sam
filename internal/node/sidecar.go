@@ -26,6 +26,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -38,7 +39,10 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
-func StartSidecarServer(node *SamNode, addr, token, certFile, keyFile, caFile string) (*http.Server, error) {
+// StartSidecarServer serves the node's local API on a TCP address, on a Unix
+// socket, or on both. An empty addr disables the TCP listener; an empty
+// socketPath disables the socket.
+func StartSidecarServer(node *SamNode, addr, socketPath, token, certFile, keyFile, caFile string) (*http.Server, error) {
 	mux := http.NewServeMux()
 
 	// Public endpoints
@@ -84,20 +88,81 @@ func StartSidecarServer(node *SamNode, addr, token, certFile, keyFile, caFile st
 		// (MCP sessions, inference completions), so no ReadTimeout/WriteTimeout.
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
+		ConnContext:       markLocalSocketConn,
 	}
 
+	if addr == "" && socketPath == "" {
+		return nil, fmt.Errorf("no local API listener configured: set --bind-addr, --socket-path, or both")
+	}
+	if (certFile != "") != (keyFile != "") {
+		return nil, fmt.Errorf("both --tls-cert and --tls-key must be provided to enable TLS")
+	}
+
+	var socketListener net.Listener
+	if socketPath != "" {
+		l, err := bindLocalSocket(socketPath, addr == "")
+		if err != nil {
+			return nil, err
+		}
+		if l != nil {
+			socketListener = l
+			node.BoundSocketPath = socketPath
+		}
+	}
+
+	if addr != "" {
+		if err := serveTCP(server, node, addr, token, certFile, keyFile, caFile); err != nil {
+			if socketListener != nil {
+				_ = socketListener.Close()
+			}
+			return nil, err
+		}
+	}
+
+	serveSocket(server, socketListener, socketPath)
+
+	return server, nil
+}
+
+// bindLocalSocket binds the local API socket. Unless it is the only way into
+// the node, a path the OS rejects only downgrades to a warning: the socket is a
+// convenience on top of a working TCP listener and must never keep the node
+// from starting. A nil listener with a nil error means exactly that.
+func bindLocalSocket(socketPath string, required bool) (net.Listener, error) {
+	listener, err := listenLocalSocket(socketPath)
+	if err == nil {
+		return listener, nil
+	}
+	if required {
+		return nil, err
+	}
+	logger.Warnf("Local API socket disabled: %v", err)
+	return nil, nil
+}
+
+func serveSocket(server *http.Server, listener net.Listener, socketPath string) {
+	if listener == nil {
+		return
+	}
+	logger.Infof("Serving the local API on Unix socket %s", socketPath)
+	go func() {
+		if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
+			logger.Errorf("Sidecar API socket server error: %v", err)
+		}
+	}()
+}
+
+// serveTCP starts the sidecar's TCP listener, which — unlike the Unix socket —
+// is reachable by any local process and therefore always demands a token or
+// mutual TLS.
+func serveTCP(server *http.Server, node *SamNode, addr, token, certFile, keyFile, caFile string) error {
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
-		return nil, fmt.Errorf("failed to listen on %s: %w", addr, err)
+		return fmt.Errorf("failed to listen on %s: %w", addr, err)
 	}
 
 	actualAddr := listener.Addr().String()
 	node.BoundHTTPAddr = actualAddr
-
-	if (certFile != "") != (keyFile != "") {
-		_ = listener.Close()
-		return nil, fmt.Errorf("both --tls-cert and --tls-key must be provided to enable TLS")
-	}
 
 	if certFile != "" && keyFile != "" {
 		tlsConfig := &tls.Config{}
@@ -106,7 +171,7 @@ func StartSidecarServer(node *SamNode, addr, token, certFile, keyFile, caFile st
 			caCert, err := os.ReadFile(caFile)
 			if err != nil {
 				_ = listener.Close()
-				return nil, fmt.Errorf("failed to read CA cert: %w", err)
+				return fmt.Errorf("failed to read CA cert: %w", err)
 			}
 			caCertPool := x509.NewCertPool()
 			caCertPool.AppendCertsFromPEM(caCert)
@@ -117,7 +182,7 @@ func StartSidecarServer(node *SamNode, addr, token, certFile, keyFile, caFile st
 
 		if !isMTLS && token == "" {
 			_ = listener.Close()
-			return nil, fmt.Errorf("token is mandatory when not using mTLS")
+			return fmt.Errorf("token is mandatory when not using mTLS")
 		}
 
 		server.TLSConfig = tlsConfig
@@ -127,22 +192,80 @@ func StartSidecarServer(node *SamNode, addr, token, certFile, keyFile, caFile st
 				logger.Errorf("Sidecar API server error: %v", err)
 			}
 		}()
-	} else {
-		if token == "" {
-			_ = listener.Close()
-			return nil, fmt.Errorf("token is mandatory when not using mTLS")
-		}
-		logger.Infof("Starting MCP server on TCP address %s", actualAddr)
-		go func() {
-			if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
-				logger.Errorf("Sidecar API server error: %v", err)
-			}
-		}()
+		return nil
 	}
-	return server, nil
+
+	if token == "" {
+		_ = listener.Close()
+		return fmt.Errorf("token is mandatory when not using mTLS")
+	}
+	logger.Infof("Starting MCP server on TCP address %s", actualAddr)
+	go func() {
+		if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
+			logger.Errorf("Sidecar API server error: %v", err)
+		}
+	}()
+	return nil
 }
 
-func StartUnauthSidecarServer(controlPlaneURL, addr, certFile, keyFile string) (*http.Server, error) {
+// listenLocalSocket binds the local API to a Unix socket whose permissions are
+// the credential: only the user who owns it can reach the mesh through it. A
+// socket left behind by a crashed node is replaced, one a live node is still
+// answering on is not.
+func listenLocalSocket(path string) (net.Listener, error) {
+	// The kernel's sun_path is a fixed-size buffer, and overflowing it only
+	// yields "invalid argument" from bind(2).
+	if len(path) >= 104 {
+		return nil, fmt.Errorf("socket path %q is too long (%d bytes, the kernel allows 103)", path, len(path))
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return nil, fmt.Errorf("creating the socket directory: %w", err)
+	}
+
+	if info, err := os.Stat(path); err == nil {
+		if info.Mode()&os.ModeSocket == 0 {
+			return nil, fmt.Errorf("%s already exists and is not a socket", path)
+		}
+		if conn, err := net.DialTimeout("unix", path, time.Second); err == nil {
+			_ = conn.Close()
+			return nil, fmt.Errorf("another node is already listening on %s", path)
+		}
+		if err := os.Remove(path); err != nil {
+			return nil, fmt.Errorf("removing the stale socket %s: %w", path, err)
+		}
+	}
+
+	listener, err := net.Listen("unix", path)
+	if err != nil {
+		return nil, fmt.Errorf("listening on %s: %w", path, err)
+	}
+	if err := os.Chmod(path, 0600); err != nil {
+		_ = listener.Close()
+		return nil, fmt.Errorf("restricting access to %s: %w", path, err)
+	}
+	return listener, nil
+}
+
+type localSocketContextKey struct{}
+
+// markLocalSocketConn tags connections accepted on the Unix socket so the auth
+// gate can tell them apart from anything arriving over TCP.
+func markLocalSocketConn(ctx context.Context, c net.Conn) context.Context {
+	if addr := c.LocalAddr(); addr != nil && addr.Network() == "unix" {
+		return context.WithValue(ctx, localSocketContextKey{}, true)
+	}
+	return ctx
+}
+
+// fromLocalSocket reports whether the request arrived over the node's Unix socket.
+func fromLocalSocket(r *http.Request) bool {
+	authorized, _ := r.Context().Value(localSocketContextKey{}).(bool)
+	return authorized
+}
+
+// StartUnauthSidecarServer serves the enrollment-only API of a node that has no
+// identity yet, on a TCP address, on a Unix socket, or on both.
+func StartUnauthSidecarServer(controlPlaneURL, addr, socketPath, certFile, keyFile string) (*http.Server, error) {
 	mux := http.NewServeMux()
 
 	// Public endpoints
@@ -160,33 +283,51 @@ func StartUnauthSidecarServer(controlPlaneURL, addr, certFile, keyFile string) (
 		IdleTimeout:       120 * time.Second,
 	}
 
-	listener, err := net.Listen("tcp", addr)
-	if err != nil {
-		return nil, fmt.Errorf("failed to listen on %s: %w", addr, err)
+	if addr == "" && socketPath == "" {
+		return nil, fmt.Errorf("no local API listener configured: set --bind-addr, --socket-path, or both")
 	}
-
-	actualAddr := listener.Addr().String()
-
 	if (certFile != "") != (keyFile != "") {
-		_ = listener.Close()
 		return nil, fmt.Errorf("both --tls-cert and --tls-key must be provided to enable TLS")
 	}
 
-	if certFile != "" && keyFile != "" {
-		logger.Infof("Starting Unauthenticated MCP server on TCP address %s (with TLS Sidecar)", actualAddr)
-		go func() {
-			if err := server.ServeTLS(listener, certFile, keyFile); err != nil && err != http.ErrServerClosed {
-				logger.Errorf("Unauth Sidecar API server error: %v", err)
-			}
-		}()
-	} else {
-		logger.Infof("Starting Unauthenticated MCP server on TCP address %s", actualAddr)
-		go func() {
-			if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
-				logger.Errorf("Unauth Sidecar API server error: %v", err)
-			}
-		}()
+	var socketListener net.Listener
+	if socketPath != "" {
+		l, err := bindLocalSocket(socketPath, addr == "")
+		if err != nil {
+			return nil, err
+		}
+		socketListener = l
 	}
+
+	if addr != "" {
+		listener, err := net.Listen("tcp", addr)
+		if err != nil {
+			if socketListener != nil {
+				_ = socketListener.Close()
+			}
+			return nil, fmt.Errorf("failed to listen on %s: %w", addr, err)
+		}
+
+		actualAddr := listener.Addr().String()
+		if certFile != "" && keyFile != "" {
+			logger.Infof("Starting Unauthenticated MCP server on TCP address %s (with TLS Sidecar)", actualAddr)
+			go func() {
+				if err := server.ServeTLS(listener, certFile, keyFile); err != nil && err != http.ErrServerClosed {
+					logger.Errorf("Unauth Sidecar API server error: %v", err)
+				}
+			}()
+		} else {
+			logger.Infof("Starting Unauthenticated MCP server on TCP address %s", actualAddr)
+			go func() {
+				if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
+					logger.Errorf("Unauth Sidecar API server error: %v", err)
+				}
+			}()
+		}
+	}
+
+	serveSocket(server, socketListener, socketPath)
+
 	return server, nil
 }
 
@@ -226,6 +367,13 @@ func withMeshConnection(node *SamNode, next http.Handler) http.Handler {
 func withAuth(token string, allowAuthorizationFallback bool, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		logger.Debugf("[SidecarAuth] Incoming request: %s %s from %s", r.Method, r.URL.Path, r.RemoteAddr)
+		if fromLocalSocket(r) {
+			// Reaching the socket at all already proves the caller is the user
+			// who owns it, which is the same bar as reading the token file.
+			r.Header.Del(api.HeaderSamAuthentication)
+			next.ServeHTTP(w, r)
+			return
+		}
 		if token == "" {
 			// If token is empty, we assume mTLS is handling authentication.
 			// StartSidecarServer enforces that token is present if mTLS is not used.
