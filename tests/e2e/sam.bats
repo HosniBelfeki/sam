@@ -24,6 +24,37 @@ teardown() {
   rm -rf "$TEST_TMPDIR"
 }
 
+# socket_get issues a plain HTTP request over a Unix socket, with no token, and
+# echoes the raw response. Keeping it dependency-free avoids assuming curl.
+socket_get() {
+  python3 - "$1" "$2" <<'PY'
+import socket, sys
+
+path, target = sys.argv[1], sys.argv[2]
+conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+conn.settimeout(5)
+conn.connect(path)
+conn.sendall(("GET %s HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" % target).encode())
+chunks = []
+while True:
+    chunk = conn.recv(4096)
+    if not chunk:
+        break
+    chunks.append(chunk)
+sys.stdout.write(b"".join(chunks).decode(errors="replace"))
+PY
+}
+
+# wait_for_socket blocks until the node has created its socket.
+wait_for_socket() {
+  local socket="$1"
+  for _ in $(seq 1 50); do
+    [[ -S "$socket" ]] && return 0
+    sleep 0.2
+  done
+  return 1
+}
+
 @test "sam-node --help returns success" {
   run "$SAM_NODE_BINARY" --help
   [[ "$status" -eq 0 ]]
@@ -56,6 +87,77 @@ teardown() {
   local log_output
   log_output=$(cat "$TEST_TMPDIR/unauth-node.log")
   [[ "$log_output" == *"No identity found. Starting unauthenticated sidecar for enrollment over MCP"* ]]
+}
+
+@test "sam-node run answers on a Unix socket in the data dir with no token" {
+  local data_dir="$TEST_TMPDIR/socket-node"
+  local socket="$data_dir/sam.sock"
+
+  "$SAM_NODE_BINARY" run --data-dir "$data_dir" --bind-addr "127.0.0.1:8087" > "$TEST_TMPDIR/socket-node.log" 2>&1 &
+  local node_pid=$!
+
+  run wait_for_socket "$socket"
+  [[ "$status" -eq 0 ]]
+
+  # The socket's permissions are the credential, so only its owner gets in.
+  [[ "$(stat -c %a "$socket")" == "600" ]]
+
+  run socket_get "$socket" "/healthz"
+  [[ "$status" -eq 0 ]]
+  [[ "$output" == *"200 OK"* ]]
+
+  kill "$node_pid" || true
+  wait "$node_pid" || true
+
+  # Unlinked on shutdown, so the next start is not blocked by a leftover file.
+  [[ ! -e "$socket" ]]
+}
+
+@test "sam-node run --bind-addr \"\" serves only on the Unix socket" {
+  local data_dir="$TEST_TMPDIR/socket-only"
+  local socket="$TEST_TMPDIR/custom.sock"
+
+  "$SAM_NODE_BINARY" run --data-dir "$data_dir" --bind-addr "" --socket-path "$socket" > "$TEST_TMPDIR/socket-only.log" 2>&1 &
+  local node_pid=$!
+
+  run wait_for_socket "$socket"
+  [[ "$status" -eq 0 ]]
+
+  run socket_get "$socket" "/healthz"
+  [[ "$status" -eq 0 ]]
+  [[ "$output" == *"200 OK"* ]]
+
+  kill "$node_pid" || true
+  wait "$node_pid" || true
+
+  # No TCP listener at all: nothing on the machine can reach the node but the
+  # socket, and the default data dir socket was not created either.
+  local log_output
+  log_output=$(cat "$TEST_TMPDIR/socket-only.log")
+  [[ "$log_output" == *"Serving the local API on Unix socket $socket"* ]]
+  [[ "$log_output" != *"on TCP address"* ]]
+  [[ ! -e "$data_dir/sam.sock" ]]
+}
+
+@test "sam-node run --socket-path \"\" leaves no socket behind" {
+  local data_dir="$TEST_TMPDIR/no-socket"
+
+  "$SAM_NODE_BINARY" run --data-dir "$data_dir" --bind-addr "127.0.0.1:8088" --socket-path "" > "$TEST_TMPDIR/no-socket.log" 2>&1 &
+  local node_pid=$!
+
+  local log_output=""
+  for _ in $(seq 1 50); do
+    log_output=$(cat "$TEST_TMPDIR/no-socket.log")
+    [[ "$log_output" == *"on TCP address"* ]] && break
+    sleep 0.2
+  done
+
+  kill "$node_pid" || true
+  wait "$node_pid" || true
+
+  [[ "$log_output" == *"on TCP address"* ]]
+  [[ "$log_output" != *"Unix socket"* ]]
+  [[ ! -e "$data_dir/sam.sock" ]]
 }
 
 
