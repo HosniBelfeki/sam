@@ -71,6 +71,7 @@ var (
 	audienceFlag              string
 	dataDirFlag               string
 	headlessFlag              bool
+	authModeFlag              string
 	offlineAccessFlag         bool
 	logLevelFlag              string
 	keyGracePeriodFlag        time.Duration
@@ -433,7 +434,12 @@ func main() {
 					deviceAuthURL = deviceAuthURLFlag
 				}
 
-				jwtStr, err = dummyNode.InteractiveLoginWithDeviceAuth(ctx, endpoints.AuthURL, endpoints.TokenURL, deviceAuthURL, controlPlaneInfo.ClientId, controlPlaneInfo.Audience, offlineAccessFlag, headlessFlag)
+				mode, err := node.ParseAuthMode(authModeFlag)
+				if err != nil {
+					logger.Fatalf("Invalid --auth-mode: %v", err)
+				}
+
+				jwtStr, err = dummyNode.InteractiveLoginWithMode(ctx, endpoints.AuthURL, endpoints.TokenURL, deviceAuthURL, controlPlaneInfo.ClientId, controlPlaneInfo.Audience, offlineAccessFlag, headlessFlag, mode)
 				if err != nil {
 					logger.Fatalf("Failed to get token: %v", err)
 				}
@@ -554,6 +560,7 @@ func main() {
 	rootCmd.PersistentFlags().StringVar(&audienceFlag, "audience", api.DefaultAudience, "OIDC Audience")
 	rootCmd.PersistentFlags().StringVar(&dataDirFlag, "data-dir", "", "Override directory for the agent store (defaults to OS user config dir)")
 	rootCmd.PersistentFlags().BoolVar(&headlessFlag, "headless", false, "Force headless out-of-band (OOB) authentication flow")
+	rootCmd.PersistentFlags().StringVar(&authModeFlag, "auth-mode", "auto", "Interactive enrollment auth mode: auto, device, oob, or browser")
 
 	rootCmd.AddCommand(runCmd)
 	rootCmd.AddCommand(joinCmd)

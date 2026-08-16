@@ -58,6 +58,14 @@ sam-node join https://bananas.sam-mesh.dev --headless
 ```
 When the OIDC provider supports device authorization, SAM automatically uses device flow (no pasted callback code required): it prints a verification URL/code and polls until approval. If device authorization is unavailable, SAM falls back to OOB code-paste flow.
 
+### Choosing the Auth Flow Explicitly
+By default (`--auth-mode auto`) SAM picks the flow for you: device flow in headless environments when available, the loopback browser flow otherwise (with an automatic device fallback if the browser can't be opened). For deterministic automation (e.g. CI/CUJ harnesses), force a specific flow instead of relying on environment detection:
+```bash
+# Force RFC 8628 device flow (no code to paste back)
+sam-node join https://bananas.sam-mesh.dev --auth-mode device
+```
+Supported values: `auto` (default), `device`, `oob`, `browser`. `--auth-mode device` fails fast if the provider does not advertise a `device_authorization_endpoint`.
+
 ### Automatic Token Renewal
 To allow long-lived nodes to automatically renew their tokens in the background, request offline access (refreshes the OIDC session):
 ```bash

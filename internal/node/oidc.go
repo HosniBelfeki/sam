@@ -61,23 +61,90 @@ func (n *SamNode) FetchJWT(ctx context.Context, tokenURL, clientID, clientSecret
 	return token.AccessToken, nil
 }
 
+// AuthMode selects how interactive enrollment authenticates the user.
+type AuthMode string
+
+const (
+	// AuthModeAuto prefers device flow in headless environments (when the
+	// provider advertises one) and the loopback browser flow otherwise, with an
+	// automatic device fallback when the browser can't be opened.
+	AuthModeAuto AuthMode = "auto"
+	// AuthModeDevice forces the OAuth 2.0 Device Authorization Grant (RFC 8628).
+	AuthModeDevice AuthMode = "device"
+	// AuthModeOOB forces the out-of-band code-paste flow.
+	AuthModeOOB AuthMode = "oob"
+	// AuthModeBrowser forces the loopback browser (authorization code) flow.
+	AuthModeBrowser AuthMode = "browser"
+)
+
+// ParseAuthMode validates a user-provided --auth-mode value. An empty string
+// maps to AuthModeAuto.
+func ParseAuthMode(s string) (AuthMode, error) {
+	switch AuthMode(strings.ToLower(strings.TrimSpace(s))) {
+	case "", AuthModeAuto:
+		return AuthModeAuto, nil
+	case AuthModeDevice:
+		return AuthModeDevice, nil
+	case AuthModeOOB:
+		return AuthModeOOB, nil
+	case AuthModeBrowser:
+		return AuthModeBrowser, nil
+	default:
+		return "", fmt.Errorf("invalid auth mode %q (want auto, device, oob, or browser)", s)
+	}
+}
+
 // InteractiveLogin prompts the user to go to a URL and enter a code.
 func (n *SamNode) InteractiveLogin(ctx context.Context, authURL, tokenURL, clientID, audience string, requestRefresh bool, headless bool) (string, error) {
 	return n.InteractiveLoginWithDeviceAuth(ctx, authURL, tokenURL, "", clientID, audience, requestRefresh, headless)
 }
 
-// InteractiveLoginWithDeviceAuth prompts the user to authenticate, preferring
-// OAuth Device Authorization Grant in headless mode when the provider exposes
-// a device authorization endpoint.
+// InteractiveLoginWithDeviceAuth authenticates using AuthModeAuto: it prefers
+// the OAuth Device Authorization Grant in headless mode when the provider
+// exposes a device authorization endpoint, and otherwise uses the loopback
+// browser flow with a device fallback.
 func (n *SamNode) InteractiveLoginWithDeviceAuth(ctx context.Context, authURL, tokenURL, deviceAuthURL, clientID, audience string, requestRefresh bool, headless bool) (string, error) {
-	if authURL == "" {
-		return "", fmt.Errorf("authorization URL is required")
-	}
+	return n.InteractiveLoginWithMode(ctx, authURL, tokenURL, deviceAuthURL, clientID, audience, requestRefresh, headless, AuthModeAuto)
+}
+
+// InteractiveLoginWithMode authenticates the user using an explicit AuthMode,
+// letting callers (e.g. CUJ harnesses) force a deterministic flow instead of
+// relying on headless environment detection.
+func (n *SamNode) InteractiveLoginWithMode(ctx context.Context, authURL, tokenURL, deviceAuthURL, clientID, audience string, requestRefresh bool, headless bool, mode AuthMode) (string, error) {
 	if tokenURL == "" {
 		return "", fmt.Errorf("token URL is required")
 	}
 	if clientID == "" {
 		return "", fmt.Errorf("client ID is required")
+	}
+
+	isHeadless := headless || os.Getenv("SSH_CLIENT") != "" || os.Getenv("SSH_TTY") != ""
+
+	switch mode {
+	case AuthModeDevice:
+		if deviceAuthURL == "" {
+			return "", fmt.Errorf("auth-mode=device requested but the OIDC provider does not advertise a device_authorization_endpoint")
+		}
+		return n.DeviceLogin(ctx, deviceAuthURL, tokenURL, clientID, audience, requestRefresh)
+	case AuthModeOOB:
+		// Force out-of-band paste; disable any device fallback.
+		isHeadless = true
+		deviceAuthURL = ""
+	case AuthModeBrowser:
+		// Force the loopback browser flow; disable device fallback.
+		isHeadless = false
+		deviceAuthURL = ""
+	case AuthModeAuto:
+		if isHeadless && deviceAuthURL != "" {
+			logger.Info("Headless mode detected and device authorization endpoint available; using device flow")
+			return n.DeviceLogin(ctx, deviceAuthURL, tokenURL, clientID, audience, requestRefresh)
+		}
+	default:
+		return "", fmt.Errorf("invalid auth mode %q", mode)
+	}
+
+	if authURL == "" {
+		return "", fmt.Errorf("authorization URL is required")
 	}
 
 	stateBytes := make([]byte, 16)
@@ -89,13 +156,6 @@ func (n *SamNode) InteractiveLoginWithDeviceAuth(ctx context.Context, authURL, t
 	verifier, challenge, err := generatePKCE()
 	if err != nil {
 		return "", fmt.Errorf("failed to generate PKCE: %w", err)
-	}
-
-	isHeadless := headless || os.Getenv("SSH_CLIENT") != "" || os.Getenv("SSH_TTY") != ""
-
-	if isHeadless && deviceAuthURL != "" {
-		logger.Info("Headless mode detected and device authorization endpoint available; using device flow")
-		return n.DeviceLogin(ctx, deviceAuthURL, tokenURL, clientID, audience, requestRefresh)
 	}
 
 	var redirectURI string

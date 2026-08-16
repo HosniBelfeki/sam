@@ -453,6 +453,187 @@ func TestInteractiveLoginBrowserFailFallsBackToDevice(t *testing.T) {
 	}
 }
 
+func TestParseAuthMode(t *testing.T) {
+	cases := []struct {
+		in      string
+		want    AuthMode
+		wantErr bool
+	}{
+		{"", AuthModeAuto, false},
+		{"auto", AuthModeAuto, false},
+		{"AUTO", AuthModeAuto, false},
+		{" device ", AuthModeDevice, false},
+		{"oob", AuthModeOOB, false},
+		{"browser", AuthModeBrowser, false},
+		{"nonsense", "", true},
+	}
+	for _, tc := range cases {
+		got, err := ParseAuthMode(tc.in)
+		if tc.wantErr {
+			if err == nil {
+				t.Errorf("ParseAuthMode(%q): expected error, got %q", tc.in, got)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("ParseAuthMode(%q): unexpected error: %v", tc.in, err)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("ParseAuthMode(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestAuthModeDeviceForcedWhenInteractive verifies that auth-mode=device uses
+// the device flow even in a non-headless environment, and never touches the
+// browser.
+func TestAuthModeDeviceForcedWhenInteractive(t *testing.T) {
+	t.Setenv("SSH_CLIENT", "")
+	t.Setenv("SSH_TTY", "")
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/device", func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"device_code":      "dev_code_1",
+			"user_code":        "AAAA-BBBB",
+			"verification_uri": "https://example.com/device",
+			"expires_in":       60,
+			"interval":         1,
+		})
+	})
+	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		if r.FormValue("grant_type") != "urn:ietf:params:oauth:grant-type:device_code" {
+			http.Error(w, "Invalid grant_type", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"id_token": "forced_device_token"})
+	})
+
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	node := &SamNode{}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	originalOpenBrowser := openBrowserFunc
+	openBrowserFunc = func(_ string) error {
+		t.Error("openBrowser should not be called when auth-mode=device")
+		return nil
+	}
+	defer func() { openBrowserFunc = originalOpenBrowser }()
+
+	token, err := node.InteractiveLoginWithMode(
+		ctx,
+		"http://auth.example.com/auth",
+		server.URL+"/token",
+		server.URL+"/device",
+		"client_id_test",
+		"sam-e2e",
+		false,
+		false,
+		AuthModeDevice,
+	)
+	if err != nil {
+		t.Fatalf("InteractiveLoginWithMode failed: %v", err)
+	}
+	if token != "forced_device_token" {
+		t.Fatalf("Expected forced_device_token, got %q", token)
+	}
+}
+
+// TestAuthModeDeviceWithoutEndpointErrors verifies that auth-mode=device fails
+// fast when the provider advertises no device endpoint.
+func TestAuthModeDeviceWithoutEndpointErrors(t *testing.T) {
+	node := &SamNode{}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	_, err := node.InteractiveLoginWithMode(
+		ctx,
+		"http://auth.example.com/auth",
+		"http://token.example.com/token",
+		"", // no device endpoint
+		"client_id_test",
+		"sam-e2e",
+		false,
+		true,
+		AuthModeDevice,
+	)
+	if err == nil {
+		t.Fatal("expected an error when auth-mode=device but no device endpoint is available")
+	}
+	if !strings.Contains(err.Error(), "device_authorization_endpoint") {
+		t.Fatalf("expected device endpoint error, got: %v", err)
+	}
+}
+
+// TestAuthModeBrowserIgnoresDevice verifies that auth-mode=browser uses the
+// loopback flow even under a headless (SSH) environment with a device
+// endpoint available, and never falls back to device flow.
+func TestAuthModeBrowserIgnoresDevice(t *testing.T) {
+	t.Setenv("SSH_CLIENT", "1")
+	t.Setenv("SSH_TTY", "")
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/device", func(w http.ResponseWriter, r *http.Request) {
+		t.Error("device endpoint should not be used when auth-mode=browser")
+		http.Error(w, "unexpected", http.StatusBadRequest)
+	})
+	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		if r.FormValue("grant_type") != "authorization_code" {
+			http.Error(w, "Invalid grant_type", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"id_token": "browser_mode_token"})
+	})
+
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	node := &SamNode{}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	originalOpenBrowser := openBrowserFunc
+	openBrowserFunc = func(urlStr string) error {
+		u, _ := url.Parse(urlStr)
+		redirectURI := u.Query().Get("redirect_uri")
+		state := u.Query().Get("state")
+		go func() {
+			time.Sleep(50 * time.Millisecond)
+			_, _ = http.Get(redirectURI + "?code=dev_code_123&state=" + state)
+		}()
+		return nil
+	}
+	defer func() { openBrowserFunc = originalOpenBrowser }()
+
+	token, err := node.InteractiveLoginWithMode(
+		ctx,
+		"http://auth.example.com/auth",
+		server.URL+"/token",
+		server.URL+"/device",
+		"client_id_test",
+		"sam-e2e",
+		false,
+		true, // headless requested, but browser mode overrides it
+		AuthModeBrowser,
+	)
+	if err != nil {
+		t.Fatalf("InteractiveLoginWithMode failed: %v", err)
+	}
+	if token != "browser_mode_token" {
+		t.Fatalf("Expected browser_mode_token, got %q", token)
+	}
+}
+
 func TestRenewWithRefreshToken(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
