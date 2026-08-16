@@ -970,6 +970,16 @@ func TestAdminPanelAndUI(t *testing.T) {
 
 	srv.config.AdminToken = "test-admin-pass"
 
+	testUser := &storage.User{
+		ID:        "oidc-sub-123",
+		Email:     "user@example.com",
+		Role:      "user",
+		CreatedAt: time.Now(),
+	}
+	if err := store.SaveUser(context.Background(), testUser); err != nil {
+		t.Fatalf("failed to save test user: %v", err)
+	}
+
 	client := &http.Client{Timeout: 5 * time.Second}
 
 	// 1. Query /admin/status without token -> should fail with 401
@@ -1010,6 +1020,13 @@ func TestAdminPanelAndUI(t *testing.T) {
 	}
 	if _, ok := statusData["bootstrap_tokens"]; !ok {
 		t.Error("status response missing bootstrap_tokens")
+	}
+	users, ok := statusData["users"].([]any)
+	if !ok || len(users) != 1 {
+		t.Fatalf("expected 1 user in status response, got: %v", statusData["users"])
+	}
+	if got := users[0].(map[string]any)["ID"]; got != testUser.ID {
+		t.Errorf("expected user ID %q, got %v", testUser.ID, got)
 	}
 
 	// 3. Query /admin/ UI page -> should fail with 404 as it is removed
