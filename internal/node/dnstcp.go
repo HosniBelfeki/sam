@@ -54,22 +54,22 @@ func fqdnName(name string) string {
 // the wider network, so retrying over TCP - which needs no fragmentation -
 // is the fix rather than anything specific to that one environment.
 type tcpFallbackResolver struct {
-	def     madns.BasicResolver
-	servers []string // nameserver "host:port" entries used for the TCP retry
+	def madns.BasicResolver
+	// servers overrides the nameservers used for the TCP retry; only set in
+	// tests. Production leaves this nil and reads /etc/resolv.conf fresh on
+	// every fallback instead, so nameserver changes take effect immediately.
+	servers []string
 }
 
 var _ madns.BasicResolver = (*tcpFallbackResolver)(nil)
 
-// newTCPFallbackResolver builds a tcpFallbackResolver backed by def, using
-// the system's configured nameservers (from /etc/resolv.conf) for the TCP
-// retry. If none can be determined (e.g. on Windows), the TCP retry is
-// simply never attempted and def's own result/error is always returned.
+// newTCPFallbackResolver builds a tcpFallbackResolver backed by def. The
+// system's configured nameservers are read from /etc/resolv.conf on demand
+// for each TCP retry (see LookupTXT) rather than cached here, so the node
+// keeps working across VPN connects, Wi-Fi switches, and DHCP renewals
+// without needing a restart.
 func newTCPFallbackResolver(def madns.BasicResolver) *tcpFallbackResolver {
-	servers, err := systemNameservers()
-	if err != nil {
-		logger.Debugf("dnstcp: no nameservers for TCP fallback: %v", err)
-	}
-	return &tcpFallbackResolver{def: def, servers: servers}
+	return &tcpFallbackResolver{def: def}
 }
 
 func (r *tcpFallbackResolver) LookupIPAddr(ctx context.Context, host string) ([]net.IPAddr, error) {
@@ -81,10 +81,20 @@ func (r *tcpFallbackResolver) LookupTXT(ctx context.Context, name string) ([]str
 	if err == nil && len(txt) > 0 {
 		return txt, nil
 	}
-	if len(r.servers) == 0 {
+	// r.servers is a test-only override; production always re-reads
+	// /etc/resolv.conf here so nameserver changes take effect immediately.
+	servers := r.servers
+	if len(servers) == 0 {
+		var sysErr error
+		servers, sysErr = systemNameservers()
+		if sysErr != nil {
+			logger.Debugf("dnstcp: no nameservers for TCP fallback: %v", sysErr)
+		}
+	}
+	if len(servers) == 0 {
 		return txt, err
 	}
-	tcpTXT, tcpErr := lookupTXTOverTCP(ctx, name, r.servers)
+	tcpTXT, tcpErr := lookupTXTOverTCP(ctx, name, servers)
 	if tcpErr != nil || len(tcpTXT) == 0 {
 		logger.Debugf("dnstcp: TCP fallback for TXT %q also failed: %v", name, tcpErr)
 		return txt, err
@@ -138,6 +148,20 @@ func exchangeTCP(ctx context.Context, server string, query []byte) ([]string, er
 	}
 	_ = conn.SetDeadline(deadline)
 
+	// conn.Write/Read below only respect the deadline above, not ctx
+	// cancellation directly; close the connection as soon as the caller's
+	// context is done so a cancelled/timed-out caller isn't stuck waiting
+	// out the full deadline.
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = conn.Close()
+		case <-done:
+		}
+	}()
+
 	var lenBuf [2]byte
 	binary.BigEndian.PutUint16(lenBuf[:], uint16(len(query)))
 	if _, err := conn.Write(lenBuf[:]); err != nil {
@@ -172,11 +196,15 @@ func exchangeTCP(ctx context.Context, server string, query []byte) ([]string, er
 	return out, nil
 }
 
+// resolvConfPath is a package-level var (rather than a hardcoded literal)
+// purely so tests can point it at a fixture without touching the real file.
+var resolvConfPath = "/etc/resolv.conf"
+
 // systemNameservers reads the "nameserver" entries from /etc/resolv.conf.
 // It returns a nil slice, not an error, when the file doesn't exist (e.g. on
 // Windows) so callers can silently skip the TCP fallback there.
 func systemNameservers() ([]string, error) {
-	data, err := os.ReadFile("/etc/resolv.conf")
+	data, err := os.ReadFile(resolvConfPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil

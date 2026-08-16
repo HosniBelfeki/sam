@@ -20,6 +20,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"os"
 	"testing"
 	"time"
 
@@ -42,6 +43,38 @@ search example.com
 		if got[i] != want[i] {
 			t.Errorf("parseNameservers()[%d] = %q, want %q", i, got[i], want[i])
 		}
+	}
+}
+
+func TestSystemNameservers_NotCachedAcrossCalls(t *testing.T) {
+	oldPath := resolvConfPath
+	path := t.TempDir() + "/resolv.conf"
+	resolvConfPath = path
+	t.Cleanup(func() { resolvConfPath = oldPath })
+
+	if err := os.WriteFile(path, []byte("nameserver 10.0.0.1\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	got, err := systemNameservers()
+	if err != nil {
+		t.Fatalf("systemNameservers() error = %v", err)
+	}
+	if want := []string{"10.0.0.1:53"}; len(got) != 1 || got[0] != want[0] {
+		t.Fatalf("systemNameservers() = %v, want %v", got, want)
+	}
+
+	// A network change (VPN, Wi-Fi switch, DHCP renewal) rewrites
+	// resolv.conf; the next call must reflect it immediately, not a value
+	// cached from construction time.
+	if err := os.WriteFile(path, []byte("nameserver 10.0.0.2\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	got, err = systemNameservers()
+	if err != nil {
+		t.Fatalf("systemNameservers() error = %v", err)
+	}
+	if want := []string{"10.0.0.2:53"}; len(got) != 1 || got[0] != want[0] {
+		t.Fatalf("systemNameservers() after resolv.conf changed = %v, want %v", got, want)
 	}
 }
 
@@ -177,6 +210,13 @@ func TestTCPFallbackResolver_UsesUDPResultWhenNonEmpty(t *testing.T) {
 }
 
 func TestTCPFallbackResolver_NoServersReturnsOriginalResult(t *testing.T) {
+	// Point at a nonexistent resolv.conf so systemNameservers() finds no
+	// servers deterministically, instead of the LookupTXT change (reading
+	// /etc/resolv.conf on demand) hitting this machine's real DNS config.
+	oldPath := resolvConfPath
+	resolvConfPath = t.TempDir() + "/does-not-exist"
+	t.Cleanup(func() { resolvConfPath = oldPath })
+
 	origErr := errors.New("boom")
 	r := &tcpFallbackResolver{def: &stubResolver{txtErr: origErr}}
 
