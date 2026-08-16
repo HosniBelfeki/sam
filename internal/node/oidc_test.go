@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -56,7 +57,7 @@ func TestInteractiveLogin(t *testing.T) {
 
 	// Mock openBrowser to simulate the user authorizing in the browser
 	originalOpenBrowser := openBrowserFunc
-	openBrowserFunc = func(urlStr string) {
+	openBrowserFunc = func(urlStr string) error {
 		u, _ := url.Parse(urlStr)
 		redirectURI := u.Query().Get("redirect_uri")
 		state := u.Query().Get("state")
@@ -65,6 +66,7 @@ func TestInteractiveLogin(t *testing.T) {
 			time.Sleep(100 * time.Millisecond)
 			_, _ = http.Get(redirectURI + "?code=dev_code_123&state=" + state)
 		}()
+		return nil
 	}
 	defer func() { openBrowserFunc = originalOpenBrowser }()
 
@@ -107,6 +109,42 @@ func TestDiscoverEndpoints(t *testing.T) {
 	}
 	if authURL != server.URL+"/auth" {
 		t.Errorf("Expected authURL %s, got %s", server.URL+"/auth", authURL)
+	}
+}
+
+func TestDiscoverEndpointsWithDevice(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]interface{}{
+			"issuer":                        "http://" + r.Host,
+			"token_endpoint":                "http://" + r.Host + "/token",
+			"authorization_endpoint":        "http://" + r.Host + "/auth",
+			"device_authorization_endpoint": "http://" + r.Host + "/device",
+		}); err != nil {
+			t.Errorf("Failed to encode response: %v", err)
+		}
+	})
+
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	node := &SamNode{BiscuitTimeout: 500 * time.Millisecond}
+	ctx := context.Background()
+
+	endpoints, err := node.DiscoverEndpointsWithDevice(ctx, server.URL)
+	if err != nil {
+		t.Fatalf("DiscoverEndpointsWithDevice failed: %v", err)
+	}
+
+	if endpoints.TokenURL != server.URL+"/token" {
+		t.Errorf("Expected tokenURL %s, got %s", server.URL+"/token", endpoints.TokenURL)
+	}
+	if endpoints.AuthURL != server.URL+"/auth" {
+		t.Errorf("Expected authURL %s, got %s", server.URL+"/auth", endpoints.AuthURL)
+	}
+	if endpoints.DeviceAuthURL != server.URL+"/device" {
+		t.Errorf("Expected deviceAuthURL %s, got %s", server.URL+"/device", endpoints.DeviceAuthURL)
 	}
 }
 
@@ -193,7 +231,7 @@ func TestInteractiveLoginWithRefresh(t *testing.T) {
 	defer cancel()
 
 	originalOpenBrowser := openBrowserFunc
-	openBrowserFunc = func(urlStr string) {
+	openBrowserFunc = func(urlStr string) error {
 		u, _ := url.Parse(urlStr)
 		redirectURI := u.Query().Get("redirect_uri")
 		state := u.Query().Get("state")
@@ -211,6 +249,7 @@ func TestInteractiveLoginWithRefresh(t *testing.T) {
 			time.Sleep(100 * time.Millisecond)
 			_, _ = http.Get(redirectURI + "?code=dev_code_123&state=" + state)
 		}()
+		return nil
 	}
 	defer func() { openBrowserFunc = originalOpenBrowser }()
 
@@ -230,6 +269,187 @@ func TestInteractiveLoginWithRefresh(t *testing.T) {
 	}
 	if savedRefresh != "refresh_token_123" {
 		t.Errorf("Expected saved refresh token 'refresh_token_123', got '%s'", savedRefresh)
+	}
+}
+
+func TestInteractiveLoginWithDeviceAuth_Headless(t *testing.T) {
+	t.Setenv("SSH_CLIENT", "1")
+	t.Setenv("SSH_TTY", "")
+
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("/device", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		_ = r.ParseForm()
+		if r.FormValue("client_id") != "client_id_test" {
+			http.Error(w, "Invalid client_id", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"device_code":               "dev_code_1",
+			"user_code":                 "ABCD-EFGH",
+			"verification_uri":          "https://example.com/device",
+			"verification_uri_complete": "https://example.com/device?user_code=ABCD-EFGH",
+			"expires_in":                60,
+			"interval":                  1,
+		})
+	})
+
+	pollCount := 0
+	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		_ = r.ParseForm()
+		if r.FormValue("grant_type") != "urn:ietf:params:oauth:grant-type:device_code" {
+			http.Error(w, "Invalid grant_type", http.StatusBadRequest)
+			return
+		}
+		pollCount++
+		w.Header().Set("Content-Type", "application/json")
+		if pollCount < 2 {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"error":             "authorization_pending",
+				"error_description": "waiting",
+			})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"id_token":      "id_token_from_device",
+			"refresh_token": "refresh_from_device",
+		})
+	})
+
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("failed to close store: %v", err)
+		}
+	}()
+
+	node := &SamNode{Store: store}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	originalOpenBrowser := openBrowserFunc
+	openBrowserFunc = func(_ string) error {
+		t.Error("openBrowser should not be called when device flow is used")
+		return nil
+	}
+	defer func() { openBrowserFunc = originalOpenBrowser }()
+
+	token, err := node.InteractiveLoginWithDeviceAuth(
+		ctx,
+		"http://auth.example.com/auth",
+		server.URL+"/token",
+		server.URL+"/device",
+		"client_id_test",
+		"sam-e2e",
+		true,
+		true,
+	)
+	if err != nil {
+		t.Fatalf("InteractiveLoginWithDeviceAuth failed: %v", err)
+	}
+	if token != "id_token_from_device" {
+		t.Fatalf("Expected id_token_from_device, got %q", token)
+	}
+
+	savedRefresh, err := store.LoadRefreshToken()
+	if err != nil {
+		t.Fatalf("Failed to load refresh token: %v", err)
+	}
+	if savedRefresh != "refresh_from_device" {
+		t.Fatalf("Expected refresh_from_device, got %q", savedRefresh)
+	}
+}
+
+// TestInteractiveLoginBrowserFailFallsBackToDevice verifies that in an
+// interactive (non-headless) flow, if the browser cannot be opened, SAM falls
+// back to the device authorization flow when the provider advertises one,
+// instead of leaving the user to paste a callback code.
+func TestInteractiveLoginBrowserFailFallsBackToDevice(t *testing.T) {
+	t.Setenv("SSH_CLIENT", "")
+	t.Setenv("SSH_TTY", "")
+
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("/device", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		_ = r.ParseForm()
+		if r.FormValue("client_id") != "client_id_test" {
+			http.Error(w, "Invalid client_id", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"device_code":      "dev_code_1",
+			"user_code":        "WXYZ-1234",
+			"verification_uri": "https://example.com/device",
+			"expires_in":       60,
+			"interval":         1,
+		})
+	})
+
+	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		_ = r.ParseForm()
+		if r.FormValue("grant_type") != "urn:ietf:params:oauth:grant-type:device_code" {
+			http.Error(w, "Invalid grant_type", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"id_token": "id_token_after_browser_fail",
+		})
+	})
+
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	node := &SamNode{}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	originalOpenBrowser := openBrowserFunc
+	openBrowserFunc = func(_ string) error {
+		return fmt.Errorf("no browser available")
+	}
+	defer func() { openBrowserFunc = originalOpenBrowser }()
+
+	token, err := node.InteractiveLoginWithDeviceAuth(
+		ctx,
+		"http://auth.example.com/auth",
+		server.URL+"/token",
+		server.URL+"/device",
+		"client_id_test",
+		"sam-e2e",
+		false,
+		false, // interactive: browser flow attempted first, then device fallback
+	)
+	if err != nil {
+		t.Fatalf("InteractiveLoginWithDeviceAuth failed: %v", err)
+	}
+	if token != "id_token_after_browser_fail" {
+		t.Fatalf("Expected id_token_after_browser_fail, got %q", token)
 	}
 }
 

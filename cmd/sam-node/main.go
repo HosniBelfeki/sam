@@ -276,12 +276,16 @@ func interactiveJoin(ctx context.Context, store *node.Store, targetControlPlane 
 	fmt.Printf("Client ID discovered: %s\n", info.ClientId)
 
 	logger.Info("Discovering OIDC endpoints...")
-	tokenURL, authURL, err := dummyNode.DiscoverEndpoints(ctx, info.OidcIssuer)
+	endpoints, err := dummyNode.DiscoverEndpointsWithDevice(ctx, info.OidcIssuer)
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to discover OIDC endpoints: %w", err)
 	}
+	deviceAuthURL := endpoints.DeviceAuthURL
+	if deviceAuthURLFlag != "" {
+		deviceAuthURL = deviceAuthURLFlag
+	}
 
-	jwtStr, err := dummyNode.InteractiveLogin(ctx, authURL, tokenURL, info.ClientId, info.Audience, offlineAccessFlag, headlessFlag)
+	jwtStr, err := dummyNode.InteractiveLoginWithDeviceAuth(ctx, endpoints.AuthURL, endpoints.TokenURL, deviceAuthURL, info.ClientId, info.Audience, offlineAccessFlag, headlessFlag)
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to get token: %w", err)
 	}

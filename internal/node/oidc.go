@@ -21,6 +21,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -62,6 +63,13 @@ func (n *SamNode) FetchJWT(ctx context.Context, tokenURL, clientID, clientSecret
 
 // InteractiveLogin prompts the user to go to a URL and enter a code.
 func (n *SamNode) InteractiveLogin(ctx context.Context, authURL, tokenURL, clientID, audience string, requestRefresh bool, headless bool) (string, error) {
+	return n.InteractiveLoginWithDeviceAuth(ctx, authURL, tokenURL, "", clientID, audience, requestRefresh, headless)
+}
+
+// InteractiveLoginWithDeviceAuth prompts the user to authenticate, preferring
+// OAuth Device Authorization Grant in headless mode when the provider exposes
+// a device authorization endpoint.
+func (n *SamNode) InteractiveLoginWithDeviceAuth(ctx context.Context, authURL, tokenURL, deviceAuthURL, clientID, audience string, requestRefresh bool, headless bool) (string, error) {
 	if authURL == "" {
 		return "", fmt.Errorf("authorization URL is required")
 	}
@@ -85,10 +93,18 @@ func (n *SamNode) InteractiveLogin(ctx context.Context, authURL, tokenURL, clien
 
 	isHeadless := headless || os.Getenv("SSH_CLIENT") != "" || os.Getenv("SSH_TTY") != ""
 
+	if isHeadless && deviceAuthURL != "" {
+		logger.Info("Headless mode detected and device authorization endpoint available; using device flow")
+		return n.DeviceLogin(ctx, deviceAuthURL, tokenURL, clientID, audience, requestRefresh)
+	}
+
 	var redirectURI string
 	var listener net.Listener
 
 	if isHeadless {
+		if !stdinIsInteractive() {
+			logger.Warn("Headless OOB flow requires pasting a code, but stdin is non-interactive and no device endpoint is configured; auth may block")
+		}
 		redirectURI = "urn:ietf:wg:oauth:2.0:oob"
 	} else {
 		var err error
@@ -102,6 +118,10 @@ func (n *SamNode) InteractiveLogin(ctx context.Context, authURL, tokenURL, clien
 			}
 		}
 		if listener == nil {
+			if deviceAuthURL != "" {
+				logger.Warn("Could not bind local OIDC listener (ports 13000-13002 busy); falling back to device authorization flow.")
+				return n.DeviceLogin(ctx, deviceAuthURL, tokenURL, clientID, audience, requestRefresh)
+			}
 			logger.Warn("Could not bind local OIDC listener (ports 13000-13002 busy). Falling back to headless (OOB) authorization.")
 			isHeadless = true
 			redirectURI = "urn:ietf:wg:oauth:2.0:oob"
@@ -136,6 +156,22 @@ func (n *SamNode) InteractiveLogin(ctx context.Context, authURL, tokenURL, clien
 	authReq.URL.RawQuery = q.Encode()
 	targetURL := authReq.URL.String()
 
+	// In an interactive (loopback) flow, try to open the browser up front. If it
+	// can't be opened, nothing will complete the redirect, so when the provider
+	// advertises a device authorization endpoint we fall back to device flow
+	// rather than forcing the user (or a CUJ harness) to paste a callback code
+	// back. Headless flows open the browser only best-effort (after the banner),
+	// since they already print a URL to complete elsewhere.
+	if !isHeadless {
+		if err := openBrowserFunc(targetURL); err != nil {
+			if deviceAuthURL != "" {
+				logger.Warnf("Could not open a browser (%v); falling back to device authorization flow.", err)
+				return n.DeviceLogin(ctx, deviceAuthURL, tokenURL, clientID, audience, requestRefresh)
+			}
+			logger.Warnf("Could not open a browser (%v); open the URL below manually or paste the callback code.", err)
+		}
+	}
+
 	fmt.Println("------------------------------------------------------------")
 	fmt.Println("OAuth Authorization Flow")
 	fmt.Println("------------------------------------------------------------")
@@ -148,8 +184,10 @@ func (n *SamNode) InteractiveLogin(ctx context.Context, authURL, tokenURL, clien
 	}
 	fmt.Println("------------------------------------------------------------")
 
-	// Try to open browser automatically
-	openBrowserFunc(targetURL)
+	if isHeadless {
+		// Best-effort: some headless setups still have a usable browser.
+		_ = openBrowserFunc(targetURL)
+	}
 
 	loginCtx, loginCancel := context.WithCancel(ctx)
 	defer loginCancel()
@@ -266,6 +304,61 @@ func (n *SamNode) InteractiveLogin(ctx context.Context, authURL, tokenURL, clien
 	if err != nil {
 		return "", err
 	}
+
+	jwt, refreshToken, err := parseTokenResponse(resp)
+	if err != nil {
+		return "", err
+	}
+	if refreshToken != "" && n.Store != nil {
+		if err := n.Store.SaveRefreshToken(refreshToken); err != nil {
+			logger.Warnf("Failed to save refresh token: %v", err)
+		}
+	}
+	return jwt, nil
+}
+
+func stdinIsInteractive() bool {
+	fi, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
+	return (fi.Mode() & os.ModeCharDevice) != 0
+}
+
+// DeviceLogin performs OAuth 2.0 Device Authorization Grant (RFC 8628).
+func (n *SamNode) DeviceLogin(ctx context.Context, deviceAuthURL, tokenURL, clientID, audience string, requestRefresh bool) (string, error) {
+	if deviceAuthURL == "" {
+		return "", fmt.Errorf("device authorization URL is required")
+	}
+	if tokenURL == "" {
+		return "", fmt.Errorf("token URL is required")
+	}
+	if clientID == "" {
+		return "", fmt.Errorf("client ID is required")
+	}
+
+	deviceData := url.Values{}
+	deviceData.Set("client_id", clientID)
+	scope := "openid email profile"
+	if requestRefresh {
+		scope += " offline_access"
+	}
+	deviceData.Set("scope", scope)
+	if audience != "" {
+		deviceData.Set("audience", audience)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", deviceAuthURL, strings.NewReader(deviceData.Encode()))
+	if err != nil {
+		return "", fmt.Errorf("failed to create device authorization request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("device authorization request failed: %w", err)
+	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
 			logger.Errorf("Failed to close response body: %v", err)
@@ -278,7 +371,169 @@ func (n *SamNode) InteractiveLogin(ctx context.Context, authURL, tokenURL, clien
 			ErrorDescription string `json:"error_description"`
 		}
 		_ = json.NewDecoder(resp.Body).Decode(&errResp)
-		return "", fmt.Errorf("token request failed: %s - %s", errResp.Error, errResp.ErrorDescription)
+		return "", fmt.Errorf("device authorization failed: %s - %s", errResp.Error, errResp.ErrorDescription)
+	}
+
+	var deviceResp struct {
+		DeviceCode              string `json:"device_code"`
+		UserCode                string `json:"user_code"`
+		VerificationURI         string `json:"verification_uri"`
+		VerificationURIComplete string `json:"verification_uri_complete"`
+		ExpiresIn               int    `json:"expires_in"`
+		Interval                int    `json:"interval"`
+		Message                 string `json:"message"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&deviceResp); err != nil {
+		return "", fmt.Errorf("failed to decode device authorization response: %w", err)
+	}
+	if deviceResp.DeviceCode == "" {
+		return "", fmt.Errorf("device authorization response missing device_code")
+	}
+
+	verificationURL := deviceResp.VerificationURI
+	if deviceResp.VerificationURIComplete != "" {
+		verificationURL = deviceResp.VerificationURIComplete
+	}
+
+	fmt.Println("------------------------------------------------------------")
+	fmt.Println("OAuth Device Authorization Flow")
+	fmt.Println("------------------------------------------------------------")
+	if deviceResp.Message != "" {
+		fmt.Println(deviceResp.Message)
+		fmt.Println()
+	} else {
+		if verificationURL != "" {
+			fmt.Printf("Open this URL in a browser:\n\n  %s\n\n", verificationURL)
+		}
+		if deviceResp.UserCode != "" {
+			fmt.Printf("Enter code: %s\n\n", deviceResp.UserCode)
+		}
+	}
+	fmt.Println("Waiting for authorization...")
+	fmt.Println("------------------------------------------------------------")
+
+	pollInterval := 5 * time.Second
+	if deviceResp.Interval > 0 {
+		pollInterval = time.Duration(deviceResp.Interval) * time.Second
+	}
+	var expiresAt time.Time
+	if deviceResp.ExpiresIn > 0 {
+		expiresAt = time.Now().Add(time.Duration(deviceResp.ExpiresIn) * time.Second)
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		default:
+		}
+
+		if !expiresAt.IsZero() && time.Now().After(expiresAt) {
+			return "", fmt.Errorf("device authorization expired before completion")
+		}
+
+		tokenData := url.Values{}
+		tokenData.Set("grant_type", "urn:ietf:params:oauth:grant-type:device_code")
+		tokenData.Set("device_code", deviceResp.DeviceCode)
+		tokenData.Set("client_id", clientID)
+
+		tokenReq, err := http.NewRequestWithContext(ctx, "POST", tokenURL, strings.NewReader(tokenData.Encode()))
+		if err != nil {
+			return "", fmt.Errorf("failed to create token polling request: %w", err)
+		}
+		tokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+		tokenResp, err := client.Do(tokenReq)
+		if err != nil {
+			return "", fmt.Errorf("token polling request failed: %w", err)
+		}
+
+		body, readErr := io.ReadAll(tokenResp.Body)
+		if closeErr := tokenResp.Body.Close(); closeErr != nil {
+			logger.Errorf("Failed to close response body: %v", closeErr)
+		}
+		if readErr != nil {
+			return "", fmt.Errorf("failed to read token polling response: %w", readErr)
+		}
+
+		if tokenResp.StatusCode == http.StatusOK {
+			var tokenData struct {
+				AccessToken  string `json:"access_token"`
+				IdToken      string `json:"id_token"`
+				RefreshToken string `json:"refresh_token"`
+			}
+			if err := json.Unmarshal(body, &tokenData); err != nil {
+				return "", fmt.Errorf("failed to decode token response: %w", err)
+			}
+			jwt := tokenData.AccessToken
+			if tokenData.IdToken != "" {
+				jwt = tokenData.IdToken
+			}
+			if jwt == "" {
+				return "", fmt.Errorf("token response did not contain an access_token or id_token")
+			}
+			if tokenData.RefreshToken != "" && n.Store != nil {
+				if saveErr := n.Store.SaveRefreshToken(tokenData.RefreshToken); saveErr != nil {
+					logger.Warnf("Failed to save refresh token: %v", saveErr)
+				}
+			}
+			return jwt, nil
+		}
+
+		if tokenResp.StatusCode != http.StatusBadRequest {
+			return "", fmt.Errorf("token request failed with status: %s", tokenResp.Status)
+		}
+
+		var errResp struct {
+			Error            string `json:"error"`
+			ErrorDescription string `json:"error_description"`
+		}
+		if err := json.Unmarshal(body, &errResp); err != nil {
+			return "", fmt.Errorf("failed to decode token polling error response: %w", err)
+		}
+
+		switch errResp.Error {
+		case "authorization_pending":
+			// keep polling
+		case "slow_down":
+			pollInterval += 5 * time.Second
+		case "access_denied":
+			return "", fmt.Errorf("device authorization denied by user")
+		case "expired_token":
+			return "", fmt.Errorf("device authorization expired")
+		default:
+			return "", fmt.Errorf("device token polling failed: %s - %s", errResp.Error, errResp.ErrorDescription)
+		}
+
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(pollInterval):
+		}
+	}
+}
+
+func parseTokenResponse(resp *http.Response) (jwt string, refreshToken string, err error) {
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			logger.Errorf("Failed to close response body: %v", closeErr)
+		}
+	}()
+
+	body, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		return "", "", readErr
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		var errResp struct {
+			Error            string `json:"error"`
+			ErrorDescription string `json:"error_description"`
+		}
+		if unmarshalErr := json.Unmarshal(body, &errResp); unmarshalErr == nil && errResp.Error != "" {
+			return "", "", fmt.Errorf("token request failed: %s - %s", errResp.Error, errResp.ErrorDescription)
+		}
+		return "", "", fmt.Errorf("token request failed with status: %s", resp.Status)
 	}
 
 	var tokenResp struct {
@@ -286,20 +541,18 @@ func (n *SamNode) InteractiveLogin(ctx context.Context, authURL, tokenURL, clien
 		IdToken      string `json:"id_token"`
 		RefreshToken string `json:"refresh_token"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
-		return "", err
+	if err := json.Unmarshal(body, &tokenResp); err != nil {
+		return "", "", err
 	}
 
-	if tokenResp.RefreshToken != "" && n.Store != nil {
-		if err := n.Store.SaveRefreshToken(tokenResp.RefreshToken); err != nil {
-			logger.Warnf("Failed to save refresh token: %v", err)
-		}
-	}
-
+	jwt = tokenResp.AccessToken
 	if tokenResp.IdToken != "" {
-		return tokenResp.IdToken, nil
+		jwt = tokenResp.IdToken
 	}
-	return tokenResp.AccessToken, nil
+	if jwt == "" {
+		return "", "", fmt.Errorf("token response did not contain an access_token or id_token")
+	}
+	return jwt, tokenResp.RefreshToken, nil
 }
 
 // oidcDiscoveryTimeout bounds a single OIDC discovery HTTP call so an
@@ -328,28 +581,48 @@ func (n *SamNode) DiscoverTokenURL(ctx context.Context, issuerURL string) (strin
 
 // DiscoverEndpoints discovers both token and authorization endpoints.
 func (n *SamNode) DiscoverEndpoints(ctx context.Context, issuerURL string) (tokenURL, authURL string, err error) {
+	endpoints, err := n.DiscoverEndpointsWithDevice(ctx, issuerURL)
+	if err != nil {
+		return "", "", err
+	}
+	return endpoints.TokenURL, endpoints.AuthURL, nil
+}
+
+// OIDCEndpoints contains discovered OIDC endpoint URLs.
+type OIDCEndpoints struct {
+	TokenURL      string
+	AuthURL       string
+	DeviceAuthURL string
+}
+
+// DiscoverEndpointsWithDevice discovers token, authorization and device authorization endpoints.
+func (n *SamNode) DiscoverEndpointsWithDevice(ctx context.Context, issuerURL string) (*OIDCEndpoints, error) {
 	client := &http.Client{Timeout: oidcDiscoveryTimeout}
 	provider, err := oidc.NewProvider(oidc.ClientContext(ctx, client), issuerURL)
 	if err != nil {
-		return "", "", fmt.Errorf("failed to create OIDC provider: %w", err)
+		return nil, fmt.Errorf("failed to create OIDC provider: %w", err)
 	}
 	var claims struct {
-		TokenURL string `json:"token_endpoint"`
-		AuthURL  string `json:"authorization_endpoint"`
+		TokenURL      string `json:"token_endpoint"`
+		AuthURL       string `json:"authorization_endpoint"`
+		DeviceAuthURL string `json:"device_authorization_endpoint"`
 	}
 	if err := provider.Claims(&claims); err != nil {
-		return "", "", fmt.Errorf("failed to extract claims: %w", err)
+		return nil, fmt.Errorf("failed to extract claims: %w", err)
 	}
-	return claims.TokenURL, claims.AuthURL, nil
+	return &OIDCEndpoints{
+		TokenURL:      claims.TokenURL,
+		AuthURL:       claims.AuthURL,
+		DeviceAuthURL: claims.DeviceAuthURL,
+	}, nil
 }
 
 var openBrowserFunc = openBrowser
 
-func openBrowser(targetURL string) {
+func openBrowser(targetURL string) error {
 	parsedURL, err := url.Parse(targetURL)
 	if err != nil || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") {
-		logger.Debugf("Failed to open browser: invalid or unsafe URL scheme %q", targetURL)
-		return
+		return fmt.Errorf("invalid or unsafe URL scheme %q", targetURL)
 	}
 	var cmdErr error
 	switch runtime.GOOS {
@@ -364,7 +637,9 @@ func openBrowser(targetURL string) {
 	}
 	if cmdErr != nil {
 		logger.Debugf("Failed to open browser: %v", cmdErr)
+		return cmdErr
 	}
+	return nil
 }
 
 // RefreshJWT refreshes the OIDC token using the stored refresh token.

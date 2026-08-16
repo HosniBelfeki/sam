@@ -56,7 +56,7 @@ If you are running the node on a remote server via SSH (without a web browser), 
 ```bash
 sam-node join https://bananas.sam-mesh.dev --headless
 ```
-The CLI will print a verification URL and code (e.g. `https://google.com/device` and `ABCD-EFGH`). Open this URL on your local laptop, enter the code, complete the login, and the remote terminal session will activate automatically.
+When the OIDC provider supports device authorization, SAM automatically uses device flow (no pasted callback code required): it prints a verification URL/code and polls until approval. If device authorization is unavailable, SAM falls back to OOB code-paste flow.
 
 ### Automatic Token Renewal
 To allow long-lived nodes to automatically renew their tokens in the background, request offline access (refreshes the OIDC session):

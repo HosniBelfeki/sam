@@ -91,7 +91,7 @@ sam-node is running in the background.
   Stop      kill 48213
 ```
 
-If no API token is configured (`SAM_API_TOKEN` or `--api-token-path`), `--daemonize` generates one under the data directory and reuses it on later starts. The command is idempotent: re-run it to confirm a node is up. Enrollment still needs a one-time login, so on a node with no identity it tells you to run `sam-node join --headless <control-plane-url>` first.
+If no API token is configured (`SAM_API_TOKEN` or `--api-token-path`), `--daemonize` generates one under the data directory and reuses it on later starts. The command is idempotent: re-run it to confirm a node is up. Enrollment still needs a one-time login, so on a node with no identity it tells you to run `sam-node join --headless <control-plane-url>` first. In headless mode, SAM prefers OAuth device flow automatically when the provider supports it, and falls back to OOB code-paste only when needed.
 
 #### Starting Over
 

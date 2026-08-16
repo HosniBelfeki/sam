@@ -424,12 +424,16 @@ func main() {
 				fmt.Printf("Client ID discovered: %s\n", controlPlaneInfo.ClientId)
 
 				logger.Info("Discovering OIDC endpoints...")
-				tokenURL, authURL, err := dummyNode.DiscoverEndpoints(ctx, controlPlaneInfo.OidcIssuer)
+				endpoints, err := dummyNode.DiscoverEndpointsWithDevice(ctx, controlPlaneInfo.OidcIssuer)
 				if err != nil {
 					logger.Fatalf("Failed to discover OIDC endpoints: %v", err)
 				}
+				deviceAuthURL := endpoints.DeviceAuthURL
+				if deviceAuthURLFlag != "" {
+					deviceAuthURL = deviceAuthURLFlag
+				}
 
-				jwtStr, err = dummyNode.InteractiveLogin(ctx, authURL, tokenURL, controlPlaneInfo.ClientId, controlPlaneInfo.Audience, offlineAccessFlag, headlessFlag)
+				jwtStr, err = dummyNode.InteractiveLoginWithDeviceAuth(ctx, endpoints.AuthURL, endpoints.TokenURL, deviceAuthURL, controlPlaneInfo.ClientId, controlPlaneInfo.Audience, offlineAccessFlag, headlessFlag)
 				if err != nil {
 					logger.Fatalf("Failed to get token: %v", err)
 				}
