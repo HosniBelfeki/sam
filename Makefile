@@ -1,6 +1,10 @@
 REPO_ROOT:=${CURDIR}
 OUT_DIR=$(REPO_ROOT)/bin
 
+# libinterceptor.so is declared before "build" for its file-based prerequisite
+# rule; without this, plain "make" would default to that first rule instead.
+.DEFAULT_GOAL := build
+
 # disable CGO by default for static binaries
 CGO_ENABLED=0
 export GOROOT GO111MODULE CGO_ENABLED
