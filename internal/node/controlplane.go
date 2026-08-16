@@ -92,23 +92,6 @@ func SyncMeshConfig(ctx context.Context, s *Store) ([]byte, []multiaddr.Multiadd
 		routerAddrs = append(routerAddrs, ma)
 	}
 
-	// Fallback for legacy databases: extract URL from multiaddr
-	if controlPlaneURL == "" && len(routerAddrs) > 0 {
-		for _, addr := range routerAddrs {
-			if val, err := addr.ValueForProtocol(multiaddr.P_DNS4); err == nil {
-				controlPlaneURL = "https://" + val
-				break
-			}
-			if val, err := addr.ValueForProtocol(multiaddr.P_DNSADDR); err == nil {
-				controlPlaneURL = "https://" + val
-				break
-			}
-		}
-		if controlPlaneURL != "" {
-			logger.Infof("Extracted legacy control plane URL from multiaddrs: %s", controlPlaneURL)
-		}
-	}
-
 	// If we have a URL, fetch the latest info
 	if controlPlaneURL != "" {
 		logger.Infof("Fetching latest router addresses via HTTP from %s...", controlPlaneURL)
