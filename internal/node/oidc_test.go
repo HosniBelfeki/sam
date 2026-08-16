@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -450,6 +451,62 @@ func TestInteractiveLoginBrowserFailFallsBackToDevice(t *testing.T) {
 	}
 	if token != "id_token_after_browser_fail" {
 		t.Fatalf("Expected id_token_after_browser_fail, got %q", token)
+	}
+}
+
+// TestDeviceLoginRetriesOnTransientTokenError verifies that a transient
+// network error while polling the token endpoint doesn't abort the device
+// flow: DeviceLogin should log a warning, wait for the next poll interval,
+// and keep polling until it succeeds (or the context/expiry ends it).
+func TestDeviceLoginRetriesOnTransientTokenError(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/device", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"device_code":      "dev_code_1",
+			"user_code":        "AAAA-BBBB",
+			"verification_uri": "https://example.com/device",
+			"expires_in":       60,
+			"interval":         1,
+		})
+	})
+
+	var pollCount int32
+	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt32(&pollCount, 1) == 1 {
+			// Simulate a transient network error on the first poll by closing
+			// the connection without writing a response.
+			hj, ok := w.(http.Hijacker)
+			if !ok {
+				t.Fatal("ResponseWriter does not support hijacking")
+			}
+			conn, _, err := hj.Hijack()
+			if err != nil {
+				t.Fatalf("failed to hijack connection: %v", err)
+			}
+			_ = conn.Close()
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"id_token": "token_after_retry"})
+	})
+
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	node := &SamNode{}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	token, err := node.DeviceLogin(ctx, server.URL+"/device", server.URL+"/token", "client_id_test", "sam-e2e", false)
+	if err != nil {
+		t.Fatalf("DeviceLogin failed: %v", err)
+	}
+	if token != "token_after_retry" {
+		t.Fatalf("Expected token_after_retry, got %q", token)
+	}
+	if got := atomic.LoadInt32(&pollCount); got < 2 {
+		t.Fatalf("expected at least 2 poll attempts, got %d", got)
 	}
 }
 

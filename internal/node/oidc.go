@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
+	"github.com/mattn/go-isatty"
 	"golang.org/x/oauth2/clientcredentials"
 )
 
@@ -378,11 +379,8 @@ func (n *SamNode) InteractiveLoginWithMode(ctx context.Context, authURL, tokenUR
 }
 
 func stdinIsInteractive() bool {
-	fi, err := os.Stdin.Stat()
-	if err != nil {
-		return false
-	}
-	return (fi.Mode() & os.ModeCharDevice) != 0
+	fd := os.Stdin.Fd()
+	return isatty.IsTerminal(fd) || isatty.IsCygwinTerminal(fd)
 }
 
 // DeviceLogin performs OAuth 2.0 Device Authorization Grant (RFC 8628).
@@ -505,7 +503,15 @@ func (n *SamNode) DeviceLogin(ctx context.Context, deviceAuthURL, tokenURL, clie
 
 		tokenResp, err := client.Do(tokenReq)
 		if err != nil {
-			return "", fmt.Errorf("token polling request failed: %w", err)
+			// Transient network errors shouldn't abort the whole device flow: log
+			// and keep polling until the context is cancelled or the code expires.
+			logger.Warnf("Token polling request failed: %v. Retrying in %v...", err, pollInterval)
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-time.After(pollInterval):
+			}
+			continue
 		}
 
 		body, readErr := io.ReadAll(tokenResp.Body)
