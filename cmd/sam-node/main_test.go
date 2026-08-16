@@ -104,8 +104,8 @@ func TestDefaultControlPlane(t *testing.T) {
 	if got := defaultControlPlane(store, "https://example.com"); got != "https://example.com" {
 		t.Errorf("explicit control plane should win: got %q", got)
 	}
-	if got := defaultControlPlane(store, ""); got != "https://bananas.sam-mesh.dev" {
-		t.Errorf("no explicit and no stored URL should default to the testnet: got %q", got)
+	if got := defaultControlPlane(store, ""); got != publicTestnetControlPlane {
+		t.Errorf("no explicit and no stored URL should default to the public testnet: got %q", got)
 	}
 
 	if err := store.SaveControlPlaneURL("https://stored.example.com"); err != nil {
@@ -113,5 +113,77 @@ func TestDefaultControlPlane(t *testing.T) {
 	}
 	if got := defaultControlPlane(store, ""); got != "https://stored.example.com" {
 		t.Errorf("no explicit should fall back to the stored URL: got %q", got)
+	}
+}
+
+func TestIsYesResponse(t *testing.T) {
+	tests := map[string]bool{
+		"y":       true,
+		"Y":       true,
+		"yes":     true,
+		"YES\n":   true,
+		" yes \n": true,
+		"n":       false,
+		"no":      false,
+		"":        false,
+		"\n":      false,
+		"yep":     false,
+	}
+	for in, want := range tests {
+		if got := isYesResponse(in); got != want {
+			t.Errorf("isYesResponse(%q) = %v, want %v", in, got, want)
+		}
+	}
+}
+
+func TestParseMeshChoice(t *testing.T) {
+	tests := map[string]string{
+		"1":     publicTestnetControlPlane,
+		"1\n":   publicTestnetControlPlane,
+		" 1 \n": publicTestnetControlPlane,
+		"2":     publicProductionControlPlane,
+		"2\n":   publicProductionControlPlane,
+		"3":     "",
+		"":      "",
+		"\n":    "",
+		"y":     "",
+	}
+	for in, want := range tests {
+		if got := parseMeshChoice(in); got != want {
+			t.Errorf("parseMeshChoice(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestDecideJoinAction(t *testing.T) {
+	const a, b = "https://a.example.com", "https://b.example.com"
+
+	tests := []struct {
+		name                                   string
+		identityExists, hasPubKey, interactive bool
+		controlPlaneAddr, stored               string
+		want                                   joinAction
+	}{
+		{"no identity, interactive, no urls: choose mesh", false, false, true, "", "", joinNeedsChooseMesh},
+		{"no identity, interactive, explicit url: proceed", false, false, true, a, "", joinProceed},
+		{"no identity, non-interactive: fall back", false, false, false, "", "", joinFallbackNoTTY},
+		{"usable identity: skip regardless of terminal", true, true, false, "", a, joinSkip},
+		{"usable identity, matching explicit url: skip", true, true, true, a, a, joinSkip},
+		{"identity missing pubkey, interactive: proceed (re-join)", true, false, true, "", a, joinProceed},
+		{"identity missing pubkey, non-interactive: fall back", true, false, false, "", a, joinFallbackNoTTY},
+		{"mismatched, interactive: confirm switch", true, true, true, b, a, joinNeedsConfirmSwitch},
+		{"mismatched, non-interactive: fatal", true, true, false, b, a, joinFatalMismatchNoTTY},
+		{"explicit equals stored (normalized): not a mismatch", true, true, true, a + "/", a, joinSkip},
+		{"no identity, interactive, only stored url: proceed", false, false, true, "", a, joinProceed},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := decideJoinAction(tt.identityExists, tt.hasPubKey, tt.interactive, tt.controlPlaneAddr, tt.stored)
+			if got != tt.want {
+				t.Errorf("decideJoinAction(%v, %v, %v, %q, %q) = %v, want %v",
+					tt.identityExists, tt.hasPubKey, tt.interactive, tt.controlPlaneAddr, tt.stored, got, tt.want)
+			}
+		})
 	}
 }

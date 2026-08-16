@@ -266,10 +266,6 @@ func (s *Store) ResetMeshIdentity() error {
 			"control_plane_public_key",
 			"router_addresses",
 			"control_plane_url",
-			// Legacy pre-rename keys, cleared for good measure.
-			"hub_public_key",
-			"hub_addresses",
-			"hub_url",
 		} {
 			if err := b.Delete([]byte(key)); err != nil {
 				return err

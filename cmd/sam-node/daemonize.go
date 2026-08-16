@@ -280,12 +280,10 @@ func confirmPurge(dataDir string) error {
 	if err != nil {
 		return fmt.Errorf("reading the confirmation: %w", err)
 	}
-	switch strings.ToLower(strings.TrimSpace(answer)) {
-	case "y", "yes":
-		return nil
-	default:
+	if !isYesResponse(answer) {
 		return fmt.Errorf("aborted: nothing was deleted")
 	}
+	return nil
 }
 
 // nodeStateFiles are the files a node creates in its data directory. Reset

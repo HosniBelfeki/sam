@@ -162,11 +162,16 @@ func NewUnauthenticatedMCPServer(controlPlaneURL string) *mcp.Server {
 		Version: "0.1.0",
 	}, &mcp.ServerOptions{Instructions: "This node is unauthenticated. Use the get_login_instructions tool or help_user_login prompt."})
 
+	joinCmd := "sam-node join"
+	if controlPlaneURL != "" {
+		joinCmd += " " + controlPlaneURL
+	}
+
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "get_login_instructions",
 		Description: "Get instructions on how to authenticate this node so it can join the SAM mesh.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, params map[string]any) (*mcp.CallToolResult, any, error) {
-		msg := fmt.Sprintf("The node is unauthenticated. Please open a regular terminal and run:\n\n  sam-node join %s\n\nOnce complete, restart this MCP client.", controlPlaneURL)
+		msg := fmt.Sprintf("The node is unauthenticated. Please open a regular terminal and run:\n\n  %s\n\nOnce complete, restart this MCP client.", joinCmd)
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{
 				&mcp.TextContent{Text: msg},
@@ -184,7 +189,7 @@ func NewUnauthenticatedMCPServer(controlPlaneURL string) *mcp.Server {
 				{
 					Role: "user",
 					Content: &mcp.TextContent{
-						Text: fmt.Sprintf("Please open a terminal and run:\n\n`sam-node join %s`\n\nAfter you finish, please restart this MCP connection.", controlPlaneURL),
+						Text: fmt.Sprintf("Please open a terminal and run:\n\n`%s`\n\nAfter you finish, please restart this MCP connection.", joinCmd),
 					},
 				},
 			},

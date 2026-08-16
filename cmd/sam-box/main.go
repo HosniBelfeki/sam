@@ -213,8 +213,6 @@ func main() {
 					if displayControlPlane == "" {
 						if h, err := store.LoadControlPlaneURL(); err == nil && h != "" {
 							displayControlPlane = h
-						} else {
-							displayControlPlane = "https://bananas.sam-mesh.dev"
 						}
 					}
 					logger.Infof("No identity found. Starting unauthenticated sidecar for enrollment over MCP...")
@@ -392,7 +390,7 @@ func main() {
 			ctx := cmd.Context()
 			targetControlPlane := controlPlaneAddr
 			if targetControlPlane == "" {
-				targetControlPlane = "https://bananas.sam-mesh.dev"
+				logger.Fatal("join needs a control plane to enroll with: pass --control-plane <url> (e.g. https://bananas.sam-mesh.dev for the public testnet).")
 			}
 			if !strings.HasPrefix(targetControlPlane, "http://") && !strings.HasPrefix(targetControlPlane, "https://") {
 				targetControlPlane = "https://" + targetControlPlane
