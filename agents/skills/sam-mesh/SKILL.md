@@ -34,9 +34,15 @@ approve it before running anything.
    log file, and how to stop it. It is idempotent, so run it again whenever you
    need to confirm a node is up.
 3. If step 2 reports that the node is not enrolled, run the command it prints,
-   `sam-node join --headless <control-plane-url>`. That prints a URL and a
-   code: show both to the user and wait while they complete the login, then
-   repeat step 2. Enrollment is a one-time step per machine.
+   `sam-node join --headless <control-plane-url>`. In headless mode SAM now
+   prefers OAuth device flow automatically when the OIDC provider supports it,
+   so no pasted callback code is required: it prints a verification URL/code
+   and polls until login completes. If the provider does not expose a device
+   endpoint, SAM falls back to OOB code-paste flow; show the URL/code to the
+   user, wait for completion, then repeat step 2. For deterministic automation,
+   force the flow with `--auth-mode device` (also `oob`, `browser`, or the
+   default `auto`); `--auth-mode device` fails fast if the provider has no
+   device endpoint. Enrollment is a one-time step per machine.
 4. Read the node API token from the file named in step 2, then register the MCP
    endpoint `http://127.0.0.1:8080/mcp` with the header
    `X-Sam-Authentication: Bearer <token>`. Claude Code:

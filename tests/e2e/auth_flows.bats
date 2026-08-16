@@ -37,7 +37,10 @@ teardown() {
   
   [[ -n "${token}" ]]
 
-  # 2. Run sam-node join to enroll and store identity
+  # 2. Run sam-node join to enroll and store identity. The sam-node image has
+  # no browser to open, so the loopback flow can't complete; join falls back
+  # to the OAuth 2.0 Device Authorization Grant (RFC 8628), which the mock
+  # OIDC provider advertises and auto-approves on the first poll.
   local node_name="${MESH_PREFIX}-node-login"
   local router_peer_id
   router_peer_id=$(cat "/tmp/${MESH_PREFIX}-router-peer-id")
@@ -45,49 +48,26 @@ teardown() {
   local data_vol="${MESH_PREFIX}-data"
   docker volume create "${data_vol}"
   CLEANUP_VOLUMES+=("${data_vol}")
-  
-  docker run --name "${node_name}-join" \
+
+  docker run -d --name "${node_name}-join" \
     --network "${MESH_NETWORK}" \
     $(mesh_get_add_hosts) \
     -v "${data_vol}:/data" \
     "sam-node:local" \
-    join --data-dir /data "http://sam-control-plane:8080" > "/tmp/${node_name}-join.out" 2>&1 &
-  local join_pid=$!
+    join --data-dir /data "http://sam-control-plane:8080"
   MESH_CONTAINERS+=("${node_name}-join")
 
-  # Wait for redirect_uri and state in the output
-  local redirect_uri=""
-  local state=""
-  local port=""
-  for i in {1..20}; do
-    if grep -q "redirect_uri=" "/tmp/${node_name}-join.out"; then
-      # Output format: http://mock-oidc...redirect_uri=http%3A%2F%2F127.0.0.1%3A<PORT>%2Fcallback&...&state=<STATE>
-      local line
-      line=$(grep "redirect_uri=" "/tmp/${node_name}-join.out" | head -n 1)
-      redirect_uri=$(echo "$line" | grep -o 'redirect_uri=[^&]*' | cut -d= -f2 | tr -d '\r\n')
-      state=$(echo "$line" | grep -o 'state=[^&]*' | cut -d= -f2 | tr -d '\r\n')
-      
-      # URL decode redirect_uri
-      # e.g. http%3A%2F%2F127.0.0.1%3A41353%2Fcallback -> http://127.0.0.1:41353/callback
-      redirect_uri=$(echo "$redirect_uri" | sed -e 's/%3A/:/g' -e 's/%2F/\//g')
-      
-      port=$(echo "$redirect_uri" | grep -o ':[0-9]*' | tr -d ':\r\n')
-      if [[ -n "$port" && -n "$state" ]]; then
-        break
-      fi
-    fi
-    sleep 1
-  done
+  run mesh_wait_for_log "${node_name}-join" "OAuth Device Authorization Flow" 20
+  [[ "$status" -eq 0 ]]
+  run mesh_wait_for_log "${node_name}-join" "Enter code: ABCD-1234" 20
+  [[ "$status" -eq 0 ]]
 
-  [[ -n "$port" ]] && [[ -n "$state" ]]
-
-  # Trigger the callback in the sam-node container's network namespace
-  docker run --rm --network "container:${node_name}-join" python:3.12 python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${port}/callback?code=dev_code_123&state=${state}')"
-
-  # Wait for the join process to finish
-  wait $join_pid
+  # Wait for the join process to finish and check it succeeded.
+  run mesh_wait_for_log "${node_name}-join" "Successfully joined the Sovereign Agent Mesh!" 20
+  [[ "$status" -eq 0 ]]
+  [[ "$(docker inspect -f '{{.State.ExitCode}}' "${node_name}-join")" -eq 0 ]]
   docker rm -f "${node_name}-join" >/dev/null 2>&1 || true
-    
+
   # Now run the node with the stored identity
   docker run -d \
     --name "${node_name}" \
