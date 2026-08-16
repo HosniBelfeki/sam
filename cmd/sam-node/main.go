@@ -136,6 +136,13 @@ func isInteractiveTerminal() bool {
 	return isatty.IsTerminal(fd) || isatty.IsCygwinTerminal(fd)
 }
 
+// Public community meshes a node can join without any private control plane
+// of its own. Neither is the default without explicit user confirmation.
+const (
+	publicTestnetControlPlane    = "https://bananas.sam-mesh.dev" // open to anyone, deployed from the tip of main
+	publicProductionControlPlane = "https://hub.sam-mesh.dev"     // open to anyone, deployed from the latest release tag
+)
+
 // defaultControlPlane resolves which control plane to use when none was
 // explicitly passed: the previously stored one, or the public testnet.
 func defaultControlPlane(store *node.Store, explicit string) string {
@@ -145,7 +152,102 @@ func defaultControlPlane(store *node.Store, explicit string) string {
 	if h, err := store.LoadControlPlaneURL(); err == nil && h != "" {
 		return h
 	}
-	return "https://bananas.sam-mesh.dev"
+	return publicTestnetControlPlane
+}
+
+// choosePublicMesh explains what bananas.sam-mesh.dev and hub.sam-mesh.dev
+// are and asks which (if either) to join, since a node must never join a
+// public mesh without the user's explicit ack; passing --control-plane <url>
+// is the silent, explicit alternative. Returns the chosen URL, or "" if the
+// user declined (the default).
+func choosePublicMesh() string {
+	fmt.Printf(
+		"No control plane specified. Join a public community mesh?\n"+
+			"  1) %s - open to anyone, deployed from the tip of main (may be unstable)\n"+
+			"  2) %s - open to anyone, deployed from the latest release tag\n"+
+			"Choice [1/2] (default: don't join): ",
+		publicTestnetControlPlane, publicProductionControlPlane)
+	reader := bufio.NewReader(os.Stdin)
+	response, err := reader.ReadString('\n')
+	if err != nil {
+		return ""
+	}
+	return parseMeshChoice(response)
+}
+
+// parseMeshChoice maps a raw prompt answer to the chosen public mesh's URL,
+// or "" for anything other than an explicit "1" or "2".
+func parseMeshChoice(response string) string {
+	switch strings.TrimSpace(response) {
+	case "1":
+		return publicTestnetControlPlane
+	case "2":
+		return publicProductionControlPlane
+	default:
+		return ""
+	}
+}
+
+// isYesResponse reports whether a raw prompt answer is an explicit "y"/"yes"
+// (case/whitespace-insensitive). Anything else, including a blank answer, is
+// a "no".
+func isYesResponse(response string) bool {
+	switch strings.ToLower(strings.TrimSpace(response)) {
+	case "y", "yes":
+		return true
+	default:
+		return false
+	}
+}
+
+// joinAction is the outcome of deciding what "--join" should do, given the
+// node's current identity state and how it was invoked. Deciding this is
+// pure/side-effect-free so it can be unit tested directly, instead of only
+// through slow end-to-end runs of the CLI across every flag combination.
+type joinAction int
+
+const (
+	// joinSkip: a usable identity is already stored; --join is a no-op.
+	joinSkip joinAction = iota
+	// joinFatalMismatchNoTTY: --control-plane conflicts with the stored
+	// mesh and there's no terminal to confirm switching; must fail fast.
+	joinFatalMismatchNoTTY
+	// joinFallbackNoTTY: no usable identity and no terminal to run an
+	// interactive login; fall back to the unauthenticated MCP sidecar.
+	joinFallbackNoTTY
+	// joinNeedsConfirmSwitch: --control-plane conflicts with the stored
+	// mesh; an interactive terminal must confirm resetting and rejoining.
+	joinNeedsConfirmSwitch
+	// joinNeedsChooseMesh: no explicit or stored control plane; an
+	// interactive terminal must pick a public mesh (or decline).
+	joinNeedsChooseMesh
+	// joinProceed: enough is known to go straight to interactiveJoin.
+	joinProceed
+)
+
+// decideJoinAction is the decision table behind "--join": given the node's
+// identity state (identityExists, hasPubKey), whether stdin is a real
+// terminal, and the explicit vs. stored control planes, it picks exactly one
+// of the joinAction outcomes above. It has no side effects.
+func decideJoinAction(identityExists, hasPubKey, interactive bool, controlPlaneAddr, stored string) joinAction {
+	mismatched := identityExists && controlPlaneAddr != "" && stored != "" &&
+		normalizeControlPlaneURL(controlPlaneAddr) != normalizeControlPlaneURL(stored)
+	hasUsableIdentity := identityExists && hasPubKey && !mismatched
+
+	switch {
+	case hasUsableIdentity:
+		return joinSkip
+	case mismatched && !interactive:
+		return joinFatalMismatchNoTTY
+	case !interactive:
+		return joinFallbackNoTTY
+	case mismatched:
+		return joinNeedsConfirmSwitch
+	case controlPlaneAddr == "" && stored == "":
+		return joinNeedsChooseMesh
+	default:
+		return joinProceed
+	}
 }
 
 // normalizeControlPlaneURL adds the https:// scheme if missing and drops any
@@ -326,35 +428,35 @@ func main() {
 				identityExists := len(token) > 0
 				stored, _ := store.LoadControlPlaneURL()
 				mismatched := identityExists && controlPlaneAddr != "" && stored != "" && normalizeControlPlaneURL(controlPlaneAddr) != normalizeControlPlaneURL(stored)
-				hasUsableIdentity := identityExists && len(controlPlanePubKey) > 0 && !mismatched
 
-				switch {
-				case hasUsableIdentity:
+				switch decideJoinAction(identityExists, len(controlPlanePubKey) > 0, isInteractiveTerminal(), controlPlaneAddr, stored) {
+				case joinSkip:
 					logger.Debug("--join set but a usable identity is already stored; ignoring")
-					// Legacy store, never tracked a control-plane URL: start tracking it now.
-					if controlPlaneAddr != "" && stored == "" {
-						if err := store.SaveControlPlaneURL(normalizeControlPlaneURL(controlPlaneAddr)); err != nil {
-							logger.Warnf("Failed to save control plane URL: %v", err)
-						}
-					}
-				case mismatched && !isInteractiveTerminal():
+				case joinFatalMismatchNoTTY:
 					logger.Fatalf("--control-plane %q does not match the mesh this node is enrolled with (%s); switching meshes needs to be confirmed interactively. Run %q first, or re-run this interactively.", controlPlaneAddr, stored, "sam-node reset")
-				case !isInteractiveTerminal():
+				case joinFallbackNoTTY:
 					logger.Warn("--join set but no interactive terminal available; falling back to out-of-band enrollment via the unauthenticated MCP sidecar")
-				default:
-					if mismatched {
-						fmt.Printf("This node is currently enrolled with %s. Switching to %s replaces its stored identity (keeping the same PeerID). Continue? [y/N]: ", stored, controlPlaneAddr)
-						reader := bufio.NewReader(os.Stdin)
-						resp, _ := reader.ReadString('\n')
-						resp = strings.ToLower(strings.TrimSpace(resp))
-						if resp != "y" && resp != "yes" {
-							logger.Fatal("Aborted: not switching meshes.")
-						}
-						if err := store.ResetMeshIdentity(); err != nil {
-							logger.Fatalf("Failed to reset stored identity: %v", err)
-						}
-					} else if identityExists {
+				case joinNeedsConfirmSwitch:
+					fmt.Printf("This node is currently enrolled with %s. Switching to %s replaces its stored identity (keeping the same PeerID). Continue? [y/N]: ", stored, controlPlaneAddr)
+					reader := bufio.NewReader(os.Stdin)
+					resp, _ := reader.ReadString('\n')
+					if !isYesResponse(resp) {
+						logger.Fatal("Aborted: not switching meshes.")
+					}
+					if err := store.ResetMeshIdentity(); err != nil {
+						logger.Fatalf("Failed to reset stored identity: %v", err)
+					}
+					fallthrough
+				case joinNeedsChooseMesh, joinProceed:
+					if !mismatched && identityExists && len(controlPlanePubKey) == 0 {
 						logger.Warn("Stored identity is missing its control plane public key; re-joining")
+					}
+					if controlPlaneAddr == "" && stored == "" {
+						chosen := choosePublicMesh()
+						if chosen == "" {
+							logger.Fatal("Aborted: no control plane specified.")
+						}
+						controlPlaneAddr = chosen
 					}
 					targetControlPlane := normalizeControlPlaneURL(defaultControlPlane(store, controlPlaneAddr))
 					jwtStr, controlPlaneInfo, err = interactiveJoin(ctx, store, targetControlPlane)
@@ -368,7 +470,14 @@ func main() {
 			if jwtStr == "" && bootstrapTokenFlag == "" {
 				token, _ := store.LoadIdentity()
 				if len(token) == 0 {
-					displayControlPlane := defaultControlPlane(store, controlPlaneAddr)
+					// Explicit-or-stored only: never suggest the public testnet
+					// as a join target without the user's explicit ack.
+					displayControlPlane := controlPlaneAddr
+					if displayControlPlane == "" {
+						if h, err := store.LoadControlPlaneURL(); err == nil && h != "" {
+							displayControlPlane = h
+						}
+					}
 					logger.Infof("No identity found. Starting unauthenticated sidecar for enrollment over MCP...")
 					unauthSrv, err := node.StartUnauthSidecarServer(displayControlPlane, bindAddrFlag, resolveSocketPath(cmd), tlsCertFlag, tlsKeyFlag)
 					if err != nil {
@@ -387,12 +496,6 @@ func main() {
 					normalizedAddr := normalizeControlPlaneURL(controlPlaneAddr)
 					if stored != "" && normalizedAddr != normalizeControlPlaneURL(stored) {
 						logger.Fatalf("--control-plane %q does not match the mesh this node's stored identity was enrolled with (%s). A node's identity is only valid for the mesh that issued it: re-run with --join to switch interactively (%q clears it non-interactively), rather than pointing this one at a different mesh.", controlPlaneAddr, stored, "sam-node reset")
-					}
-					// Legacy store, never tracked a control-plane URL: start tracking it now.
-					if stored == "" {
-						if err := store.SaveControlPlaneURL(normalizedAddr); err != nil {
-							logger.Warnf("Failed to save control plane URL: %v", err)
-						}
 					}
 				}
 
@@ -611,19 +714,12 @@ func main() {
 			}
 
 			if targetControlPlane == "" {
-				fmt.Print("No control plane URL provided. Do you want to join the default community testing network (https://bananas.sam-mesh.dev)? [y/N]: ")
-				reader := bufio.NewReader(os.Stdin)
-				response, err := reader.ReadString('\n')
-				if err != nil {
-					fmt.Println("\nAborting: failed to read input.")
-					return
-				}
-				response = strings.ToLower(strings.TrimSpace(response))
-				if response != "y" && response != "yes" {
+				chosen := choosePublicMesh()
+				if chosen == "" {
 					fmt.Println("Aborting join operation.")
 					return
 				}
-				targetControlPlane = "https://bananas.sam-mesh.dev"
+				targetControlPlane = chosen
 			}
 
 			targetControlPlane = normalizeControlPlaneURL(targetControlPlane)
