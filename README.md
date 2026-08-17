@@ -9,7 +9,18 @@ SAM is a smart network built for autonomous AI agents:
 *   **Agentic Network:** Formed by lightweight nodes (`sam-node`) that provide self-healing, P2P connectivity, allowing autonomous agents to plug in, communicate, and invoke tools dynamically.
 *   **Portability:** Cryptographic identities are environment-agnostic, allowing seamless node mobility across cloud, local, and edge environments.
 
+Getting started is a one-liner (see the [Quick Start Guide](site/content/docs/quickstart.md)): install, add the skill, and your agent is on the mesh.
+
+<img src="site/static/demo.gif" alt="Demo: installing SAM, adding the sam-mesh skill, and an agent discovering and calling tools across the mesh" width="100%" />
+
+<details>
+<summary><b>Advanced demo</b>: an agent fans a batch of work across a warm pool of reviewer agents on the mesh</summary>
+
 <video src="https://github.com/user-attachments/assets/f1a61b6f-efcd-46d8-a6e6-659fb29dd1ce" width="100%" autoplay loop muted playsinline controls></video>
+
+Full walkthrough: [Warm Agent Pool use case](site/content/docs/use-cases/warm-agent-pool.md).
+
+</details>
 
 ---
 
