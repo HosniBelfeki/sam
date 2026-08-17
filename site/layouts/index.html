@@ -28,7 +28,7 @@
     <!-- Bottom Row: Demo Player -->
     <link rel="stylesheet" href="{{ "vendor/asciinema-player/asciinema-player.css" | relURL }}">
     <div style="width: 100%;">
-      <div id="demo-player" data-cast="{{ "demo.cast" | relURL }}" style="border-radius: 12px; overflow: hidden; box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5), 0 0 40px rgba(0, 240, 255, 0.1); border: 1px solid rgba(0, 240, 255, 0.15);"></div>
+      <div id="demo-player" data-cast="{{ "demo.cast" | relURL }}"></div>
     </div>
     <script src="{{ "vendor/asciinema-player/asciinema-player.min.js" | relURL }}"></script>
     <script>
@@ -39,7 +39,7 @@
         autoPlay: true,
         loop: true,
         preload: true,
-        fit: 'width'
+        fit: 'width' // fill the container width; height follows the terminal
       });
     </script>
   </div>
