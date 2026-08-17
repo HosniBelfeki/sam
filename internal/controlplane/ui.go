@@ -62,6 +62,13 @@ func (s *Server) HandleAdminStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	users, err := s.store.ListUsers(ctx)
+	if err != nil {
+		logger.Errorf("Failed to list users: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
 	roles, bindings, err := s.store.GetMeshPolicy(r.Context())
 	if err != nil {
 		logger.Errorf("Failed to list policy: %v", err)
@@ -100,6 +107,7 @@ func (s *Server) HandleAdminStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := map[string]any{
+		"users":               users,
 		"active_routers":      routers,
 		"enrolled_nodes":      nodes,
 		"enrollment_requests": reqs,

@@ -185,8 +185,8 @@ function renderUsersTable(users) {
         <tr>
             <td><code>${escapeHTML(user.ID)}</code></td>
             <td>${escapeHTML(user.Role)}</td>
-            <td>${escapeHTML(user.Name)}</td>
             <td>${escapeHTML(user.Email)}</td>
+            <td>${new Date(user.CreatedAt).toLocaleString()}</td>
         </tr>
     `).join('');
 }
