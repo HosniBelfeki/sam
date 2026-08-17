@@ -112,4 +112,6 @@ dex:
 
 bootstrap:
   bindings: []
+  # Services sam:role:node may call
+  nodeServices: ["*"]
 
