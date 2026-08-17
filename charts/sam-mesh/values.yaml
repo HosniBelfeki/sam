@@ -41,7 +41,9 @@ controlPlane:
   # Only skips TLS verification for the OIDC issuer; leave false unless
   # pointing at a local/dev issuer without a valid certificate.
   insecureSkipTlsVerify: false
-  oidcIssuer: "http://sam-mesh-dex:5556/dex"
+  # Required: the chart bundles no identity provider. Point it at your OIDC issuer
+  # (comma-separated for more than one); the control plane refuses to start without one.
+  oidcIssuer: ""
   allowedAudiences: "sam-mesh-audience,sam-control-plane-audience"
   resources:
     requests:
@@ -123,22 +125,7 @@ console:
     port: 8081
     nodePort: null
 
-dex:
-  enabled: false
-  nodePort: 30556
-  image:
-    repository: dexidp/dex
-    tag: v2.39.0
-  google:
-    clientId: ""
-    clientSecret: ""
-  github:
-    clientId: ""
-    clientSecret: ""
-  cliOAuthSecret: ""
-
 bootstrap:
   bindings: []
   # Services sam:role:node may call
   nodeServices: ["*"]
-
