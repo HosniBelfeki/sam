@@ -8,7 +8,7 @@ Fan a batch of work across a pool of identical, already-running worker agents â€
 built entirely from ordinary mesh MCP services, no gossip and no node changes.
 
 <video autoplay loop muted playsinline controls style="width: 100%; border-radius: 8px;">
-  <source src="/demo-warm-agent-pool.mp4" type="video/mp4">
+  <source src="../../../demo-warm-agent-pool.mp4" type="video/mp4">
 </video>
 
 Source: [`development/examples/code-reviewer-pool/`](https://github.com/google/sam/tree/main/development/examples/code-reviewer-pool).

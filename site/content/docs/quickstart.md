@@ -40,73 +40,13 @@ Expand-Archive -Path "sam.zip" -DestinationPath "$env:ProgramFiles\sam"
 
 ## 2. Connect Your Node to the Mesh
 
-Getting a node onto the mesh takes two things: **joining** — registering the node and obtaining its cryptographic identity (a Biscuit token) via an OIDC login — and **running** it. The `--join` flag on `run` does both in one command: it enrolls the first time (when the node has no identity yet), then starts serving; on every later restart it's a no-op since the identity is already stored.
+**Shortcut: let your agent do it.** If you use an agent that supports skills (Claude Code, Google Antigravity, …), install the [agent skill](#4-teach-your-ai-agent-to-use-the-mesh) with `sam-node skill install`, restart the agent, and ask it to connect to the mesh. The skill walks it through starting the node and registering the MCP endpoint on its own — the only thing it hands back to you is the one-time enrollment login below.
 
-### Recommended: One Command
+Getting a node onto the mesh takes two steps: **joining** — registering the node and obtaining its cryptographic identity (a Biscuit token) via an OIDC login — and **running** it. We recommend doing them as two explicit commands: enrollment is a one-time step per machine whose prompts (browser login, admin approval) are easier to follow on their own, and it is the same flow the [agent skill](#4-teach-your-ai-agent-to-use-the-mesh) guides your agent through. If you prefer a single command, see the [alternative below](#alternative-one-command).
 
-#### Using the Binary
-The binary is the simplest way to run a node locally — no volumes or port mapping to think about:
-```bash
-SAM_API_TOKEN=my-secret-token sam-node run --join --bind-addr 127.0.0.1:8080
-```
-The CLI will open your browser for login (or print a device code if headless). Once authenticated:
-```text
-Successfully joined the Sovereign Agent Mesh!
-INFO  sam-node  [AuthN] Successfully authenticated with router via libp2p: ...
-SAM Node Online.
-PeerID: 12D3KooW...
-```
+### Recommended: Join, Then Run
 
-#### Using Docker
-Docker works the same way, but needs a persistent volume for the identity and explicit port mapping (`5001/udp`, `5002/tcp` for libp2p, `8080/tcp` for the local API):
-```bash
-mkdir -p $(pwd)/sam-data
-docker run -it \
-  --user "$(id -u):$(id -g)" \
-  -v $(pwd)/sam-data:/data \
-  -p 5001:5001/udp \
-  -p 5002:5002 \
-  -p 8080:8080 \
-  -e SAM_API_TOKEN=my-secret-token \
-  ghcr.io/google/sam-node:latest \
-  run --join --data-dir /data --bind-addr 0.0.0.0:8080
-```
-Use `-it` for this first run so you can complete the browser/device-code login; once enrolled, restart it detached with `-d` instead (`--join` is a no-op at that point, so it's safe to leave in your start command). If there's no interactive terminal attached (e.g. `-d` on the very first run), the node instead comes up as an unauthenticated sidecar waiting for out-of-band enrollment over MCP.
-
-By default `--join` enrolls with the public testnet (`bananas.sam-mesh.dev`); pass `--control-plane <url>` to join a different mesh.
-
-#### Running It in the Background
-
-`sam-node run` stays in the foreground. Add `--daemonize` to start it detached and return as soon as its local API answers — useful when an AI agent is driving the setup, or when you don't want a terminal dedicated to the node:
-
-```bash
-sam-node run --daemonize
-```
-```text
-sam-node is running in the background.
-  PID       48213
-  Endpoint  http://127.0.0.1:8080/mcp
-  Token     /home/you/.config/sam-mesh/api-token
-  Logs      /home/you/.config/sam-mesh/sam-node.log
-  Stop      kill 48213
-```
-
-If no API token is configured (`SAM_API_TOKEN` or `--api-token-path`), `--daemonize` generates one under the data directory and reuses it on later starts. The command is idempotent: re-run it to confirm a node is up. Enrollment still needs a one-time login, so on a node with no identity it tells you to run `sam-node join --headless <control-plane-url>` first. In headless mode, SAM prefers OAuth device flow automatically when the provider supports it, and falls back to OOB code-paste only when needed.
-
-#### Starting Over
-
-A node reuses whatever is already in its data directory, which is what you want day to day but not when you are testing setup flows. Two levels of reset:
-
-```bash
-sam-node reset             # forget the mesh identity only, keep the PeerID
-sam-node reset --all       # delete every file the node keeps, including its key
-```
-
-`--all` asks for confirmation, and needs `--yes` when there is no terminal to ask on. Both refuse while a node is still running, so stop it first (`kill <pid>` from the `--daemonize` output). After `--all` the node generates a new PeerID and has to enroll again.
-
-### Alternative: Join and Run Separately
-
-If you're deploying headlessly with a pre-issued bootstrap token, or just prefer explicit steps, you can join and run as two commands instead.
+Join once to enroll the node, then run it. The identity is stored in the node's data directory and reused on every later start.
 
 #### Step 1: Join the Mesh
 
@@ -186,6 +126,66 @@ docker run -d \
 ```
 Verify the node is running with `docker logs sam-node`.
 
+#### Running It in the Background
+
+`sam-node run` stays in the foreground. Add `--daemonize` to start it detached and return as soon as its local API answers — useful when an AI agent is driving the setup, or when you don't want a terminal dedicated to the node:
+
+```bash
+sam-node run --daemonize
+```
+```text
+sam-node is running in the background.
+  PID       48213
+  Endpoint  http://127.0.0.1:8080/mcp
+  Token     /home/you/.config/sam-mesh/api-token
+  Logs      /home/you/.config/sam-mesh/sam-node.log
+  Stop      kill 48213
+```
+
+If no API token is configured (`SAM_API_TOKEN` or `--api-token-path`), `--daemonize` generates one under the data directory and reuses it on later starts. The command is idempotent: re-run it to confirm a node is up. Enrollment still needs a one-time login, so on a node with no identity it tells you to run `sam-node join --headless <control-plane-url>` first. In headless mode, SAM prefers OAuth device flow automatically when the provider supports it, and falls back to OOB code-paste only when needed.
+
+#### Starting Over
+
+A node reuses whatever is already in its data directory, which is what you want day to day but not when you are testing setup flows. Two levels of reset:
+
+```bash
+sam-node reset             # forget the mesh identity only, keep the PeerID
+sam-node reset --all       # delete every file the node keeps, including its key
+```
+
+`--all` asks for confirmation, and needs `--yes` when there is no terminal to ask on. Both refuse while a node is still running, so stop it first (`kill <pid>` from the `--daemonize` output). After `--all` the node generates a new PeerID and has to enroll again.
+
+### Alternative: One Command
+
+The `--join` flag on `run` does both steps in one command: it enrolls the first time (when the node has no identity yet), then starts serving; on every later restart it's a no-op since the identity is already stored. By default `--join` enrolls with the public testnet (`bananas.sam-mesh.dev`); pass `--control-plane <url>` to enroll with a different mesh.
+
+#### Using the Binary
+```bash
+SAM_API_TOKEN=my-secret-token sam-node run --join --bind-addr 127.0.0.1:8080
+```
+The CLI will open your browser for login (or print a device code if headless). Once authenticated:
+```text
+Successfully joined the Sovereign Agent Mesh!
+INFO  sam-node  [AuthN] Successfully authenticated with router via libp2p: ...
+SAM Node Online.
+PeerID: 12D3KooW...
+```
+
+#### Using Docker
+```bash
+mkdir -p $(pwd)/sam-data
+docker run -it \
+  --user "$(id -u):$(id -g)" \
+  -v $(pwd)/sam-data:/data \
+  -p 5001:5001/udp \
+  -p 5002:5002 \
+  -p 8080:8080 \
+  -e SAM_API_TOKEN=my-secret-token \
+  ghcr.io/google/sam-node:latest \
+  run --join --data-dir /data --bind-addr 0.0.0.0:8080
+```
+Use `-it` for this first run so you can complete the browser/device-code login; once enrolled, restart it detached with `-d` instead (`--join` is a no-op at that point, so it's safe to leave in your start command). If there's no interactive terminal attached (e.g. `-d` on the very first run), the node instead comes up as an unauthenticated sidecar waiting for out-of-band enrollment over MCP.
+
 ## 3. Query the Local MCP API
 
 Your SAM node exposes a standard Model Context Protocol (MCP) server. The easiest way to interact with it is using the `mcp-client` CLI tool (which is installed alongside `sam-node`):
@@ -249,3 +249,5 @@ sam-node skill show                # print the document, for agents with a diffe
 ```
 
 Re-run `sam-node skill install` after upgrading `sam-node` to refresh the document. Then connect your agent to the node's MCP endpoint — see the [integration guides](../integrations/) — and restart it so both the skill and the tools load.
+
+With the skill installed you can also skip the manual setup entirely and ask the agent to bring itself online (for example: *"connect to the sam mesh and show me what tools are available"*). The skill teaches it to start the node with `sam-node run --daemonize`, read the API token, and register the MCP endpoint itself; it only stops to hand you the one-time `sam-node join` login, which stays with a human by design.
