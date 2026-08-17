@@ -2,6 +2,33 @@ global:
   imageTag: local
   imagePullPolicy: IfNotPresent
 
+# One Gateway fronting the mesh: the control plane's enrollment surface plus the console
+# under gateway.consolePath, mirroring the cloud deployment.
+gateway:
+  enabled: false
+  # Required when enabled. No default: the GatewayClass is provider-specific, e.g.
+  # cloud-provider-kind in kind, gke-l7-global-external-managed on GKE.
+  className: ""
+  # Routes the control plane's /admin API. Dev only; the cloud leaves it unrouted.
+  adminRoute: false
+  # External prefix the console is served under. The bare prefix 302s to <prefix>/ and a
+  # URLRewrite filter (Extended conformance) strips it before the console sees the
+  # request, as on the cloud. Empty leaves the console unrouted.
+  consolePath: /console
+  # listeners, hostnames, addresses and annotations pass through to the Gateway API
+  # objects verbatim, so anything the spec allows is expressible. Plain HTTP on 80
+  # matching any host suits a local cluster.
+  listeners:
+  - name: http
+    protocol: HTTP
+    port: 80
+    allowedRoutes:
+      namespaces:
+        from: Same
+  hostnames: []
+  addresses: []
+  annotations: {}
+
 controlPlane:
   replicaCount: 2
   image:
