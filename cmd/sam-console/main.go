@@ -36,7 +36,7 @@ func main() {
 		ControlPlaneURL: *controlPlaneURL,
 		AdminToken:      adminToken,
 		StaticDir:       *staticDir,
-		BasePath:        *basePath,
+		BasePath:        console.NormalizeBasePath(*basePath),
 	})
 	if err != nil {
 		log.Fatalf("Failed to initialize console server: %v", err)
