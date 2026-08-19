@@ -20,7 +20,7 @@ fi
 chmod 0666 /dev/kvm
 
 # 3. Install Firecracker v1.16.1
-curl -LO https://github.com/firecracker-microvm/firecracker/releases/download/v1.16.1/firecracker-v1.16.1-x86_64.tgz
+curl --retry 5 --retry-connrefused --retry-delay 5 -LO https://github.com/firecracker-microvm/firecracker/releases/download/v1.16.1/firecracker-v1.16.1-x86_64.tgz
 tar -xzf firecracker-v1.16.1-x86_64.tgz
 mv release-v1.16.1-x86_64/firecracker-v1.16.1-x86_64 /usr/local/bin/firecracker
 chmod +x /usr/local/bin/firecracker
@@ -32,7 +32,7 @@ echo "net.ipv4.ip_forward=1" >> /etc/sysctl.d/99-ipforward.conf
 
 # 4. Install SAM Mesh binaries & MicroVM files
 # Check if custom binaries/rootfs were injected via GCP metadata (GCS URL)
-BIN_URL=$(curl -s -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/attributes/sam-binaries-url" || true)
+BIN_URL=$(curl --retry 5 --retry-connrefused --retry-delay 5 -s -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/attributes/sam-binaries-url" || true)
 
 if [ -n "$BIN_URL" ] && [ "$BIN_URL" != "null" ]; then
     echo "Found custom artifacts URL: $BIN_URL. Downloading from GCS..."
@@ -47,15 +47,15 @@ if [ -n "$BIN_URL" ] && [ "$BIN_URL" != "null" ]; then
 else
     echo "No custom binaries specified. Installing latest release from github..."
     export SAM_INSTALL_DIR=/usr/local/bin
-    curl -sL https://sam-mesh.dev/install.sh | bash
+    curl --retry 5 --retry-connrefused --retry-delay 5 -sL https://sam-mesh.dev/install.sh | bash
 fi
 
 # Download the uncompressed Linux kernel for Firecracker
 mkdir -p /opt/microvm
-curl -fsSL -o /opt/microvm/vmlinux.bin https://s3.amazonaws.com/spec.ccfc.min/img/quickstart_guide/x86_64/kernels/vmlinux.bin
+curl --retry 5 --retry-connrefused --retry-delay 5 -fsSL -o /opt/microvm/vmlinux.bin https://s3.amazonaws.com/spec.ccfc.min/img/quickstart_guide/x86_64/kernels/vmlinux.bin
 
 # Download the launch script from the repo
-curl -fsSL -o /opt/microvm/launch-microvms.sh https://raw.githubusercontent.com/google/sam/main/scripts/launch-microvms.sh || echo "Failed to download launch script"
+curl --retry 5 --retry-connrefused --retry-delay 5 -fsSL -o /opt/microvm/launch-microvms.sh https://raw.githubusercontent.com/google/sam/main/scripts/launch-microvms.sh || echo "Failed to download launch script"
 chmod +x /opt/microvm/launch-microvms.sh
 
 echo "SAM Host bootstrap finished successfully."
