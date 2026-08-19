@@ -14,6 +14,13 @@ packages:
   - acl
 
 runcmd:
+  # Check if nested virtualization is enabled
+  - |
+    if [ ! -e /dev/kvm ]; then
+        echo "ERROR: /dev/kvm not found! Nested virtualization is not enabled."
+        exit 1
+    fi
+  
   # Ensure KVM permissions allow execution
   - chmod 0666 /dev/kvm
   
@@ -28,21 +35,34 @@ runcmd:
   - sysctl -w net.ipv4.ip_forward=1
   - echo "net.ipv4.ip_forward=1" >> /etc/sysctl.d/99-ipforward.conf
 
-  # Install SAM Mesh binaries
-  # Check if custom binaries were injected via GCP metadata (GCS URL)
+  # Install SAM Mesh binaries & MicroVM files
+  # Check if custom binaries/rootfs were injected via GCP metadata (GCS URL)
   - |
     BIN_URL=$(curl -s -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/attributes/sam-binaries-url" || true)
     
     if [ -n "$BIN_URL" ] && [ "$BIN_URL" != "null" ]; then
-        echo "Found custom binaries URL: $BIN_URL. Downloading from GCS..."
-        # Use gcloud storage (pre-installed on Google OS images) to download via the attached service account
+        echo "Found custom artifacts URL: $BIN_URL. Downloading from GCS..."
+        # Download SAM binaries
         gcloud storage cp "$BIN_URL/sam-node" /usr/local/bin/
         gcloud storage cp "$BIN_URL/sam-box" /usr/local/bin/
         chmod +x /usr/local/bin/sam-*
+        
+        # Download the pre-built MicroVM rootfs
+        mkdir -p /opt/microvm
+        gcloud storage cp "$BIN_URL/rootfs.ext4" /opt/microvm/rootfs.ext4
     else
         echo "No custom binaries specified. Installing latest release from github..."
         export SAM_INSTALL_DIR=/usr/local/bin
         curl -sL https://sam-mesh.dev/install.sh | bash
     fi
+
+  # Download the uncompressed Linux kernel for Firecracker
+  - mkdir -p /opt/microvm
+  - curl -fsSL -o /opt/microvm/vmlinux.bin https://s3.amazonaws.com/spec.ccfc.min/img/quickstart_guide/x86_64/kernels/vmlinux.bin
+
+  # Download the launch script from the repo (since it's public) or we could embed it here.
+  # Let's download it from the main branch since it's self-contained.
+  - curl -fsSL -o /opt/microvm/launch-microvms.sh https://raw.githubusercontent.com/google/sam/main/scripts/launch-microvms.sh || echo "Failed to download launch script"
+  - chmod +x /opt/microvm/launch-microvms.sh
 
   - echo "SAM Host cloud-init bootstrap finished successfully."
