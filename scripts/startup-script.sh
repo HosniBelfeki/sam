@@ -1,0 +1,61 @@
+#!/bin/bash
+set -e
+
+# Redirect all output to log file
+exec > >(tee -a /var/log/startup-script.log) 2>&1
+echo "Starting SAM Host VM bootstrap..."
+
+# 1. Update and install packages
+apt-get update
+apt-get upgrade -y
+apt-get install -y curl wget git iptables iproute2 socat jq build-essential docker.io acl
+
+# 2. Check if nested virtualization is enabled
+if [ ! -e /dev/kvm ]; then
+    echo "ERROR: /dev/kvm not found! Nested virtualization is not enabled."
+    exit 1
+fi
+
+# Ensure KVM permissions allow execution
+chmod 0666 /dev/kvm
+
+# 3. Install Firecracker v1.16.1
+curl -LO https://github.com/firecracker-microvm/firecracker/releases/download/v1.16.1/firecracker-v1.16.1-x86_64.tgz
+tar -xzf firecracker-v1.16.1-x86_64.tgz
+mv release-v1.16.1-x86_64/firecracker-v1.16.1-x86_64 /usr/local/bin/firecracker
+chmod +x /usr/local/bin/firecracker
+rm -rf release-v1.16.1-x86_64 firecracker-v1.16.1-x86_64.tgz
+
+# Enable IP forwarding (just in case we need it for TAP/NAT later)
+sysctl -w net.ipv4.ip_forward=1
+echo "net.ipv4.ip_forward=1" >> /etc/sysctl.d/99-ipforward.conf
+
+# 4. Install SAM Mesh binaries & MicroVM files
+# Check if custom binaries/rootfs were injected via GCP metadata (GCS URL)
+BIN_URL=$(curl -s -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/attributes/sam-binaries-url" || true)
+
+if [ -n "$BIN_URL" ] && [ "$BIN_URL" != "null" ]; then
+    echo "Found custom artifacts URL: $BIN_URL. Downloading from GCS..."
+    # Download SAM binaries
+    gcloud storage cp "$BIN_URL/sam-node" /usr/local/bin/
+    gcloud storage cp "$BIN_URL/sam-box" /usr/local/bin/
+    chmod +x /usr/local/bin/sam-*
+    
+    # Download the pre-built MicroVM rootfs
+    mkdir -p /opt/microvm
+    gcloud storage cp "$BIN_URL/rootfs.ext4" /opt/microvm/rootfs.ext4
+else
+    echo "No custom binaries specified. Installing latest release from github..."
+    export SAM_INSTALL_DIR=/usr/local/bin
+    curl -sL https://sam-mesh.dev/install.sh | bash
+fi
+
+# Download the uncompressed Linux kernel for Firecracker
+mkdir -p /opt/microvm
+curl -fsSL -o /opt/microvm/vmlinux.bin https://s3.amazonaws.com/spec.ccfc.min/img/quickstart_guide/x86_64/kernels/vmlinux.bin
+
+# Download the launch script from the repo
+curl -fsSL -o /opt/microvm/launch-microvms.sh https://raw.githubusercontent.com/google/sam/main/scripts/launch-microvms.sh || echo "Failed to download launch script"
+chmod +x /opt/microvm/launch-microvms.sh
+
+echo "SAM Host bootstrap finished successfully."

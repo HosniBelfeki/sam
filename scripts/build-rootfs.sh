@@ -16,8 +16,7 @@ RUN curl -sSL -o /usr/local/bin/tun2proxy https://github.com/tun2proxy/tun2proxy
 COPY cmd/chaos-agent /app/chaos-agent
 RUN pip3 install --no-cache-dir -r /app/chaos-agent/requirements.txt --break-system-packages
 
-COPY scripts/microvm-init.sh /sbin/init
-RUN chmod +x /sbin/init
+COPY --chmod=755 scripts/microvm-init.sh /sbin/init
 EOF
 
 # Build the docker container
@@ -31,10 +30,13 @@ dd if=/dev/zero of=rootfs.ext4 bs=1M count=500
 mkfs.ext4 rootfs.ext4
 mkdir -p /tmp/rootfs
 
-# Use sudo to mount and untar, since we need root permissions to create files with correct ownership
-sudo mount rootfs.ext4 /tmp/rootfs
-sudo tar -xf rootfs.tar -C /tmp/rootfs
-sudo umount /tmp/rootfs
+# Use a privileged docker container to mount and populate the ext4 image without requiring sudo on the host
+docker run --rm --privileged -v $(pwd):/work alpine sh -c '
+    mkdir -p /mnt/rootfs
+    mount /work/rootfs.ext4 /mnt/rootfs
+    tar -xf /work/rootfs.tar -C /mnt/rootfs
+    umount /mnt/rootfs
+'
 
 rm rootfs.tar Dockerfile
 echo "Rootfs built successfully at rootfs.ext4"

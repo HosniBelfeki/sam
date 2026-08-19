@@ -6,6 +6,7 @@ ZONE="us-central1-a"
 PROJECT="ipv6-project-379110"
 GCS_URL=""
 COUNT=1
+MACHINE_TYPE="n2-standard-64"
 
 while [[ "$#" -gt 0 ]]; do
     case $1 in
@@ -14,6 +15,7 @@ while [[ "$#" -gt 0 ]]; do
         --project) PROJECT="$2"; shift ;;
         --local-binaries) GCS_URL="$2"; shift ;;
         --count) COUNT="$2"; shift ;;
+        --machine-type) MACHINE_TYPE="$2"; shift ;;
         *) echo "Unknown parameter passed: $1"; exit 1 ;;
     esac
     shift
@@ -41,12 +43,12 @@ if [ "$COUNT" -eq 1 ]; then
     gcloud beta compute instances create "${VM_NAME_PREFIX}-1" \
         --project="${PROJECT}" \
         --zone="${ZONE}" \
-        --machine-type=n2-standard-64 \
+        --machine-type="${MACHINE_TYPE}" \
         --enable-nested-virtualization \
         --min-cpu-platform="Intel Ice Lake" \
         --network-interface=network-tier=PREMIUM,stack-type=IPV4_ONLY,subnet=default \
         --metadata="${METADATA}" \
-        --metadata-from-file=user-data=scripts/cloud-init.yaml \
+        --metadata-from-file=startup-script=scripts/startup-script.sh \
         --no-restart-on-failure \
         --maintenance-policy=TERMINATE \
         --provisioning-model=SPOT \
@@ -68,12 +70,12 @@ else
         --count="${COUNT}" \
         --project="${PROJECT}" \
         --zone="${ZONE}" \
-        --machine-type=n2-standard-64 \
+        --machine-type="${MACHINE_TYPE}" \
         --enable-nested-virtualization \
         --min-cpu-platform="Intel Ice Lake" \
         --network-interface=network-tier=PREMIUM,stack-type=IPV4_ONLY,subnet=default \
         --metadata="${METADATA}" \
-        --metadata-from-file=user-data=scripts/cloud-init.yaml \
+        --metadata-from-file=startup-script=scripts/startup-script.sh \
         --no-restart-on-failure \
         --maintenance-policy=TERMINATE \
         --provisioning-model=SPOT \
