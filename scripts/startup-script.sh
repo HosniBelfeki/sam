@@ -5,6 +5,10 @@ set -e
 exec > >(tee -a /var/log/startup-script.log) 2>&1
 echo "Starting SAM Host VM bootstrap..."
 
+# Kill unattended-upgrades to avoid apt lock
+systemctl stop unattended-upgrades.service || true
+killall unattended-upgrades || true
+
 # 1. Update and install packages
 apt-get update
 apt-get upgrade -y
@@ -44,6 +48,8 @@ if [ -n "$BIN_URL" ] && [ "$BIN_URL" != "null" ]; then
     # Download the pre-built MicroVM rootfs
     mkdir -p /opt/microvm
     gcloud storage cp "$BIN_URL/rootfs.ext4" /opt/microvm/rootfs.ext4
+    # Download the launch script
+    gcloud storage cp "$BIN_URL/launch-microvms.sh" /opt/microvm/launch-microvms.sh
 else
     echo "No custom binaries specified. Installing latest release from github..."
     export SAM_INSTALL_DIR=/usr/local/bin
@@ -54,8 +60,7 @@ fi
 mkdir -p /opt/microvm
 curl --retry 5 --retry-connrefused --retry-delay 5 -fsSL -o /opt/microvm/vmlinux.bin https://s3.amazonaws.com/spec.ccfc.min/img/quickstart_guide/x86_64/kernels/vmlinux.bin
 
-# Download the launch script from the repo
-curl --retry 5 --retry-connrefused --retry-delay 5 -fsSL -o /opt/microvm/launch-microvms.sh https://raw.githubusercontent.com/google/sam/main/scripts/launch-microvms.sh || echo "Failed to download launch script"
-chmod +x /opt/microvm/launch-microvms.sh
+# Ensure launch script is executable (if it was downloaded via GCS)
+chmod +x /opt/microvm/launch-microvms.sh || true
 
 echo "SAM Host bootstrap finished successfully."

@@ -33,6 +33,14 @@ if [ -n "$GCS_URL" ]; then
     gcloud storage cp /tmp/sam-node "$GCS_URL/sam-node"
     gcloud storage cp /tmp/sam-box "$GCS_URL/sam-box"
     
+    echo "Uploading rootfs.ext4 and launch script to GCS..."
+    if [ ! -f "rootfs.ext4" ]; then
+        echo "WARNING: rootfs.ext4 not found in current directory! Please run build-rootfs.sh first."
+    else
+        gcloud storage cp rootfs.ext4 "$GCS_URL/rootfs.ext4"
+    fi
+    gcloud storage cp scripts/launch-microvms.sh "$GCS_URL/launch-microvms.sh"
+    
     METADATA="enable-osconfig=TRUE,sam-binaries-url=$GCS_URL"
 fi
 
