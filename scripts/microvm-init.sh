@@ -24,7 +24,7 @@ sleep 2
 
 echo "Starting Chaos Agent Loop..."
 cd /app/chaos-agent
-python3 agent.py --mcp-url http://127.0.0.1:8080/mcp --inference-url http://127.0.0.1:8080/v1 > /var/log/agent.log 2>&1
+python3 agent.py --mcp-url http://127.0.0.1:8080/mcp --inference-url http://127.0.0.1:8080/v1 > /dev/console 2>&1
 
-echo "Agent completed. Powering off."
+echo "Agent completed. Powering off." > /dev/console
 reboot -f
