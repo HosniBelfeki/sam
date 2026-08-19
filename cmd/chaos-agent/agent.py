@@ -77,15 +77,18 @@ async def main():
             agent = create_tool_calling_agent(llm, lc_tools, prompt_template)
             
             # AgentExecutor runs the ReAct/Tool loop automatically!
-            agent_executor = AgentExecutor(agent=agent, tools=lc_tools, verbose=True, max_iterations=10)
+            agent_executor = AgentExecutor(agent=agent, tools=lc_tools, verbose=True, max_iterations=500)
             
             print(f"\n--- Starting Chaos Monkey Agent Loop ---")
             print(f"Instruction: {args.prompt}\n")
             
             try:
-                result = await agent_executor.ainvoke({"input": args.prompt})
-                print("\n--- Final Agent Result ---")
-                print(result["output"])
+                # Wrap in a loop to run for a while
+                for i in range(5):
+                    print(f"\n--- Iteration {i+1} ---")
+                    result = await agent_executor.ainvoke({"input": args.prompt})
+                    print("\n--- Final Agent Result ---")
+                    print(result["output"])
             except Exception as e:
                 print(f"Agent Loop crashed (this might be a successful chaos test!): {e}")
 

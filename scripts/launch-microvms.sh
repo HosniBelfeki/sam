@@ -21,7 +21,7 @@ for i in $(seq 1 $COUNT); do
     # Start sam-box on the host, listening on a dedicated UDS for this VM
     # The sam-box acts as the gateway to the mesh.
     mkdir -p /tmp/sam-box-$VM_ID
-    sam-box run -u "$UDS_PATH" --data-dir "/tmp/sam-box-$VM_ID" > /var/log/sam-box-$VM_ID.log 2>&1 &
+    SAM_API_TOKEN="secret-token" sam-box run -u "$UDS_PATH" --data-dir "/tmp/sam-box-$VM_ID" --hub "https://bananas.sam-mesh.dev" --log-level debug > /var/log/sam-box-$VM_ID.log 2>&1 &
     
     # Start Firecracker
     firecracker --api-sock $API_SOCKET > /var/log/fc-$VM_ID.log 2>&1 &

@@ -83,3 +83,35 @@ To ensure cloud-init/startup finished properly on a newly created VM:
 ```bash
 gcloud compute ssh sam-minions-1 --command="sudo tail -f /var/log/startup-script.log"
 ```
+
+## Phase 2: Chaos Agent AI Testing
+After provisioning the microVMs, each `chaos-agent` executes a script that routes local traffic to the host's `sam-box` control plane process over a Firecracker VSOCK socket.
+
+**Agent Capability Check:**
+The `chaos-agent` is implemented using Python, LangChain, and the MCP (Model Context Protocol) SDK. Upon boot, the agent:
+1. Discovers the MCP endpoint (which is mapped to the unauthenticated `sam-box` control plane port).
+2. Connects via Server-Sent Events (SSE) and lists available tools.
+3. Automatically iterates up to 10 times attempting to pass adversarial and chaotic inputs to the MCP tools to validate mesh resilience.
+4. Completes its LangChain execution loop and triggers an ACPI poweroff of the Firecracker MicroVM.
+
+**Current Testnet Scope:**
+During this experiment, because the sidecar (`sam-box`) was booted without an explicit node identity (no `--hub` or `SAM_API_TOKEN`), it ran in "unauthenticated enrollment mode", meaning the chaos-agent only tested the enrollment API surface.
+If a long-running load test is desired on the real Sovereign Agent Mesh network, the `max_iterations` constraint should be removed in the agent code and the host provisioned with an active `sam-mesh` token.
+
+## Running the Endurance Test
+
+To perform a continuous 10-minute load test against the real mesh network, SSH into the test machine and launch multiple concurrent MicroVMs. The agents will continuously attack the network for 500 iterations each.
+
+```bash
+gcloud compute ssh sam-test-2-1 --zone us-central1-c
+sudo /opt/microvm/launch-microvms.sh 10
+```
+
+You can monitor the live execution and adversarial outputs directly from the Firecracker console of the first VM:
+```bash
+sudo tail -f /var/log/fc-1.log
+```
+Or watch the sidecar gateway process:
+```bash
+sudo tail -f /var/log/sam-box-1.log
+```
