@@ -11,10 +11,6 @@ data:
       checks: []
       rules: []
     services: []
-  secrets.yaml: |
-    example.com:
-      kind: Bearer
-      value: real-upstream-secret-123
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -22,6 +18,12 @@ metadata:
   name: sam-box-sa
   namespace: sam-canary-${ENV_NAME}
 ---
+# Canary for the sandbox datapath: an agent holding no credential reaches an
+# allowlisted destination through the boundary, and nothing else.
+#
+# The node enrols and owns the mesh identity; sam-box consumes it over the API
+# socket and serves the sandbox; the agent speaks plain SOCKS5. All that is
+# shared between them is the socket, which is the point of the arrangement.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -38,39 +40,25 @@ spec:
         app: box-canary-${ENV_NAME}
     spec:
       serviceAccountName: sam-box-sa
-      initContainers:
-      - name: init-nano-init
-        image: ghcr.io/google/sam-nano-init:${IMAGE_TAG}
-        command: ["/nano-init", "copy", "/shared-bin/nano-init"]
-        volumeMounts:
-        - name: shared-bin
-          mountPath: /shared-bin
       containers:
-      - name: agent
-        image: alpine/curl:8.12.1
-        command:
-          - "/shared-bin/nano-init"
-          - "run"
-          - "/var/run/sam/sam-box.sock"
-          - "sh"
-          - "-c"
-          - "while true; do curl -v -H 'Authorization: Bearer dummy-token' http://example.com/test; sleep 10; done"
-        volumeMounts:
-        - name: shared-bin
-          mountPath: /shared-bin
-        - name: sam-uds
-          mountPath: /var/run/sam
-      - name: sam-box
-        image: ghcr.io/google/sam-box:${IMAGE_TAG}
+      - name: sam-node
+        image: ghcr.io/google/sam-node:${IMAGE_TAG}
         args:
           - "run"
-          - "--uds-path=/var/run/sam/sam-box.sock"
           - "--config=/etc/sam/sam-node.yaml"
-          - "--secrets-file=/etc/sam/secrets.yaml"
           - "--control-plane=http://sam-control-plane-${ENV_NAME}.${NAMESPACE}.svc.cluster.local:8080"
           - "--jwt-path=/var/run/secrets/tokens/sam-token"
-          - "--allow-loopback"
-          - "--log-level=debug"
+          # Socket only: with no TCP listener there is no API token to leak, and
+          # the socket's permissions are the credential.
+          - "--bind-addr="
+          - "--socket-path=/var/run/sam/node.sock"
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
         volumeMounts:
         - name: config-volume
           mountPath: /etc/sam
@@ -79,9 +67,59 @@ spec:
           readOnly: true
         - name: sam-uds
           mountPath: /var/run/sam
+      - name: sam-box
+        image: ghcr.io/google/sam-box:${IMAGE_TAG}
+        args:
+          - "run"
+          - "--socket=/var/run/sam/agent.sock"
+          - "--sidecar-socket=/var/run/sam/node.sock"
+          - "--egress-allow=example.com"
+          - "--log-level=debug"
+        resources:
+          requests:
+            cpu: 20m
+            memory: 32Mi
+          limits:
+            cpu: 100m
+            memory: 128Mi
+        volumeMounts:
+        - name: sam-uds
+          mountPath: /var/run/sam
+      # Stands in for the tun2socks a real sandbox runs: the boundary is reached
+      # over a socket, and an ordinary client needs a TCP address.
+      - name: socks-bridge
+        image: alpine/socat:1.8.0.0
+        args: ["TCP-LISTEN:1080,fork,reuseaddr", "UNIX-CONNECT:/var/run/sam/agent.sock"]
+        resources:
+          requests:
+            cpu: 10m
+            memory: 16Mi
+          limits:
+            cpu: 50m
+            memory: 64Mi
+        volumeMounts:
+        - name: sam-uds
+          mountPath: /var/run/sam
+      - name: agent
+        image: alpine/curl:8.12.1
+        command:
+          - "sh"
+          - "-c"
+          - |
+            while true; do
+              echo "allowlisted destination (expect 200): $(curl -s -o /dev/null -w '%{http_code}' --socks5-hostname 127.0.0.1:1080 http://example.com/)"
+              echo "the node's own API (expect 403): $(curl -s -o /dev/null -w '%{http_code}' --socks5-hostname 127.0.0.1:1080 http://mesh.sam.alt/sam/service/register)"
+              curl -s -o /dev/null --socks5-hostname 127.0.0.1:1080 http://blocked.example/ && echo "unlisted destination was NOT refused" || echo "unlisted destination refused (expected)"
+              sleep 30
+            done
+        resources:
+          requests:
+            cpu: 10m
+            memory: 16Mi
+          limits:
+            cpu: 50m
+            memory: 64Mi
       volumes:
-      - name: shared-bin
-        emptyDir: {}
       - name: sam-uds
         emptyDir: {}
       - name: config-volume
