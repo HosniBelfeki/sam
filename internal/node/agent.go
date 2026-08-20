@@ -15,6 +15,7 @@
 package node
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/google/sam/api"
@@ -24,23 +25,23 @@ import (
 // sandbox a mesh identity is the cost this design exists to avoid. So the node
 // it runs behind speaks for it, naming the agent alongside its own token.
 //
-// What this covers: attribution and policy on the HTTP datapath. A peer can
+// What this covers: attribution and policy on both datapaths. A peer can
 // authorize and audit "agent reviewer-7 called me", not merely "some node did",
 // and it can do so with the existing vocabulary because the claim is injected
-// as an ordinary agent() fact.
+// as an ordinary agent() fact. HTTP requests carry it in api.HeaderSamAgent;
+// libp2p streams carry it in the AuthFrame, bound to the MCP session rather
+// than the request, since the SDK gives a tool handler the session's context.
 //
 // What it does not cover, and cannot:
 //
 //   - Proof. The claim is the calling node's word. A node that lies can name
 //     any agent, so a mesh that cares must also constrain which peers may speak
 //     for which agent namespaces. This is not a weakness of carrying the claim
-//     in a header: an appended Biscuit block would be exactly as forgeable by
-//     the same party, and is invisible to the authorizer besides (see
+//     beside the token: an appended Biscuit block would be exactly as forgeable
+//     by the same party, and is invisible to the authorizer besides (see
 //     internal/identity's TestAttenuationBlockFactsAreInvisibleToTheAuthorizer).
 //     Only a block signed by the agent's own key would be proof, which needs
 //     third-party blocks that biscuit-go does not implement.
-//   - The stream datapath. MCP tool calls authenticate over a libp2p stream
-//     with an AuthFrame rather than HTTP headers, and carry no agent yet.
 //   - Anything an agent does that never leaves its node.
 //
 // One consequence worth knowing before writing such a policy: a node's own
@@ -77,5 +78,28 @@ func agentClaim(agentID string) string {
 		logger.Warnf("[Auth] Ignoring malformed agent claim %q: %v", agentID, err)
 		return ""
 	}
+	return agentID
+}
+
+type agentContextKey struct{}
+
+// contextWithAgent carries the agent an MCP session belongs to down to the code
+// that opens streams on its behalf.
+//
+// The MCP SDK hands a tool handler the session's context, not the HTTP
+// request's, so the agent is bound once when the session's server is built
+// (NewMCPHandler) rather than read per request. That matches how sandboxes
+// work: one gateway serves one agent, so one session belongs to one agent for
+// its whole life.
+func contextWithAgent(ctx context.Context, agentID string) context.Context {
+	if agentID == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, agentContextKey{}, agentID)
+}
+
+// agentFromContext returns the agent a request is being made for, if any.
+func agentFromContext(ctx context.Context) string {
+	agentID, _ := ctx.Value(agentContextKey{}).(string)
 	return agentID
 }

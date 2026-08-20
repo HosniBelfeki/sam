@@ -133,6 +133,7 @@ func (n *SamNode) WithBiscuitAuth(next func(network.Stream, RequestContext)) net
 			User:     "", // Not used in Authorize
 			Protocol: string(ts.Protocol()),
 			Target:   authFrame.TargetService,
+			Agent:    agentClaim(authFrame.GetAgent()),
 		}
 
 		writer := msgio.NewVarintWriter(ts)

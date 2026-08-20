@@ -189,6 +189,11 @@ type AuthFrame struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Biscuit       []byte                 `protobuf:"bytes,1,opt,name=biscuit,proto3" json:"biscuit,omitempty"`
 	TargetService string                 `protobuf:"bytes,2,opt,name=target_service,json=targetService,proto3" json:"target_service,omitempty"` // Optional: specific service requested
+	// The agent this request is made for, as a canonical agent identifier (see
+	// api/agent.go). It is the calling node's claim, carried beside the token
+	// because Biscuit hides an appended block's facts from the authorizer; the
+	// HTTP datapath carries the same claim in HeaderSamAgent.
+	Agent         string `protobuf:"bytes,3,opt,name=agent,proto3" json:"agent,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -233,6 +238,13 @@ func (x *AuthFrame) GetBiscuit() []byte {
 func (x *AuthFrame) GetTargetService() string {
 	if x != nil {
 		return x.TargetService
+	}
+	return ""
+}
+
+func (x *AuthFrame) GetAgent() string {
+	if x != nil {
+		return x.Agent
 	}
 	return ""
 }
@@ -2674,10 +2686,11 @@ var File_api_sam_proto protoreflect.FileDescriptor
 
 const file_api_sam_proto_rawDesc = "" +
 	"\n" +
-	"\rapi/sam.proto\x12\x06sam.v1\"L\n" +
+	"\rapi/sam.proto\x12\x06sam.v1\"b\n" +
 	"\tAuthFrame\x12\x18\n" +
 	"\abiscuit\x18\x01 \x01(\fR\abiscuit\x12%\n" +
-	"\x0etarget_service\x18\x02 \x01(\tR\rtargetService\"X\n" +
+	"\x0etarget_service\x18\x02 \x01(\tR\rtargetService\x12\x14\n" +
+	"\x05agent\x18\x03 \x01(\tR\x05agent\"X\n" +
 	"\fAuthResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\x12\x18\n" +

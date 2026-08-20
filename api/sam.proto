@@ -21,6 +21,12 @@ option go_package = "github.com/google/sam/api";
 message AuthFrame {
   bytes biscuit = 1;
   string target_service = 2; // Optional: specific service requested
+
+  // The agent this request is made for, as a canonical agent identifier (see
+  // api/agent.go). It is the calling node's claim, carried beside the token
+  // because Biscuit hides an appended block's facts from the authorizer; the
+  // HTTP datapath carries the same claim in HeaderSamAgent.
+  string agent = 3;
 }
 
 message AuthResponse {

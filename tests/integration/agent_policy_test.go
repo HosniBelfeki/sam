@@ -15,13 +15,17 @@
 package integration_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/google/sam/api"
 )
@@ -144,6 +148,61 @@ attenuation:
 			}
 		})
 	}
+
+	// The same policy, over the stream datapath. Tool calls authenticate with an
+	// AuthFrame rather than HTTP headers, so this is a genuinely separate path
+	// and used to be unattributed while inference was not.
+	t.Run("tool calls carry the agent too", func(t *testing.T) {
+		tools := httptest.NewServer(newBoundaryMCPHandler(t))
+		defer tools.Close()
+		registerService(t, apiAddrA, apiToken, "calc", tools.URL)
+
+		peerA := extractPeerID(addrA)
+
+		for i, tc := range []struct {
+			name      string
+			agentID   string
+			wantAllow bool
+		}{
+			{name: "an agent the provider accepts", agentID: "reviewer-9.prod.acme.example", wantAllow: true},
+			{name: "an agent it does not", agentID: "auditor-2.staging.acme.example"},
+			{name: "an unidentified sandbox"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				agentSocket := filepath.Join(sockDir, "tool"+string(rune('a'+i))+".sock")
+				startBoundaryForAgent(t, agentSocket, nodeSocket, tc.agentID)
+
+				ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+				defer cancel()
+
+				session := connectMCPThroughBoundary(t, ctx, boundaryClient(t, agentSocket))
+				defer func() { _ = session.Close() }()
+
+				res, err := session.CallTool(ctx, &mcp.CallToolParams{
+					Name: "call_remote_tool",
+					Arguments: map[string]any{
+						"peer_id":   peerA,
+						"tool_name": "mcp://calc/add",
+						"arguments": map[string]any{},
+					},
+				})
+				if err != nil {
+					t.Fatalf("call_remote_tool: %v", err)
+				}
+
+				var got string
+				for _, content := range res.Content {
+					if text, ok := content.(*mcp.TextContent); ok {
+						got += text.Text
+					}
+				}
+				reached := strings.Contains(got, "fake-result:add")
+				if reached != tc.wantAllow {
+					t.Errorf("tool reached = %v, want %v; result was %q", reached, tc.wantAllow, got)
+				}
+			})
+		}
+	})
 }
 
 // waitForDiscoverableService polls until a peer offering the service is visible,

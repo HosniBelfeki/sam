@@ -531,12 +531,20 @@ and non-repudiation arrives without a wire break.
 
 ### 10.2.1 What the agent claim covers, and what it does not
 
-**Covers.** Attribution and policy on the HTTP datapath. A peer can authorize
+**Covers.** Attribution and policy on **both** datapaths. A peer can authorize
 and audit "agent `reviewer-7` called me" rather than only "some node did", using
 the existing vocabulary, because the claim is injected as an ordinary `agent()`
 fact. `TestAgentPolicyCUJ` shows two agents behind two gateways on one node
-being told apart by the provider's policy, including a lookalike authority being
-refused and an unidentified sandbox being refused.
+being told apart by the provider's policy — over HTTP for inference and over the
+libp2p stream for tool calls — including a lookalike authority being refused and
+an unidentified sandbox being refused.
+
+The two paths carry it differently because they authenticate differently: HTTP
+requests carry `X-Sam-Agent`, and streams carry `AuthFrame.agent`. On the stream
+path the claim is bound to the MCP *session* rather than the request, since the
+SDK hands a tool handler the session's context and not the request's. That fits
+how sandboxes work anyway: one gateway serves one agent, so a session belongs to
+one agent for its whole life.
 
 **Does not cover.**
 
@@ -544,9 +552,6 @@ refused and an unidentified sandbox being refused.
   agent, so a mesh that cares must also constrain which peers may speak for
   which agent namespaces. Carrying it in a header rather than a block costs
   nothing here: an appended block is exactly as forgeable by the same party.
-* **The stream datapath.** MCP tool calls authenticate over a libp2p stream with
-  an `AuthFrame`, not HTTP headers, and carry no agent yet. Inference does;
-  tools do not.
 * **Anything that never leaves the node**, which the boundary already gates
   locally.
 
