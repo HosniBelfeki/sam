@@ -624,7 +624,18 @@ the rules in §10.8. **The scheduler needs no mesh enrollment and no mesh
 credential of its own.** It keeps doing exactly what it already does for every
 workload: project an identity document. This is the OIDC relationship, not a
 merger of the two domains.
+The check that carries the weight is not the signature but the subject: the
+credential must attest the `external_id` the bundle declares. Every sandbox on a
+platform holds a valid credential, so verifying the signature alone would let
+any of them claim to be any other. And the issuer is operator configuration
+(`--credential-issuer`), never a bundle field — the bundle travels with the
+agent, so an issuer named there could be one an attacker controls, and their
+self-signed credential would verify perfectly.
 
+Verification is the default: a bundle without an issuer to check it against is
+refused. Deployments with no platform issuer can still run, but by saying so
+(`--insecure-unverified-bundle`), because a name the whole mesh authorizes
+against should not become trustworthy through a field being left unset.
 `sam-box` then binds that identity to the channel, so nothing has to be asserted
 in-band afterwards:
 

@@ -52,8 +52,14 @@ type AgentIdentity struct {
 
 	// ExternalID is the platform's own identifier, kept verbatim: the
 	// translation into ID is not always reversible, and an auditor needs the
-	// value the platform actually issued.
+	// value the platform actually issued. When credentials are verified, it is
+	// also the subject the credential has to attest.
 	ExternalID string `yaml:"external_id"`
+
+	// Credential is the path to the credential the platform issued this
+	// workload, such as a projected Kubernetes service-account token. It backs
+	// the claim the rest of this file makes; see credential.go.
+	Credential string `yaml:"credential"`
 }
 
 // BundleEgress is the agent's allowance outside the mesh. Absent means none.

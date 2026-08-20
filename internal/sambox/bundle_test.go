@@ -119,9 +119,9 @@ func TestLoadAgentBundleRejects(t *testing.T) {
 			wantErr: "egres",
 		},
 		{
-			name:    "a field from a future version",
-			content: "version: v1\nagent:\n  id: reviewer.acme.example\n  credential: /var/run/secrets/token\n",
-			wantErr: "credential",
+			name:    "a plausible misspelling of a real field",
+			content: "version: v1\nagent:\n  id: reviewer.acme.example\n  credentials: /var/run/secrets/token\n",
+			wantErr: "credentials",
 		},
 		{
 			name:    "an ambiguous egress entry",

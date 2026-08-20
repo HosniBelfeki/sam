@@ -44,6 +44,9 @@ func main() {
 		sidecarSocket string
 		bundlePath    string
 		egressAllow   []string
+		issuer        string
+		audience      string
+		insecure      bool
 		logLevel      string
 	)
 
@@ -67,6 +70,9 @@ func main() {
 
 			agentID, egress, err := resolveAgent(bundlePath, egressAllow, cmd.Flags().Changed("egress-allow"))
 			if err != nil {
+				return err
+			}
+			if err := verifyBundleCredential(cmd.Context(), bundlePath, issuer, audience, insecure); err != nil {
 				return err
 			}
 
@@ -107,6 +113,9 @@ func main() {
 	runCmd.Flags().StringVar(&sidecarSocket, "sidecar-socket", "", "Path to the local sam-node API Unix socket (required)")
 	runCmd.Flags().StringVar(&bundlePath, "bundle", "", "Path to the agent bundle declaring the agent's identity and its egress allowance")
 	runCmd.Flags().StringSliceVar(&egressAllow, "egress-allow", nil, "Destinations an unidentified sandbox may reach, e.g. api.github.com or *.pypi.org; use --bundle instead where an agent has an identity")
+	runCmd.Flags().StringVar(&issuer, "credential-issuer", "", "Issuer whose credentials attest an agent's identity, e.g. a cluster's service-account issuer; required with --bundle")
+	runCmd.Flags().StringVar(&audience, "credential-audience", "", "Audience an agent's credential must be scoped to; required with --bundle")
+	runCmd.Flags().BoolVar(&insecure, "insecure-unverified-bundle", false, "Trust the bundle's declared identity without a credential to back it, letting whoever can write the file decide which agent this sandbox is")
 	runCmd.Flags().StringVar(&logLevel, "log-level", "info", "Log level (debug, info, warn, error)")
 	for _, required := range []string{"socket", "sidecar-socket"} {
 		if err := runCmd.MarkFlagRequired(required); err != nil {
@@ -142,4 +151,51 @@ func resolveAgent(bundlePath string, egressAllow []string, egressSet bool) (stri
 		return "", nil, err
 	}
 	return bundle.Agent.ID, bundle.EgressPolicy(), nil
+}
+
+// verifyBundleCredential checks that the bundle is backed by a credential the
+// platform issued to this workload.
+//
+// A bundle that is not verified is self-asserting: whoever can write the file
+// picks the agent, and the identity the whole mesh reasons about rests on a
+// YAML field. That is a real choice an operator may need to make, so it is
+// available -- but it has to be made explicitly, in a flag that is visible in a
+// process listing and a pod spec, rather than by leaving something unset.
+//
+// The issuer is an operator flag and never a bundle field, because the bundle
+// travels with the agent: an issuer named there could be one the attacker
+// controls, and their self-signed credential would verify perfectly.
+func verifyBundleCredential(ctx context.Context, bundlePath, issuer, audience string, insecure bool) error {
+	if bundlePath == "" {
+		// No bundle is not a weak claim, it is no claim: the sandbox is
+		// unidentified and mesh policy sees only the node it came through.
+		return nil
+	}
+
+	if insecure {
+		if issuer != "" || audience != "" {
+			return fmt.Errorf("--insecure-unverified-bundle contradicts --credential-issuer; pick one")
+		}
+		logger.Warn("--insecure-unverified-bundle: this bundle is taken at its word, so whoever can write it decides which agent this sandbox is")
+		return nil
+	}
+
+	if issuer == "" || audience == "" {
+		return fmt.Errorf("--bundle needs --credential-issuer and --credential-audience so the agent it names can be checked" +
+			" against the credential the platform issued; pass --insecure-unverified-bundle to run without that check")
+	}
+
+	verifier, err := sambox.NewWorkloadVerifier(ctx, issuer, audience)
+	if err != nil {
+		return err
+	}
+	bundle, err := sambox.LoadAgentBundle(bundlePath)
+	if err != nil {
+		return err
+	}
+	if err := verifier.Verify(ctx, bundle); err != nil {
+		return err
+	}
+	logger.Infof("Credential verified: %s is %s", bundle.Agent.ID, bundle.Agent.ExternalID)
+	return nil
 }

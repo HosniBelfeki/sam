@@ -55,11 +55,24 @@ sam-box run \
 |---|---|
 | `--socket` | The sandbox-facing socket. Created 0600: its permissions are the credential. |
 | `--sidecar-socket` | The local `sam-node`'s API socket (`sam-node run --socket-path`). |
+| `--bundle` | The agent's identity and egress allowance, declared by the platform. |
 | `--egress-allow` | A destination outside the mesh the agent may reach. Repeatable. **Empty means nothing is reachable.** |
+| `--credential-issuer`, `--credential-audience` | The issuer whose credentials attest an agent's identity. **Required with `--bundle`.** |
+| `--insecure-unverified-bundle` | Trust the bundle without a credential behind it. An explicit choice, not a default. |
 
 Egress entries are matched on the name the agent asked for, never on a resolved
 address. A wildcard covers subdomains only: `*.pypi.org` matches
 `files.pypi.org` but not `pypi.org`, and never `evilpypi.org`.
+
+A bundle names an agent, and that name is what the whole mesh then authorizes
+against — so by default it has to be backed by the credential the platform
+issued to that workload. Running without that check is available, because some
+deployments have no platform issuer, but it takes a flag that is visible in a
+process listing and a pod spec rather than something quietly left unset.
+
+The issuer is a flag rather than a bundle field on purpose: the bundle travels
+with the agent, so an issuer named there could be one an attacker controls, and
+their self-signed credential would verify perfectly.
 
 ---
 
@@ -112,5 +125,6 @@ Deliberately absent, and tracked in the architecture document:
 * **Secret injection** for external destinations. The ephemeral CA and the
   injection machinery exist, but are not wired into this datapath.
 * **Ingress**: an agent serving a mesh service of its own.
-* **Per-agent identity** on the wire. Today flows carry the node's identity;
-  the agent's own identity is the next piece of work.
+* **Credential rotation.** A bundle's credential is verified when the gateway
+  starts. Platforms rotate projected tokens, and re-verifying on rotation is
+  the connector interface's `Refresh` operation, which is not built yet.
