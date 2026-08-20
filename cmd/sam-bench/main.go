@@ -78,6 +78,11 @@ func main() {
 	rootCmd := &cobra.Command{
 		Use:   "sam-bench",
 		Short: "Measure the mesh from where an agent stands",
+	}
+
+	runCmd := &cobra.Command{
+		Use:   "run",
+		Short: "Issue a fixed workload and record what it cost",
 		Long: "Issues a fixed workload through a sandbox boundary and records what it cost,\n" +
 			"alongside what the processes involved reported about themselves.",
 		SilenceUsage: true,
@@ -123,7 +128,7 @@ func main() {
 		},
 	}
 
-	flags := rootCmd.Flags()
+	flags := runCmd.Flags()
 	flags.StringVar(&socket, "socket", "", "Sandbox boundary SOCKS5 socket to measure through; omit to measure the same workload without a boundary, which is the baseline")
 	flags.StringVar(&target, "target", "", "URL to request, e.g. http://mesh.sam.alt/v1/models (required)")
 	flags.StringVar(&method, "method", "GET", "HTTP method")
@@ -137,9 +142,10 @@ func main() {
 	flags.StringArrayVar(&scrape, "scrape", nil, "Metrics endpoint to record before and after the run, repeatable")
 	flags.StringArrayVar(&labels, "label", nil, "Condition to record with the observation as name=value, repeatable")
 	flags.StringVar(&out, "out", "", "File to write the observation to; default stdout")
-	if err := rootCmd.MarkFlagRequired("target"); err != nil {
+	if err := runCmd.MarkFlagRequired("target"); err != nil {
 		panic(err)
 	}
+	rootCmd.AddCommand(runCmd, newReportCmd())
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
