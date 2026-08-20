@@ -774,11 +774,13 @@ Two things to settle **with** the Substrate side rather than assume:
 
 ### 12.5 Still to settle
 
-* **Wire format** for `Attach`/`Detach`/`Refresh`/`Status`: proto in
-  `api/sam.proto` (AGENTS.md's rule) versus a YAML bundle plus a small local
-  HTTP endpoint. Substrate is Go, so proto costs its connector nothing;
-  Python/TypeScript connectors would prefer HTTP. Leaning proto for the
-  operations, YAML for the bundle.
+* **Wire format — decided.** Proto in `api/sam.proto` for the operations
+  (`AgentAttach`/`AgentDetach`/`AgentRefresh`/`AgentStatus` request and response
+  messages), YAML for the bundle. Substrate is Go, so proto costs its connector
+  nothing; the bundle stays YAML because its canonical copy is a file in the
+  agent's state directory, where it has to be readable and diffable by whoever
+  operates the platform. `AgentBundle` in the proto is the transport mirror of
+  that file, not a second source of truth.
 * **Bulk pre-creation is deliberately not in v1** — premature until the semantics
   are proven. What v1 owes it is *room*: `Attach` takes a bundle and is
   idempotent per agent id, so `AttachBatch` is a purely additive operation
