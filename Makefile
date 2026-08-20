@@ -35,6 +35,7 @@ build: $(OUT_DIR)/libinterceptor.so
 	go build -v -o "$(OUT_DIR)/mcp-client" ./cmd/mcp-client
 	go build -v -o "$(OUT_DIR)/nano-init" ./cmd/nano-init
 	go build -v -o "$(OUT_DIR)/sam-box" ./cmd/sam-box
+	go build -v -o "$(OUT_DIR)/sam-bench" ./cmd/sam-bench
 	go build -v -o "$(OUT_DIR)/sam-console" ./cmd/sam-console
 
 
