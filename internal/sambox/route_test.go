@@ -44,8 +44,8 @@ func TestRouteClassification(t *testing.T) {
 		wantURI    string
 		wantDenied bool
 	}{
-		{"local sidecar", "node.sam.alt", RouteLocalNode, "", false},
-		{"local sidecar is case-insensitive", "NODE.SAM.ALT", RouteLocalNode, "", false},
+		{"mesh entrypoint", "mesh.sam.alt", RouteMeshEntrypoint, "", false},
+		{"mesh entrypoint is case-insensitive", "MESH.SAM.ALT", RouteMeshEntrypoint, "", false},
 		{"mesh inference service", "openrouter.inference.sam.alt", RouteMeshService, "inference://openrouter", false},
 		{"mesh mcp service", "code-reviewer.mcp.sam.alt", RouteMeshService, "mcp://code-reviewer", false},
 		{"allowlisted host", "api.github.com", RouteExternal, "", false},

@@ -100,7 +100,7 @@ One socket, one protocol, one policy point. SOCKS5 is the waist.
 │  sam-box  (one per sandbox, NO libp2p host, NO enrollment)        │
 │    = SOCKS5 server = THE policy enforcement point                 │
 │        │                                                          │
-│        ├── node.sam.alt          ── byte pipe ───────────┐        │
+│        ├── mesh.sam.alt          ── /v1 + /mcp only ─────┐        │
 │        ├── <svc>.<type>.sam.alt  ── HTTP: discover, then ┤        │
 │        │                            /sam/<peer>/<type>/… │        │
 │        └── anything else ── deny-by-default domain       │        │
@@ -175,12 +175,12 @@ Sandbox names are a **projection of it**, not a second namespace:
 ```text
 inference://openrouter   <->   openrouter.inference.sam.alt
 mcp://code-reviewer      <->   code-reviewer.mcp.sam.alt
-(local sidecar)          <->   node.sam.alt
+(the mesh, curated)      <->   mesh.sam.alt
 ```
 
 The mapping is declared once, in [`api/names.go`](https://github.com/google/sam/blob/main/api/names.go)
-(`MeshZone`, `LocalNodeHost`, `MeshHost`, `ParseMeshHost`), so the gateway and
-the node cannot drift. The rule that keeps it honest: **never introduce a
+(`MeshZone`, `MeshEntrypointHost`, `MeshHost`, `ParseMeshHost`), so the gateway
+and the node cannot drift. The rule that keeps it honest: **never introduce a
 routing decision expressible in one form but not the other.**
 
 `.alt` is the pseudo-TLD reserved by RFC 9476 for namespaces that are
@@ -275,15 +275,14 @@ SOCKS5 server; `internal/node` keeps everything mesh.
 ### 5.1 What the harness sees
 
 ```bash
-OPENAI_BASE_URL=http://node.sam.alt/v1   # inference, provider chosen by policy
-MCP_URL=http://node.sam.alt/mcp          # tools: local catalog + remote services
+OPENAI_BASE_URL=http://mesh.sam.alt/v1   # inference, provider chosen by policy
+MCP_URL=http://mesh.sam.alt/mcp          # tools: local catalog + remote services
 ```
 
 No `HTTP_PROXY`. No CA bundle, unless a domain is explicitly configured for
-secret injection. No mesh concepts, and no sidecar token: reaching the sidecar
-socket is itself the credential (§5.2). `cmd/chaos-agent` already takes
-`--mcp-url` and `--inference-url`, so it needs no change beyond the values it is
-given.
+secret injection. No mesh concepts, and no token of any kind.
+`cmd/chaos-agent` already takes `--mcp-url` and `--inference-url`, so it needs
+no change beyond the values it is given.
 
 A harness that wants one specific service instead of policy-chosen routing uses
 its mesh name directly: `http://code-reviewer.mcp.sam.alt/`.
@@ -293,19 +292,25 @@ its mesh name directly: `http://code-reviewer.mcp.sam.alt/`.
 Applied to the SOCKS5 request's `(host, port)` — `host` is the name
 `tun2socks` preserved, never an IP — in order:
 
-1. **`node.sam.alt`** (`api.IsLocalNodeHost`) → **byte pipe** to the local
-   `sam-node` sidecar Unix socket. `sam-box` parses nothing, so `/v1/*`, `/mcp`
-   and `/sam/*` behave exactly as they do over TCP. No credential is injected:
-   `withAuth` treats arriving on the socket as proof of authorization, on the
-   grounds that it is the same bar as reading the token file.
+1. **`mesh.sam.alt`** (`api.IsMeshEntrypointHost`) → the gateway's own
+   agent-facing surface, served in process: `/v1/models`,
+   `/v1/chat/completions`, `/v1/completions`, and `/mcp`. Nothing else. Any
+   other path is refused with 403 and never reaches the node.
 
-   That has a consequence worth stating plainly. While the pipe is verbatim, an
-   agent can reach *every* sidecar endpoint — including `/sam/service/register`
-   with a `target_url` of its choosing, which is exactly what §11.1 requires
-   `sam-box` to rewrite. Closing that gap means terminating HTTP on this path
-   too, which is also what attaching the agent's identity to each flow (§10)
-   will require. Until both land, this path assumes the sandbox is trusted not
-   to register services on the node's behalf.
+   **The agent never touches the node.** A `sam-node` sidecar is a local,
+   operator-facing API: it can register services under the node's identity, and
+   its `/sam/<peer>/<type>/<name>` proxy will carry a request to any peer and
+   service the caller names. Worse, arriving on its Unix socket *is* the
+   credential — `withAuth` treats reaching the socket as proof of authorization,
+   on the grounds that it is the same bar as reading the token file. So piping
+   an agent's bytes to that socket would hand every sandbox the node's full
+   local authority. `sam-box` is the node's consumer; the agent is the mesh's
+   consumer, through `sam-box`, and the two are different surfaces.
+
+   Discovery is deliberately absent from the list even though agents need it:
+   MCP already exposes `find_remote_tools` and `discover_remote_services` as
+   tools, so opening `/sam/service/discover` as well would widen the surface
+   without adding a capability.
 2. **`<service>.<type>.sam.alt`** (`api.ParseMeshHost`) → `sam-box` terminates
    HTTP and rewrites onto the sidecar's existing surface:
    `GET /sam/service/discover?type=<type>&name=<service>` picks a provider, then
@@ -351,8 +356,9 @@ exactly once, at the top.
 
 **Unit (`internal/…`, `api/`).** SOCKS5 request/reply codec; the name↔URI
 projection (`api/names_test.go`, already landed); dispatch classification
-(`node.sam.alt` / mesh name / public / denied); wildcard matching in the
-allowlist; SNI-vs-authorized-name mismatch. Pure functions, microseconds.
+(`mesh.sam.alt` / mesh name / public / denied); the agent-facing path allowlist;
+wildcard matching in the egress allowlist; SNI-vs-authorized-name mismatch.
+Pure functions, microseconds.
 
 **Integration (`tests/integration/`, budget 10s each).** The whole datapath, no
 containers:
@@ -365,13 +371,12 @@ containers:
   SOCKS5 on a second socket in `t.TempDir()`;
 * the test drives a real SOCKS5 client (`golang.org/x/net/proxy`, already a
   direct dependency) over that socket and asserts:
-  1. `node.sam.alt:80` → `/v1/chat/completions` reaches A's fake LLM across the mesh,
-  2. `node.sam.alt:80` → `/mcp` `call_remote_tool` reaches B's fake MCP,
+  1. `mesh.sam.alt:80` → `/v1/chat/completions` reaches A's fake LLM across the mesh,
+  2. `mesh.sam.alt:80` → `/mcp` `call_remote_tool` reaches B's fake MCP,
   3. `<svc>.mcp.sam.alt:80` resolves through discovery to B and reaches it,
   4. an allowlisted public name reaches a local `httptest` server,
   5. a non-allowlisted name is refused with SOCKS5 `0x02`,
-  6. the sandbox's sidecar token never appears in what A, B or the public
-     server receive.
+  6. no path outside `/v1/*` and `/mcp` reaches node C at all.
 
 **E2E (`tests/e2e/*.bats`).** Two CUJs, no more:
 
@@ -646,16 +651,60 @@ make this smaller than it looks.
 API already exists**: `RegisterServiceRequest{service{type,name,description},
 target_url}` on `/sam/service/register`.
 
-### 11.1 Declaring
+### 11.1 Declaring: autoregistration through the gateway
 
-Either the platform declares it at admission (§12), or the agent registers at
-runtime by POSTing to `http://node.sam.alt/sam/service/register` — which already
-works over the egress path, with no new API.
+The agent does **not** call the node. `/sam/service/register` is part of the
+operator surface an agent never reaches (§5.2), for two independent reasons: the
+request carries a `target_url`, so an agent could point the mesh at anything and
+turn its node into an open relay; and it carries a service *name*, so an agent
+could advertise itself as `code-reviewer` under the node's identity and take
+over somebody else's traffic.
 
-`sam-box` **rewrites `target_url`** to its own per-agent ingress endpoint before
-forwarding the registration. A sandboxed agent must never be able to point the
-mesh at a URL of its choosing: that would turn its node into an open relay and
-hand every agent an SSRF primitive against the host's network.
+Both are properties of *that* API, not of the capability. So the gateway offers
+the capability without the API:
+
+```http
+POST http://mesh.sam.alt/ingress
+{"type": "mcp", "name": "code-reviewer", "port": 8080}
+```
+
+`sam-box` serves this itself — it is never forwarded — and then registers with
+the node on the agent's behalf. Two things make that safe:
+
+* **`target_url` is not the agent's to give.** `sam-box` always substitutes its
+  own per-agent ingress endpoint, so the field an agent could abuse is one it
+  never supplies.
+* **The name must be one the agent already had.** Either the bundle enumerated
+  it (§12.1 `ingress`), or it falls inside the agent's own namespace — derived
+  from its identifier, which is authority-anchored and collision-free by
+  construction (§10.8). Squatting a name the platform did not grant is therefore
+  not expressible, rather than merely rejected.
+
+### 11.1.1 Why this is also the better UX
+
+This is not only the safe shape, it is the one that matches how agents actually
+start:
+
+* **The platform knows *what* an agent may serve; only the agent knows *when*.**
+  A statically declared route advertises a service that is not listening yet, so
+  the mesh routes to it and fails. Splitting the declaration from the readiness
+  signal removes that window without a health-check protocol.
+* **The port is usually the agent's own business**, chosen at runtime by the
+  framework it happens to use.
+* **Lifetime is tied to the sandbox.** `sam-box` unregisters when the agent's
+  channel drops or the platform detaches it, so a suspended agent stops being
+  advertised without anyone reconciling anything.
+* **Resume is automatic.** On another host, the new `sam-box` re-registers the
+  same name against a different peer, and discovery re-points. That is exactly
+  the property §10 exists to provide, and it would be lost if routes lived in
+  static platform config.
+
+The bundle stays the authority (what may be served), and the agent supplies only
+liveness and a port. An agent that declares nothing serves nothing.
+
+Still to fix before this is built: whether an agent may re-register under a
+changed port (flapping needs a rate limit), and whether `sam-box` should probe
+the port before advertising rather than trusting the agent's claim.
 
 ### 11.2 The reverse channel
 

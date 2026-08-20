@@ -30,7 +30,7 @@ func TestParseMeshHost(t *testing.T) {
 		{"dotted service name", "my-service.local.mcp.sam.alt", "mcp://my-service.local", false},
 		{"underscore service name", "my_service.mcp.sam.alt", "mcp://my_service", false},
 
-		{"local node is not a service", "node.sam.alt", "", true},
+		{"local node is not a service", "mesh.sam.alt", "", true},
 		{"unknown service type", "thing.storage.sam.alt", "", true},
 		{"missing service type", "calculator.sam.alt", "", true},
 		{"zone only", "sam.alt", "", true},
@@ -111,19 +111,20 @@ func TestMeshHostRejects(t *testing.T) {
 	}
 }
 
-func TestIsMeshHostAndIsLocalNodeHost(t *testing.T) {
+func TestIsMeshHostAndIsMeshEntrypointHost(t *testing.T) {
 	tests := []struct {
 		host    string
 		isMesh  bool
-		isLocal bool
+		isEntry bool
 	}{
-		{"node.sam.alt", true, true},
-		{"NODE.SAM.ALT.", true, true},
+		{"mesh.sam.alt", true, true},
+		{"MESH.SAM.ALT.", true, true},
 		{"calculator.mcp.sam.alt", true, false},
 		{"sam.alt", true, false},
+		{"node.sam.alt", true, false},
 		{"api.github.com", false, false},
 		{"evil-sam.alt", false, false},
-		{"node.sam.alt.evil.com", false, false},
+		{"mesh.sam.alt.evil.com", false, false},
 		{"", false, false},
 	}
 
@@ -132,8 +133,8 @@ func TestIsMeshHostAndIsLocalNodeHost(t *testing.T) {
 			if got := IsMeshHost(tc.host); got != tc.isMesh {
 				t.Errorf("IsMeshHost(%q) = %v, want %v", tc.host, got, tc.isMesh)
 			}
-			if got := IsLocalNodeHost(tc.host); got != tc.isLocal {
-				t.Errorf("IsLocalNodeHost(%q) = %v, want %v", tc.host, got, tc.isLocal)
+			if got := IsMeshEntrypointHost(tc.host); got != tc.isEntry {
+				t.Errorf("IsMeshEntrypointHost(%q) = %v, want %v", tc.host, got, tc.isEntry)
 			}
 		})
 	}

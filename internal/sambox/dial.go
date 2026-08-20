@@ -36,9 +36,8 @@ type AgentDialer struct {
 	Router *Router
 
 	// SidecarSocket is the Unix socket of the sam-node this sandbox is attached
-	// to. Flows to node.sam.alt are piped to it verbatim: sam-box parses
-	// nothing, so /v1/*, /mcp and /sam/* behave exactly as they do over TCP,
-	// including how they treat their own authentication headers.
+	// to. sam-box is the node's only consumer here: an agent never reaches the
+	// socket, only the curated surface built on top of it (entrypoint.go).
 	SidecarSocket string
 
 	// DialContext opens external destinations. Nil uses a plain net.Dialer;
@@ -61,8 +60,8 @@ func (d *AgentDialer) DialDestination(ctx context.Context, _ *Credentials, dst D
 	defer cancel()
 
 	switch route.Kind {
-	case RouteLocalNode:
-		return d.dial(ctx, "unix", d.SidecarSocket)
+	case RouteMeshEntrypoint:
+		return d.dialMeshEntrypoint()
 	case RouteExternal:
 		return d.dial(ctx, "tcp", dst.Address())
 	case RouteMeshService:

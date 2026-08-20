@@ -69,13 +69,25 @@ func (d *AgentDialer) dialMeshService(ctx context.Context, route Route) (net.Con
 			r.Out.Host = sidecarHost
 			r.Out.URL.Path = prefix + r.In.URL.Path
 			r.Out.URL.RawPath = ""
+
+			// Same reasoning as the entrypoint: an agent must not be able to
+			// assert an identity by setting the headers the sidecar honours.
+			r.Out.Header.Del(api.HeaderSamBiscuit)
+			r.Out.Header.Del(api.HeaderSamAuthentication)
 		},
 		Transport: transport,
 	}
 
+	return serveOnPipe(proxy), nil
+}
+
+// serveOnPipe runs h on one end of an in-memory connection and hands back the
+// other, so an HTTP handler can be given to the SOCKS5 layer as an ordinary
+// connection.
+func serveOnPipe(h http.Handler) net.Conn {
 	agentSide, boundarySide := net.Pipe()
 	server := &http.Server{
-		Handler: proxy,
+		Handler: h,
 		// Mirrors the sidecar: bound header reads, but let bodies and responses
 		// stream, since inference completions and MCP sessions legitimately do.
 		ReadHeaderTimeout: 10 * time.Second,
@@ -84,14 +96,13 @@ func (d *AgentDialer) dialMeshService(ctx context.Context, route Route) (net.Con
 	go func() {
 		_ = server.Serve(newSingleConnListener(boundarySide))
 	}()
-
-	return agentSide, nil
+	return agentSide
 }
 
 // discoverProvider asks the sidecar which peers serve the requested service.
 // A well-formed name with no provider is unreachable rather than forbidden:
 // unlike a malformed mesh name, it tells a sandbox nothing it could not already
-// learn by calling discovery itself through node.sam.alt.
+// learn from the tool catalog it is allowed to read.
 func (d *AgentDialer) discoverProvider(ctx context.Context, svcType, svcName string) (string, error) {
 	endpoint := (&url.URL{
 		Scheme:   "http",

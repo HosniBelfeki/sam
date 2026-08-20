@@ -17,46 +17,11 @@ package sambox
 import (
 	"context"
 	"errors"
-	"io"
 	"net"
-	"os"
-	"path/filepath"
 	"testing"
 
-	"golang.org/x/net/proxy"
+	"github.com/google/sam/api"
 )
-
-// startUnixEcho stands in for a sam-node sidecar socket.
-func startUnixEcho(t *testing.T) string {
-	t.Helper()
-
-	dir, err := os.MkdirTemp("", "sambox")
-	if err != nil {
-		t.Fatalf("MkdirTemp: %v", err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-
-	path := filepath.Join(dir, "sidecar.sock")
-	l, err := net.Listen("unix", path)
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	t.Cleanup(func() { _ = l.Close() })
-
-	go func() {
-		for {
-			conn, err := l.Accept()
-			if err != nil {
-				return
-			}
-			go func() {
-				defer func() { _ = conn.Close() }()
-				_, _ = io.Copy(conn, conn)
-			}()
-		}
-	}()
-	return path
-}
 
 // closedTCPAddr returns an address nothing is listening on.
 func closedTCPAddr(t *testing.T) string {
@@ -81,62 +46,8 @@ func mustEgressPolicy(t *testing.T, allow ...string) *EgressPolicy {
 	return p
 }
 
-// TestSandboxReachesSidecarThroughBoundary is the primary path end to end: an
-// unmodified client speaks SOCKS5 to the boundary, asks for node.sam.alt, and
-// its bytes arrive at the sidecar socket untouched.
-func TestSandboxReachesSidecarThroughBoundary(t *testing.T) {
-	sidecar := startUnixEcho(t)
-
-	path := startSOCKS5(t, &SOCKS5Server{
-		Dialer: &AgentDialer{
-			Router:        &Router{},
-			SidecarSocket: sidecar,
-		},
-	})
-
-	dialer, err := proxy.SOCKS5("unix", path, nil, proxy.Direct)
-	if err != nil {
-		t.Fatalf("proxy.SOCKS5: %v", err)
-	}
-	conn, err := dialer.Dial("tcp", "node.sam.alt:80")
-	if err != nil {
-		t.Fatalf("Dial: %v", err)
-	}
-	defer func() { _ = conn.Close() }()
-
-	if _, err := conn.Write([]byte("GET /v1/models")); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	got := make([]byte, len("GET /v1/models"))
-	if _, err := io.ReadFull(conn, got); err != nil {
-		t.Fatalf("read: %v", err)
-	}
-	if string(got) != "GET /v1/models" {
-		t.Errorf("sidecar received %q, want it verbatim", got)
-	}
-}
-
-// TestLocalNodeIgnoresTheRequestedPort pins that node.sam.alt is a name for the
-// sidecar socket, not an address: whatever port a client happens to use, the
-// flow lands on the socket.
-func TestLocalNodeIgnoresTheRequestedPort(t *testing.T) {
-	sidecar := startUnixEcho(t)
-	d := &AgentDialer{Router: &Router{}, SidecarSocket: sidecar}
-
-	for _, port := range []uint16{80, 443, 8080} {
-		conn, err := d.DialDestination(context.Background(), nil, Destination{Name: "node.sam.alt", Port: port, IsName: true})
-		if err != nil {
-			t.Fatalf("port %d: %v", port, err)
-		}
-		_ = conn.Close()
-	}
-}
-
 func TestExternalDestinationRequiresPolicy(t *testing.T) {
-	d := &AgentDialer{
-		Router:        &Router{Egress: mustEgressPolicy(t, "127.0.0.1")},
-		SidecarSocket: startUnixEcho(t),
-	}
+	d := &AgentDialer{Router: &Router{Egress: mustEgressPolicy(t, "127.0.0.1")}}
 
 	echo := startEcho(t)
 	host, port, err := net.SplitHostPort(echo)
@@ -190,17 +101,13 @@ func TestUnresolvableDestinationIsReportedAsUnreachable(t *testing.T) {
 	}
 }
 
-func TestMissingSidecarSocketIsAnError(t *testing.T) {
-	d := &AgentDialer{Router: &Router{}}
-
-	if _, err := d.DialDestination(context.Background(), nil, Destination{Name: "node.sam.alt", Port: 80, IsName: true}); err == nil {
-		t.Fatal("DialDestination with no sidecar socket succeeded, want an error")
-	}
-}
-
 func TestDialerRequiresARouter(t *testing.T) {
 	var d AgentDialer
-	if _, err := d.DialDestination(context.Background(), nil, Destination{Name: "node.sam.alt", Port: 80, IsName: true}); err == nil {
+	if _, err := d.DialDestination(context.Background(), nil, Destination{
+		Name:   api.MeshEntrypointHost,
+		Port:   80,
+		IsName: true,
+	}); err == nil {
 		t.Fatal("DialDestination with no router succeeded, want an error")
 	}
 }

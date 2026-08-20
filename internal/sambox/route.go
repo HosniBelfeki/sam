@@ -30,8 +30,10 @@ import (
 type RouteKind int
 
 const (
-	// RouteLocalNode is the sam-node sidecar this sandbox is attached to.
-	RouteLocalNode RouteKind = iota
+	// RouteMeshEntrypoint is the gateway's own agent-facing surface: the mesh
+	// services an agent may consume, with the provider chosen by policy. It is
+	// not the node's sidecar API, which an agent never reaches.
+	RouteMeshEntrypoint RouteKind = iota
 
 	// RouteMeshService is a service provided by some peer in the mesh. Which
 	// peer is a discovery decision, deliberately not encoded in the name.
@@ -43,8 +45,8 @@ const (
 
 func (k RouteKind) String() string {
 	switch k {
-	case RouteLocalNode:
-		return "local-node"
+	case RouteMeshEntrypoint:
+		return "mesh-entrypoint"
 	case RouteMeshService:
 		return "mesh-service"
 	case RouteExternal:
@@ -137,8 +139,8 @@ type Router struct {
 // sandbox, "not permitted" and "does not exist" must look the same, or the
 // boundary becomes a discovery oracle for the mesh's contents.
 func (r *Router) Route(dst Destination) (Route, error) {
-	if api.IsLocalNodeHost(dst.Name) {
-		return Route{Kind: RouteLocalNode, Destination: dst}, nil
+	if api.IsMeshEntrypointHost(dst.Name) {
+		return Route{Kind: RouteMeshEntrypoint, Destination: dst}, nil
 	}
 
 	if api.IsMeshHost(dst.Name) {

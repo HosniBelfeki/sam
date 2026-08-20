@@ -51,11 +51,16 @@ const (
 	// sandbox fails closed instead of resolving to somebody else's host.
 	MeshZone = "sam.alt"
 
-	// LocalNodeHost is the reserved name for the agent's own gateway: the
-	// sidecar API of the sam-node it is attached to. Connecting here is
-	// equivalent to talking to the local sidecar over its Unix socket, so
-	// /v1/*, /mcp and /sam/* behave exactly as documented for that API.
-	LocalNodeHost = "node." + MeshZone
+	// MeshEntrypointHost is the reserved name an agent uses to reach the mesh
+	// services its gateway offers it: inference and tools, with the provider
+	// chosen by policy.
+	//
+	// It deliberately does not name the node. A sam-node's sidecar API is a
+	// local, operator-facing surface — it can register services, drive the raw
+	// egress proxy and read node internals — and an agent has no business
+	// reaching any of it. The gateway consumes the node; the agent consumes the
+	// mesh through the gateway, and the two must not be the same address.
+	MeshEntrypointHost = "mesh." + MeshZone
 )
 
 // meshZoneSuffix is the dotted form used for suffix matching.
@@ -77,9 +82,10 @@ func IsMeshHost(host string) bool {
 	return h == MeshZone || strings.HasSuffix(h, meshZoneSuffix)
 }
 
-// IsLocalNodeHost reports whether host addresses the local sidecar.
-func IsLocalNodeHost(host string) bool {
-	return NormalizeMeshHost(host) == LocalNodeHost
+// IsMeshEntrypointHost reports whether host addresses the gateway's own
+// agent-facing surface.
+func IsMeshEntrypointHost(host string) bool {
+	return NormalizeMeshHost(host) == MeshEntrypointHost
 }
 
 // ParseMeshHost translates a mesh hostname into its canonical service URI.
@@ -89,8 +95,9 @@ func IsLocalNodeHost(host string) bool {
 //
 // The service type is the label immediately left of the zone; everything to its
 // left is the service name, which may itself contain dots (service names are
-// validated as DNS names, not as single labels). LocalNodeHost is not a service
-// and is rejected here; callers must test it with IsLocalNodeHost first.
+// validated as DNS names, not as single labels). MeshEntrypointHost is not a
+// service and is rejected here; callers must test it with IsMeshEntrypointHost
+// first.
 //
 // Names are not resolved to a provider: which peer serves the returned URI is a
 // discovery decision, and deliberately not encoded in the name. If pinning to
@@ -110,8 +117,8 @@ func ParseMeshHost(host string) (serviceURI string, err error) {
 	if strings.ContainsAny(h, ":/") {
 		return "", fmt.Errorf("mesh host %q must not contain a port or a path", host)
 	}
-	if h == LocalNodeHost {
-		return "", fmt.Errorf("%q is the local node, not a mesh service", host)
+	if h == MeshEntrypointHost {
+		return "", fmt.Errorf("%q is the gateway entrypoint, not a mesh service", host)
 	}
 	rest, found := strings.CutSuffix(h, meshZoneSuffix)
 	if !found || rest == "" {
