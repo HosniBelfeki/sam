@@ -83,7 +83,7 @@ func StartSidecarServer(node *SamNode, addr, socketPath, token, certFile, keyFil
 	mux.Handle("/", withAuth(token, true, withMeshConnection(node, mcpHandler)))
 
 	server := &http.Server{
-		Handler: mux,
+		Handler: observeRequests(mux),
 		// Bound header-read time only: bodies/responses can legitimately stream
 		// (MCP sessions, inference completions), so no ReadTimeout/WriteTimeout.
 		ReadHeaderTimeout: 10 * time.Second,

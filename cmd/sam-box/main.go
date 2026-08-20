@@ -47,6 +47,7 @@ func main() {
 		issuer        string
 		audience      string
 		insecure      bool
+		metricsAddr   string
 		logLevel      string
 	)
 
@@ -92,6 +93,13 @@ func main() {
 				_ = os.Remove(sandboxSocket)
 			}()
 
+			if metricsAddr != "" {
+				if _, err := sambox.ServeMetrics(cmd.Context(), metricsAddr); err != nil {
+					return fmt.Errorf("serve metrics: %w", err)
+				}
+				logger.Infof("Serving metrics on http://%s/metrics", metricsAddr)
+			}
+
 			server := &sambox.SOCKS5Server{
 				Dialer: &sambox.AgentDialer{
 					Router:        &sambox.Router{Egress: egress},
@@ -124,6 +132,7 @@ func main() {
 	runCmd.Flags().StringVar(&issuer, "credential-issuer", "", "Issuer whose credentials attest an agent's identity, e.g. a cluster's service-account issuer; required with --bundle")
 	runCmd.Flags().StringVar(&audience, "credential-audience", "", "Audience an agent's credential must be scoped to; required with --bundle")
 	runCmd.Flags().BoolVar(&insecure, "insecure-unverified-bundle", false, "Trust the bundle's declared identity without a credential to back it, letting whoever can write the file decide which agent this sandbox is")
+	runCmd.Flags().StringVar(&metricsAddr, "metrics-addr", "", "Serve unauthenticated Prometheus metrics on this address, e.g. 127.0.0.1:9600; off by default")
 	runCmd.Flags().StringVar(&logLevel, "log-level", "info", "Log level (debug, info, warn, error)")
 	for _, required := range []string{"socket", "sidecar-socket"} {
 		if err := runCmd.MarkFlagRequired(required); err != nil {

@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -61,14 +62,27 @@ func (d *AgentDialer) DialDestination(ctx context.Context, _ *Credentials, dst D
 		return nil, errors.New("sambox: AgentDialer requires a Router")
 	}
 
+	start := time.Now()
+
 	route, err := d.Router.Route(dst)
 	if err != nil {
+		recordFlow(routeUnresolved, 0, err)
 		return nil, err
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, dialTimeout)
 	defer cancel()
 
+	conn, err := d.dialRoute(ctx, route, dst)
+	recordFlow(route.Kind.String(), time.Since(start), err)
+	if err != nil {
+		return nil, err
+	}
+	flowsActive.Inc()
+	return &countedConn{Conn: conn}, nil
+}
+
+func (d *AgentDialer) dialRoute(ctx context.Context, route Route, dst Destination) (net.Conn, error) {
 	switch route.Kind {
 	case RouteMeshEntrypoint:
 		return d.dialMeshEntrypoint()
@@ -79,6 +93,33 @@ func (d *AgentDialer) DialDestination(ctx context.Context, _ *Credentials, dst D
 	default:
 		return nil, fmt.Errorf("sambox: unhandled route %v", route.Kind)
 	}
+}
+
+// countedConn keeps the active-flow gauge honest. Both relay directions close
+// their side, so the decrement has to happen exactly once.
+type countedConn struct {
+	net.Conn
+	closed atomic.Bool
+}
+
+func (c *countedConn) Close() error {
+	if c.closed.CompareAndSwap(false, true) {
+		flowsActive.Dec()
+	}
+	return c.Conn.Close()
+}
+
+// CloseWrite keeps the half-close the relay depends on reachable through the
+// wrapper. Advertising it unconditionally would be a trap: the relay falls back
+// to a full close for connections that cannot half-close, and a wrapper that
+// claims the capability without delivering it leaves the peer's copy blocked
+// forever. So when the wrapped connection has no half-close, do what the relay
+// would have done.
+func (c *countedConn) CloseWrite() error {
+	if cw, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return cw.CloseWrite()
+	}
+	return c.Close()
 }
 
 func (d *AgentDialer) dial(ctx context.Context, network, address string) (net.Conn, error) {
