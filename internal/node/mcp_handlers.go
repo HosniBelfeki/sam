@@ -424,6 +424,10 @@ func gossipToolRows(provs []samdiscovery.Provider, toolName, serviceNameFilter s
 // authorization evidence. Each candidate is confirmed through the existing
 // authenticated MCP session and exact tools/list response before it is exposed.
 func (n *SamNode) verifyGossipToolRows(ctx context.Context, candidates []remoteToolRow) []remoteToolRow {
+	if len(candidates) == 0 {
+		return nil
+	}
+
 	const maxConcurrent = 8
 
 	verifyCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
