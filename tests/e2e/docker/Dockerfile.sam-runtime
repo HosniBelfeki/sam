@@ -19,7 +19,9 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # Final container: minimal alpine runtime hosting the built binaries.
 FROM alpine:3.20
 
-RUN apk add --no-cache busybox
+# socat and curl let a test container stand in for an agent sandbox: socat
+# bridges a loopback port to the gateway's socket, and curl is the agent.
+RUN apk add --no-cache busybox socat curl
 
 RUN addgroup -S sam && adduser -S -G sam sam
 
