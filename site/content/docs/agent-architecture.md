@@ -493,6 +493,40 @@ so only the component that admits the agent has to learn to append. If
 `biscuit-go` later gains third-party blocks, the agent can sign its own block
 and non-repudiation arrives without a wire break.
 
+> **Correction (falsified by test).** The paragraph above was wrong, and
+> `TestAttenuationBlockFactsAreInvisibleToTheAuthorizer` in `internal/identity`
+> now pins why. `Authorize()` merges **only the authority block's** facts and
+> rules into the authorizer's world; every appended block is evaluated in a
+> world of its own, so its facts can satisfy that block's own checks and
+> nothing else. A fact appended by a holder is invisible to the far end's
+> policy.
+>
+> That is deliberate and correct: if appending could add facts the authorizer
+> sees, attenuation would be able to *grant* authority instead of only
+> narrowing it, and any bearer could promote itself.
+>
+> The consequence is that "append a block naming the agent" cannot work, so the
+> claim has to travel beside the token instead — and it is worth being precise
+> that this costs nothing cryptographically. Whoever can append a block can
+> append *any* block, so a node's claim about which agent it is speaking for is
+> worth exactly what the node is worth either way (Decision 5's residual
+> trust, bounded by binding namespaces to node attestation). Only a block
+> signed by the agent itself would change that, and that needs third-party
+> blocks.
+>
+> Options, to be settled before the node side is built:
+>
+> 1. **Propagate `X-Sam-Agent` peer to peer** and have the receiving node inject
+>    `agent(...)` into its authorizer, exactly as `injectIdentityFacts` already
+>    injects facts the node derived itself. Simple, and honest about the trust
+>    involved.
+> 2. **Append the block anyway and read it back out** of the token at the far
+>    end, then inject the same fact. Identical trust, plus datalog text parsing,
+>    since `biscuit-go` exposes no structured per-block fact accessor.
+> 3. **Wait for third-party blocks**, which would make the agent's own signature
+>    the thing being verified, and is the only option that adds real
+>    non-repudiation.
+
 ### 10.3 Why it scales: delegation, not enumeration
 
 Three rules, each of which removes a per-agent bottleneck:
