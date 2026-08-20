@@ -526,6 +526,36 @@ and non-repudiation arrives without a wire break.
 > 3. **Wait for third-party blocks**, which would make the agent's own signature
 >    the thing being verified, and is the only option that adds real
 >    non-repudiation.
+>
+> **Decided: option 1**, implemented in `internal/node/agent.go`.
+
+### 10.2.1 What the agent claim covers, and what it does not
+
+**Covers.** Attribution and policy on the HTTP datapath. A peer can authorize
+and audit "agent `reviewer-7` called me" rather than only "some node did", using
+the existing vocabulary, because the claim is injected as an ordinary `agent()`
+fact. `TestAgentPolicyCUJ` shows two agents behind two gateways on one node
+being told apart by the provider's policy, including a lookalike authority being
+refused and an unidentified sandbox being refused.
+
+**Does not cover.**
+
+* **Proof.** The claim is the calling node's word. A node that lies can name any
+  agent, so a mesh that cares must also constrain which peers may speak for
+  which agent namespaces. Carrying it in a header rather than a block costs
+  nothing here: an appended block is exactly as forgeable by the same party.
+* **The stream datapath.** MCP tool calls authenticate over a libp2p stream with
+  an `AuthFrame`, not HTTP headers, and carry no agent yet. Inference does;
+  tools do not.
+* **Anything that never leaves the node**, which the boundary already gates
+  locally.
+
+**A consequence to design around.** A node's own housekeeping carries no agent,
+because no agent asked for it. A provider whose policy demands an agent
+unconditionally therefore also refuses that node's model-catalog probe, and its
+models stop appearing in peers' `/v1/models` listings even though agents can
+still call them. This was found by the test, not by reasoning. Policy that means
+to gate agent traffic should say so rather than demanding an agent everywhere.
 
 ### 10.3 Why it scales: delegation, not enumeration
 

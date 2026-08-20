@@ -248,6 +248,17 @@ func TestSandboxBoundaryCUJ(t *testing.T) {
 // does: it holds no identity and no mesh connection of its own.
 func startBoundary(t *testing.T, agentSocket, nodeSocket string, egressAllow ...string) {
 	t.Helper()
+	startBoundaryWith(t, agentSocket, nodeSocket, "", egressAllow)
+}
+
+// startBoundaryForAgent serves one named agent, as an admitted sandbox does.
+func startBoundaryForAgent(t *testing.T, agentSocket, nodeSocket, agentID string) {
+	t.Helper()
+	startBoundaryWith(t, agentSocket, nodeSocket, agentID, nil)
+}
+
+func startBoundaryWith(t *testing.T, agentSocket, nodeSocket, agentID string, egressAllow []string) {
+	t.Helper()
 
 	egress, err := sambox.NewEgressPolicy(egressAllow)
 	if err != nil {
@@ -262,6 +273,7 @@ func startBoundary(t *testing.T, agentSocket, nodeSocket string, egressAllow ...
 		Dialer: &sambox.AgentDialer{
 			Router:        &sambox.Router{Egress: egress},
 			SidecarSocket: nodeSocket,
+			AgentID:       agentID,
 		},
 	}
 
