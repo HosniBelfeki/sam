@@ -339,7 +339,8 @@ func (n *SamNode) handleFindRemoteTools(ctx context.Context, req *mcp.CallToolRe
 	if params.ToolName != "" && params.PeerID == "" && n.Discovery != nil {
 		n.Discovery.Ensure(api.ServiceType_SERVICE_TYPE_MCP, params.ToolName)
 		if provs := n.Discovery.Providers(api.ServiceType_SERVICE_TYPE_MCP, params.ToolName); len(provs) > 0 {
-			rows = gossipToolRows(provs, params.ToolName, params.ServiceName)
+			candidates := gossipToolRows(provs, params.ToolName, params.ServiceName)
+			rows = n.verifyGossipToolRows(ctx, candidates)
 			if len(rows) > 0 {
 				return marshalToolRows(rows)
 			}
@@ -415,6 +416,84 @@ func gossipToolRows(provs []samdiscovery.Provider, toolName, serviceNameFilter s
 			ToolName: name + "/" + toolName,
 			Labels:   p.Labels,
 		})
+	}
+	return rows
+}
+
+// verifyGossipToolRows treats unsolicited announcements as routing hints, not
+// authorization evidence. Each candidate is confirmed through the existing
+// authenticated MCP session and exact tools/list response before it is exposed.
+func (n *SamNode) verifyGossipToolRows(ctx context.Context, candidates []remoteToolRow) []remoteToolRow {
+	const maxConcurrent = 8
+
+	verifyCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	type verificationResult struct {
+		row remoteToolRow
+		ok  bool
+	}
+	results := make([]verificationResult, len(candidates))
+	jobs := make(chan int)
+	workerCount := len(candidates)
+	if workerCount > maxConcurrent {
+		workerCount = maxConcurrent
+	}
+
+	var wg sync.WaitGroup
+	for range workerCount {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case index, ok := <-jobs:
+					if !ok {
+						return
+					}
+					candidate := candidates[index]
+					pid, err := peer.Decode(candidate.PeerID)
+					if err != nil {
+						logger.Debugf("[find_remote_tools] invalid gossip peer %q skipped: %v", candidate.PeerID, err)
+						continue
+					}
+					description, err := n.fetchRemoteToolDescription(verifyCtx, pid, candidate.ToolName)
+					if err != nil {
+						logger.Debugf("[find_remote_tools] unverified gossip candidate %s on %s skipped: %v", candidate.ToolName, pid, err)
+						continue
+					}
+					results[index] = verificationResult{
+						ok: true,
+						row: remoteToolRow{
+							PeerID:      description.PeerID,
+							ToolName:    description.ToolName,
+							Description: description.Description,
+							Labels:      candidate.Labels,
+						},
+					}
+				case <-verifyCtx.Done():
+					return
+				}
+			}
+		}()
+	}
+
+sendCandidates:
+	for index := range candidates {
+		select {
+		case jobs <- index:
+		case <-verifyCtx.Done():
+			break sendCandidates
+		}
+	}
+	close(jobs)
+	wg.Wait()
+
+	rows := make([]remoteToolRow, 0, len(results))
+	for _, result := range results {
+		if result.ok {
+			rows = append(rows, result.row)
+		}
 	}
 	return rows
 }
@@ -592,6 +671,48 @@ type DescribeRemoteToolParams struct {
 	ToolName string `json:"tool_name" jsonschema:"Namespaced server name as returned by find_remote_tools (e.g. 'mcp://code-reviewer/review_pr'). Required."`
 }
 
+func (n *SamNode) fetchRemoteToolDescription(ctx context.Context, pid peer.ID, toolName string) (*remoteToolDescription, error) {
+	serviceName, actualToolName, err := api.SplitToolName(toolName)
+	if err != nil {
+		return nil, err
+	}
+	if serviceName == "system://"+api.CatalogTarget {
+		return nil, fmt.Errorf("cannot describe system catalog tools via describe_remote_tool")
+	}
+	n.preparePeerAddrs(ctx, pid)
+
+	session, cleanup, err := n.ConnectMCPSession(ctx, pid, serviceName, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
+
+	listRes, err := session.ListTools(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	if listRes == nil {
+		return nil, fmt.Errorf("list tools response was nil")
+	}
+
+	for _, tool := range listRes.Tools {
+		if tool == nil {
+			continue
+		}
+		if tool.Name == actualToolName {
+			return &remoteToolDescription{
+				PeerID:       pid.String(),
+				ToolName:     toolName,
+				Description:  tool.Description,
+				InputSchema:  tool.InputSchema,
+				OutputSchema: tool.OutputSchema,
+			}, nil
+		}
+	}
+
+	return nil, fmt.Errorf("tool not found on peer")
+}
+
 // handleDescribeRemoteTool implements the describe_remote_tool client-facing tool.
 func (n *SamNode) handleDescribeRemoteTool(ctx context.Context, req *mcp.CallToolRequest, params DescribeRemoteToolParams) (*mcp.CallToolResult, any, error) {
 	if params.PeerID == "" {
@@ -606,52 +727,17 @@ func (n *SamNode) handleDescribeRemoteTool(ctx context.Context, req *mcp.CallToo
 		return nil, nil, fmt.Errorf("invalid peer_id: %w", err)
 	}
 
-	serviceName, actualToolName, err := api.SplitToolName(params.ToolName)
+	payload, err := n.fetchRemoteToolDescription(ctx, pid, params.ToolName)
 	if err != nil {
 		return nil, nil, err
 	}
-	if serviceName == "system://"+api.CatalogTarget {
-		return nil, nil, fmt.Errorf("cannot describe system catalog tools via describe_remote_tool")
-	}
-	n.preparePeerAddrs(ctx, pid)
-
-	session, cleanup, err := n.ConnectMCPSession(ctx, pid, serviceName, nil)
+	data, err := json.Marshal(payload)
 	if err != nil {
 		return nil, nil, err
 	}
-	defer cleanup()
-
-	listRes, err := session.ListTools(ctx, nil)
-	if err != nil {
-		return nil, nil, err
-	}
-	if listRes == nil {
-		return nil, nil, fmt.Errorf("list tools response was nil")
-	}
-
-	for _, t := range listRes.Tools {
-		if t == nil {
-			continue
-		}
-		if t.Name == actualToolName {
-			payload := remoteToolDescription{
-				PeerID:       pid.String(),
-				ToolName:     params.ToolName,
-				Description:  t.Description,
-				InputSchema:  t.InputSchema,
-				OutputSchema: t.OutputSchema,
-			}
-			data, err := json.Marshal(payload)
-			if err != nil {
-				return nil, nil, err
-			}
-			return &mcp.CallToolResult{
-				Content: []mcp.Content{&mcp.TextContent{Text: string(data)}},
-			}, nil, nil
-		}
-	}
-
-	return nil, nil, fmt.Errorf("tool not found on peer")
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{&mcp.TextContent{Text: string(data)}},
+	}, nil, nil
 }
 
 // CheckConnectivityParams defines the parameters for the check_connectivity tool.

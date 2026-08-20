@@ -516,6 +516,70 @@ func TestFetchRemoteToolCatalogue_AuthRejectedHidden(t *testing.T) {
 	}
 }
 
+func TestVerifyGossipToolRows_AuthenticatesEachServiceOnSamePeer(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	allowedSrv := httptest.NewServer(newFakeMCPHandler(t, []*mcp.Tool{
+		{Name: "review_pr", Description: "authorized review", InputSchema: map[string]any{"type": "object"}},
+	}))
+	defer allowedSrv.Close()
+	deniedSrv := httptest.NewServer(newFakeMCPHandler(t, []*mcp.Tool{
+		{Name: "review_pr", Description: "unauthorized review", InputSchema: map[string]any{"type": "object"}},
+	}))
+	defer deniedSrv.Close()
+
+	nodeA, cleanupA := startBareNode(t, ctx)
+	defer cleanupA()
+	nodeB, cleanupB := startBareNode(t, ctx)
+	defer cleanupB()
+
+	rootPub, rootPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := buildAndSaveCustomBiscuit(nodeA, rootPriv, []string{"mcp://allowed-reviewer"}); err != nil {
+		t.Fatalf("buildAndSaveCustomBiscuit: %v", err)
+	}
+	nodeB.keysMu.Lock()
+	nodeB.trustedKeys = append(nodeB.trustedKeys, TrustedKey{Key: rootPub, ReceivedAt: time.Now()})
+	nodeB.keysMu.Unlock()
+	if err := nodeA.Host.Connect(ctx, peer.AddrInfo{ID: nodeB.Host.ID(), Addrs: nodeB.Host.Addrs()}); err != nil {
+		t.Fatal(err)
+	}
+
+	for name, targetURL := range map[string]string{
+		"allowed-reviewer": allowedSrv.URL,
+		"denied-reviewer":  deniedSrv.URL,
+	} {
+		if err := nodeB.RegisterService(ctx, &api.RegisterServiceRequest{
+			Service: &api.ServiceInfo{Type: api.ServiceType_SERVICE_TYPE_MCP, Name: name},
+			Backend: &api.RegisterServiceRequest_TargetUrl{TargetUrl: targetURL},
+		}); err != nil {
+			t.Fatalf("RegisterService %s: %v", name, err)
+		}
+	}
+
+	peerID := nodeB.Host.ID().String()
+	rows := nodeA.verifyGossipToolRows(ctx, []remoteToolRow{
+		{PeerID: peerID, ToolName: "mcp://allowed-reviewer/review_pr", Labels: map[string]string{"region": "us"}},
+		{PeerID: peerID, ToolName: "mcp://denied-reviewer/review_pr", Labels: map[string]string{"region": "us"}},
+	})
+
+	if len(rows) != 1 {
+		t.Fatalf("expected one authorized row, got %d: %+v", len(rows), rows)
+	}
+	if rows[0].ToolName != "mcp://allowed-reviewer/review_pr" {
+		t.Fatalf("unexpected verified tool: %+v", rows[0])
+	}
+	if rows[0].Description != "authorized review" {
+		t.Errorf("Description = %q, want authorized review", rows[0].Description)
+	}
+	if rows[0].Labels["region"] != "us" {
+		t.Errorf("gossip routing labels were not preserved: %+v", rows[0].Labels)
+	}
+}
+
 func TestCallMCPTool_LabelEnforcement(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
