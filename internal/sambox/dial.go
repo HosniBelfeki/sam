@@ -66,11 +66,7 @@ func (d *AgentDialer) DialDestination(ctx context.Context, _ *Credentials, dst D
 	case RouteExternal:
 		return d.dial(ctx, "tcp", dst.Address())
 	case RouteMeshService:
-		// Reaching a named service means discovering a provider and rewriting
-		// onto the sidecar's /sam/<peer>/<type>/<name> path, which is an
-		// HTTP-level operation rather than a byte pipe. Until that lands, an
-		// agent reaches the mesh through node.sam.alt.
-		return nil, fmt.Errorf("mesh service routing is not wired yet: %s", route.ServiceURI)
+		return d.dialMeshService(ctx, route)
 	default:
 		return nil, fmt.Errorf("sambox: unhandled route %v", route.Kind)
 	}

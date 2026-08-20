@@ -277,12 +277,13 @@ SOCKS5 server; `internal/node` keeps everything mesh.
 ```bash
 OPENAI_BASE_URL=http://node.sam.alt/v1   # inference, provider chosen by policy
 MCP_URL=http://node.sam.alt/mcp          # tools: local catalog + remote services
-SAM_API_TOKEN=<per-sandbox token>        # X-Sam-Authentication for the two above
 ```
 
 No `HTTP_PROXY`. No CA bundle, unless a domain is explicitly configured for
-secret injection. No mesh concepts. `cmd/chaos-agent` already takes `--mcp-url`
-and `--inference-url`, so it needs no change beyond the values it is given.
+secret injection. No mesh concepts, and no sidecar token: reaching the sidecar
+socket is itself the credential (§5.2). `cmd/chaos-agent` already takes
+`--mcp-url` and `--inference-url`, so it needs no change beyond the values it is
+given.
 
 A harness that wants one specific service instead of policy-chosen routing uses
 its mesh name directly: `http://code-reviewer.mcp.sam.alt/`.
@@ -293,10 +294,18 @@ Applied to the SOCKS5 request's `(host, port)` — `host` is the name
 `tun2socks` preserved, never an IP — in order:
 
 1. **`node.sam.alt`** (`api.IsLocalNodeHost`) → **byte pipe** to the local
-   `sam-node` sidecar Unix socket. `sam-box` parses nothing: `/v1/*`, `/mcp` and
-   `/sam/*` behave exactly as they do over TCP today, including
-   `X-Sam-Authentication` and the `Authorization` passthrough rules. `sam-box`
-   injects the sandbox's token only if the request carries none.
+   `sam-node` sidecar Unix socket. `sam-box` parses nothing, so `/v1/*`, `/mcp`
+   and `/sam/*` behave exactly as they do over TCP. No credential is injected:
+   `withAuth` treats arriving on the socket as proof of authorization, on the
+   grounds that it is the same bar as reading the token file.
+
+   That has a consequence worth stating plainly. While the pipe is verbatim, an
+   agent can reach *every* sidecar endpoint — including `/sam/service/register`
+   with a `target_url` of its choosing, which is exactly what §11.1 requires
+   `sam-box` to rewrite. Closing that gap means terminating HTTP on this path
+   too, which is also what attaching the agent's identity to each flow (§10)
+   will require. Until both land, this path assumes the sandbox is trusted not
+   to register services on the node's behalf.
 2. **`<service>.<type>.sam.alt`** (`api.ParseMeshHost`) → `sam-box` terminates
    HTTP and rewrites onto the sidecar's existing surface:
    `GET /sam/service/discover?type=<type>&name=<service>` picks a provider, then
