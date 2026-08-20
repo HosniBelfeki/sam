@@ -6,11 +6,13 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
-
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -577,6 +579,82 @@ func TestVerifyGossipToolRows_AuthenticatesEachServiceOnSamePeer(t *testing.T) {
 	}
 	if rows[0].Labels["region"] != "us" {
 		t.Errorf("gossip routing labels were not preserved: %+v", rows[0].Labels)
+	}
+}
+
+func TestVerifyGossipToolRows_UsesIndependentRequestTimeouts(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	_, publicKey, err := crypto.GenerateKeyPair(crypto.Ed25519, -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peerID, err := peer.IDFromPublicKey(publicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	candidates := make([]remoteToolRow, 0, gossipVerificationMaxConcurrent+1)
+	for i := range gossipVerificationMaxConcurrent {
+		candidates = append(candidates, remoteToolRow{
+			PeerID:   peerID.String(),
+			ToolName: fmt.Sprintf("mcp://slow-%d/review_pr", i),
+		})
+	}
+	candidates = append(candidates, remoteToolRow{
+		PeerID:   peerID.String(),
+		ToolName: "mcp://fast/review_pr",
+	})
+
+	allSlowRequestsStarted := make(chan struct{})
+	releaseSlowRequests := make(chan struct{})
+	var slowRequestsStarted atomic.Int32
+	go func() {
+		select {
+		case <-allSlowRequestsStarted:
+		case <-ctx.Done():
+			return
+		}
+		select {
+		case <-time.After(500 * time.Millisecond):
+			close(releaseSlowRequests)
+		case <-ctx.Done():
+		}
+	}()
+
+	var fastRequestBudget time.Duration
+	fetchDescription := func(ctx context.Context, pid peer.ID, toolName string) (*remoteToolDescription, error) {
+		if toolName == "mcp://fast/review_pr" {
+			deadline, ok := ctx.Deadline()
+			if !ok {
+				return nil, errors.New("fast request has no deadline")
+			}
+			fastRequestBudget = time.Until(deadline)
+			return &remoteToolDescription{
+				PeerID:      pid.String(),
+				ToolName:    toolName,
+				Description: "verified after delayed candidates",
+			}, nil
+		}
+
+		if slowRequestsStarted.Add(1) == gossipVerificationMaxConcurrent {
+			close(allSlowRequestsStarted)
+		}
+		select {
+		case <-releaseSlowRequests:
+			return nil, errors.New("delayed candidate rejected")
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+
+	rows := verifyGossipToolRowsWithFetcher(ctx, candidates, fetchDescription)
+	if len(rows) != 1 || rows[0].ToolName != "mcp://fast/review_pr" {
+		t.Fatalf("expected only the final candidate to verify, got %+v", rows)
+	}
+	if minimumBudget := gossipVerificationTimeout - 250*time.Millisecond; fastRequestBudget < minimumBudget {
+		t.Fatalf("final candidate inherited an exhausted timeout: got %v, want at least %v", fastRequestBudget, minimumBudget)
 	}
 }
 

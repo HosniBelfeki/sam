@@ -424,14 +424,22 @@ func gossipToolRows(provs []samdiscovery.Provider, toolName, serviceNameFilter s
 // authorization evidence. Each candidate is confirmed through the existing
 // authenticated MCP session and exact tools/list response before it is exposed.
 func (n *SamNode) verifyGossipToolRows(ctx context.Context, candidates []remoteToolRow) []remoteToolRow {
+	return verifyGossipToolRowsWithFetcher(ctx, candidates, n.fetchRemoteToolDescription)
+}
+
+const (
+	gossipVerificationMaxConcurrent = 8
+	gossipVerificationTimeout       = 5 * time.Second
+)
+
+func verifyGossipToolRowsWithFetcher(
+	ctx context.Context,
+	candidates []remoteToolRow,
+	fetchDescription func(context.Context, peer.ID, string) (*remoteToolDescription, error),
+) []remoteToolRow {
 	if len(candidates) == 0 {
 		return nil
 	}
-
-	const maxConcurrent = 8
-
-	verifyCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
 
 	type verificationResult struct {
 		row remoteToolRow
@@ -440,8 +448,8 @@ func (n *SamNode) verifyGossipToolRows(ctx context.Context, candidates []remoteT
 	results := make([]verificationResult, len(candidates))
 	jobs := make(chan int)
 	workerCount := len(candidates)
-	if workerCount > maxConcurrent {
-		workerCount = maxConcurrent
+	if workerCount > gossipVerificationMaxConcurrent {
+		workerCount = gossipVerificationMaxConcurrent
 	}
 
 	var wg sync.WaitGroup
@@ -451,6 +459,8 @@ func (n *SamNode) verifyGossipToolRows(ctx context.Context, candidates []remoteT
 			defer wg.Done()
 			for {
 				select {
+				case <-ctx.Done():
+					return
 				case index, ok := <-jobs:
 					if !ok {
 						return
@@ -461,7 +471,9 @@ func (n *SamNode) verifyGossipToolRows(ctx context.Context, candidates []remoteT
 						logger.Debugf("[find_remote_tools] invalid gossip peer %q skipped: %v", candidate.PeerID, err)
 						continue
 					}
-					description, err := n.fetchRemoteToolDescription(verifyCtx, pid, candidate.ToolName)
+					requestCtx, cancel := context.WithTimeout(ctx, gossipVerificationTimeout)
+					description, err := fetchDescription(requestCtx, pid, candidate.ToolName)
+					cancel()
 					if err != nil {
 						logger.Debugf("[find_remote_tools] unverified gossip candidate %s on %s skipped: %v", candidate.ToolName, pid, err)
 						continue
@@ -475,8 +487,6 @@ func (n *SamNode) verifyGossipToolRows(ctx context.Context, candidates []remoteT
 							Labels:      candidate.Labels,
 						},
 					}
-				case <-verifyCtx.Done():
-					return
 				}
 			}
 		}()
@@ -486,7 +496,7 @@ sendCandidates:
 	for index := range candidates {
 		select {
 		case jobs <- index:
-		case <-verifyCtx.Done():
+		case <-ctx.Done():
 			break sendCandidates
 		}
 	}
