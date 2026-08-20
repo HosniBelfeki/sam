@@ -139,7 +139,12 @@ func (d *AgentDialer) discoverProvider(ctx context.Context, svcType, svcName str
 }
 
 func (d *AgentDialer) sidecarTransport() http.RoundTripper {
-	socket := d.SidecarSocket
+	return sidecarTransport(d.SidecarSocket)
+}
+
+// sidecarTransport dials the node's API socket whatever host a URL names, since
+// the host in these URLs is a placeholder and never resolved.
+func sidecarTransport(socket string) http.RoundTripper {
 	return &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			return (&net.Dialer{}).DialContext(ctx, "unix", socket)

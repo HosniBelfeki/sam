@@ -75,6 +75,13 @@ func main() {
 			if err := verifyBundleCredential(cmd.Context(), bundlePath, issuer, audience, insecure); err != nil {
 				return err
 			}
+			ingress, err := resolveIngress(bundlePath, sidecarSocket)
+			if err != nil {
+				return err
+			}
+			if ingress != nil {
+				defer ingress.Close(context.WithoutCancel(cmd.Context()))
+			}
 
 			listener, err := sambox.ListenSandboxSocket(sandboxSocket)
 			if err != nil {
@@ -90,6 +97,7 @@ func main() {
 					Router:        &sambox.Router{Egress: egress},
 					SidecarSocket: sidecarSocket,
 					AgentID:       agentID,
+					Ingress:       ingress,
 				},
 			}
 
@@ -198,4 +206,24 @@ func verifyBundleCredential(ctx context.Context, bundlePath, issuer, audience st
 	}
 	logger.Infof("Credential verified: %s is %s", bundle.Agent.ID, bundle.Agent.ExternalID)
 	return nil
+}
+
+// resolveIngress prepares what the agent is permitted to serve. Nil means
+// nothing, which is the case for a sandbox that only calls out.
+func resolveIngress(bundlePath, sidecarSocket string) (*sambox.IngressManager, error) {
+	if bundlePath == "" {
+		return nil, nil
+	}
+	bundle, err := sambox.LoadAgentBundle(bundlePath)
+	if err != nil {
+		return nil, err
+	}
+	if len(bundle.Ingress) == 0 {
+		return nil, nil
+	}
+	logger.Infof("Agent %s may serve %d mesh service(s) once it announces them", bundle.Agent.ID, len(bundle.Ingress))
+	return &sambox.IngressManager{
+		SidecarSocket: sidecarSocket,
+		Allowed:       bundle.Ingress,
+	}, nil
 }

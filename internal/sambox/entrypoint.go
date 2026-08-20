@@ -37,17 +37,17 @@ import (
 // entrypoint terminates HTTP and forwards only what an agent is supposed to
 // have.
 
-// agentMayReach is the entire surface an agent gets. Inference and tools, and
-// nothing else.
+// agentMayReach is the entire surface an agent gets on the node. Inference and
+// tools, and nothing else.
 //
 // Discovery is not on the list even though agents need it: it is already
 // available through MCP as find_remote_tools and discover_remote_services, so
 // exposing /sam/service/discover as well would widen the surface without adding
 // a capability. Registration is not on the list at all — an agent that could
 // register would advertise itself into the mesh under the node's identity, and
-// choose the target_url the mesh then routes to. Ingress is declared by the
-// platform through the connector interface, which is the only party that knows
-// what an agent is supposed to serve.
+// choose the target_url the mesh then routes to. What an agent may serve is
+// declared by the platform in its bundle, and announced through the gateway's
+// own /ingress endpoint, which never reaches the node.
 func agentMayReach(path string) bool {
 	switch path {
 	case "/v1/models", "/v1/chat/completions", "/v1/completions":
@@ -55,6 +55,9 @@ func agentMayReach(path string) bool {
 	}
 	return path == "/mcp" || strings.HasPrefix(path, "/mcp/")
 }
+
+// ingressPath is served by the gateway itself rather than proxied.
+const ingressPath = "/ingress"
 
 // dialMeshEntrypoint returns a connection serving the agent-facing surface.
 func (d *AgentDialer) dialMeshEntrypoint() (net.Conn, error) {
@@ -75,9 +78,22 @@ func (d *AgentDialer) entrypointHandler() http.Handler {
 		Transport: d.sidecarTransport(),
 	}
 
+	var ingress http.Handler
+	if d.Ingress != nil {
+		ingress = d.Ingress.Handler()
+	}
+
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == ingressPath {
+			if ingress == nil {
+				http.Error(w, "this agent was granted nothing to serve", http.StatusForbidden)
+				return
+			}
+			ingress.ServeHTTP(w, r)
+			return
+		}
 		if !agentMayReach(r.URL.Path) {
-			http.Error(w, "the mesh entrypoint serves /v1 and /mcp only", http.StatusForbidden)
+			http.Error(w, "the mesh entrypoint serves /v1, /mcp and /ingress only", http.StatusForbidden)
 			return
 		}
 		proxy.ServeHTTP(w, r)

@@ -754,11 +754,20 @@ the node on the agent's behalf. Two things make that safe:
 * **`target_url` is not the agent's to give.** `sam-box` always substitutes its
   own per-agent ingress endpoint, so the field an agent could abuse is one it
   never supplies.
-* **The name must be one the agent already had.** Either the bundle enumerated
-  it (§12.1 `ingress`), or it falls inside the agent's own namespace — derived
-  from its identifier, which is authority-anchored and collision-free by
-  construction (§10.8). Squatting a name the platform did not grant is therefore
-  not expressible, rather than merely rejected.
+* **The name must be one the agent already had.** The bundle enumerates what it
+  may serve (§12.1 `ingress`), and a name outside that list is not expressible
+  rather than merely rejected.
+
+The bundle declares `{name, type}` only. The port is the agent's to choose at
+runtime, because that is what it actually knows.
+
+**Implemented**, with one gap: reaching back into the sandbox currently means
+dialling an address, which works when the gateway shares a network namespace
+with the agent — the Kubernetes sidecar case, and what `TestAgentIngressCUJ`
+covers end to end. A microVM or a `network=none` container cannot be reached
+that way and needs the reverse channel below, which is not built. The seam is
+`IngressManager.AgentAddr`, so that channel slots in without changing the
+registration path.
 
 ### 11.1.1 Why this is also the better UX
 
@@ -852,7 +861,7 @@ egress:
   secrets:
     "api.github.com": {kind: bearer, value_from: /etc/sam/secrets/github}
 ingress:
-  - {name: code-reviewer, type: mcp, port: 8080}
+  - {name: code-reviewer, type: mcp}
 ```
 
 ### 12.2 Operations

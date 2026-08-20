@@ -118,13 +118,40 @@ curl --socks5-hostname 127.0.0.1:1080 http://mesh.sam.alt/v1/models
 
 ---
 
-## 5. Not yet implemented
+## 5. Serving a mesh service
+
+An agent can serve, not only call. Its bundle says what it is allowed to serve;
+the agent itself says when it is ready and on which port:
+
+```yaml
+ingress:
+  - {name: code-reviewer, type: mcp}
+```
+
+```bash
+curl -X POST http://mesh.sam.alt/ingress \
+  -d '{"name":"code-reviewer","type":"mcp","port":8080}'
+```
+
+The gateway then registers the service with the node. The agent never does: it
+cannot name the URL the mesh routes to, and it cannot claim a name its bundle
+does not list. When the gateway stops, the service is withdrawn, so a suspended
+agent stops being advertised without anyone reconciling anything.
+
+Reaching back into the sandbox currently means dialling the port the agent
+announced, which works when the gateway shares a network namespace with it —
+the Kubernetes sidecar arrangement. An isolated sandbox needs the reverse
+channel described in the architecture document, which is not built yet.
+
+---
+
+## 6. Not yet implemented
 
 Deliberately absent, and tracked in the architecture document:
 
 * **Secret injection** for external destinations. The ephemeral CA and the
   injection machinery exist, but are not wired into this datapath.
-* **Ingress**: an agent serving a mesh service of its own.
+* **The ingress reverse channel**, for sandboxes the gateway cannot dial.
 * **Credential rotation.** A bundle's credential is verified when the gateway
   starts. Platforms rotate projected tokens, and re-verifying on rotation is
   the connector interface's `Refresh` operation, which is not built yet.

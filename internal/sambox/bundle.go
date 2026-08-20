@@ -39,10 +39,22 @@ type AgentBundle struct {
 	Agent   AgentIdentity `yaml:"agent"`
 	Egress  BundleEgress  `yaml:"egress"`
 
+	// Ingress is what this agent is permitted to serve, not what it is
+	// currently serving. The agent says when it is ready, and on which port,
+	// through the gateway's ingress endpoint; the platform decides only which
+	// names it may claim.
+	Ingress []BundleIngress `yaml:"ingress"`
+
 	// egress is the compiled form of Egress.Allow, built during loading so a
 	// malformed allowlist fails at startup rather than on an agent's first
 	// request.
 	egress *EgressPolicy
+}
+
+// BundleIngress is one mesh service the agent may advertise.
+type BundleIngress struct {
+	Name string `yaml:"name"`
+	Type string `yaml:"type"`
 }
 
 // AgentIdentity names the principal the gateway asserts for this sandbox.
@@ -93,6 +105,15 @@ func LoadAgentBundle(path string) (*AgentBundle, error) {
 		return nil, fmt.Errorf("agent bundle %s: %w", path, err)
 	}
 	bundle.egress = policy
+
+	for i, ingress := range bundle.Ingress {
+		if _, err := api.ParseServiceType(ingress.Type); err != nil {
+			return nil, fmt.Errorf("agent bundle %s: ingress %d: %w", path, i, err)
+		}
+		if err := api.ValidateServiceFormat(ingress.Type + "://" + ingress.Name); err != nil {
+			return nil, fmt.Errorf("agent bundle %s: ingress %d: %w", path, i, err)
+		}
+	}
 
 	return &bundle, nil
 }
