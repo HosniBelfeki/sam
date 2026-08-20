@@ -69,11 +69,7 @@ func (d *AgentDialer) dialMeshService(ctx context.Context, route Route) (net.Con
 			r.Out.Host = sidecarHost
 			r.Out.URL.Path = prefix + r.In.URL.Path
 			r.Out.URL.RawPath = ""
-
-			// Same reasoning as the entrypoint: an agent must not be able to
-			// assert an identity by setting the headers the sidecar honours.
-			r.Out.Header.Del(api.HeaderSamBiscuit)
-			r.Out.Header.Del(api.HeaderSamAuthentication)
+			d.assertAgent(r)
 		},
 		Transport: transport,
 	}

@@ -24,6 +24,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
@@ -41,6 +42,7 @@ func main() {
 	var (
 		sandboxSocket string
 		sidecarSocket string
+		bundlePath    string
 		egressAllow   []string
 		logLevel      string
 	)
@@ -63,7 +65,7 @@ func main() {
 				golog.SetAllLoggers(lvl)
 			}
 
-			egress, err := sambox.NewEgressPolicy(egressAllow)
+			agentID, egress, err := resolveAgent(bundlePath, egressAllow, cmd.Flags().Changed("egress-allow"))
 			if err != nil {
 				return err
 			}
@@ -81,11 +83,17 @@ func main() {
 				Dialer: &sambox.AgentDialer{
 					Router:        &sambox.Router{Egress: egress},
 					SidecarSocket: sidecarSocket,
+					AgentID:       agentID,
 				},
 			}
 
 			logger.Infof("Sandbox boundary listening on %s, node at %s", sandboxSocket, sidecarSocket)
-			logger.Infof("Agents reach the mesh at http://%s; %d egress destination(s) allowed", api.MeshEntrypointHost, len(egressAllow))
+			if agentID == "" {
+				logger.Warn("No agent bundle: this sandbox is unidentified, and mesh policy will see only the node it came through")
+			} else {
+				logger.Infof("Serving agent %s", agentID)
+			}
+			logger.Infof("Agents reach the mesh at http://%s", api.MeshEntrypointHost)
 
 			if err := server.Serve(cmd.Context(), listener); err != nil {
 				return err
@@ -97,7 +105,8 @@ func main() {
 
 	runCmd.Flags().StringVar(&sandboxSocket, "socket", "", "Path to the sandbox-facing Unix socket to serve SOCKS5 on (required)")
 	runCmd.Flags().StringVar(&sidecarSocket, "sidecar-socket", "", "Path to the local sam-node API Unix socket (required)")
-	runCmd.Flags().StringSliceVar(&egressAllow, "egress-allow", nil, "Destinations outside the mesh an agent may reach, e.g. api.github.com or *.pypi.org (default: none)")
+	runCmd.Flags().StringVar(&bundlePath, "bundle", "", "Path to the agent bundle declaring the agent's identity and its egress allowance")
+	runCmd.Flags().StringSliceVar(&egressAllow, "egress-allow", nil, "Destinations an unidentified sandbox may reach, e.g. api.github.com or *.pypi.org; use --bundle instead where an agent has an identity")
 	runCmd.Flags().StringVar(&logLevel, "log-level", "info", "Log level (debug, info, warn, error)")
 	for _, required := range []string{"socket", "sidecar-socket"} {
 		if err := runCmd.MarkFlagRequired(required); err != nil {
@@ -113,4 +122,24 @@ func main() {
 	if err := rootCmd.ExecuteContext(ctx); err != nil {
 		logger.Fatalf("%v", err)
 	}
+}
+
+// resolveAgent settles who this boundary serves. A bundle is the real answer;
+// --egress-allow covers a sandbox with no identity yet, which mesh policy can
+// only attribute to the node it came through. Accepting both would leave the
+// egress allowance ambiguous, so it is refused rather than silently resolved.
+func resolveAgent(bundlePath string, egressAllow []string, egressSet bool) (string, *sambox.EgressPolicy, error) {
+	if bundlePath == "" {
+		policy, err := sambox.NewEgressPolicy(egressAllow)
+		return "", policy, err
+	}
+	if egressSet {
+		return "", nil, fmt.Errorf("--bundle already declares the egress allowance; drop --egress-allow")
+	}
+
+	bundle, err := sambox.LoadAgentBundle(bundlePath)
+	if err != nil {
+		return "", nil, err
+	}
+	return bundle.Agent.ID, bundle.EgressPolicy(), nil
 }

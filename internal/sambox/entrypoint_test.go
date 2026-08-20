@@ -47,8 +47,13 @@ func recordingSidecar(t *testing.T) (socket string, calls chan sidecarCall) {
 
 func entrypointClient(t *testing.T, socket string) *http.Client {
 	t.Helper()
+	return entrypointClientForAgent(t, socket, "")
+}
+
+func entrypointClientForAgent(t *testing.T, socket, agentID string) *http.Client {
+	t.Helper()
 	boundary := startSOCKS5(t, &SOCKS5Server{
-		Dialer: &AgentDialer{Router: &Router{}, SidecarSocket: socket},
+		Dialer: &AgentDialer{Router: &Router{}, SidecarSocket: socket, AgentID: agentID},
 	})
 	dialer, err := proxy.SOCKS5("unix", boundary, nil, proxy.Direct)
 	if err != nil {
@@ -59,6 +64,71 @@ func entrypointClient(t *testing.T, socket string) *http.Client {
 		t.Fatal("SOCKS5 dialer does not implement ContextDialer")
 	}
 	return &http.Client{Transport: &http.Transport{DialContext: contextDialer.DialContext}}
+}
+
+// TestAgentIdentityIsAssertedToTheNode covers the half of admission that makes
+// an agent visible to mesh policy: the gateway names the principal, because it
+// is the only party that knows which agent a flow belongs to.
+func TestAgentIdentityIsAssertedToTheNode(t *testing.T) {
+	socket, calls := recordingSidecar(t)
+	client := entrypointClientForAgent(t, socket, "reviewer-7.prod.acme.example")
+
+	resp, err := client.Get("http://" + api.MeshEntrypointHost + "/v1/models")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	_ = resp.Body.Close()
+
+	if got := (<-calls).headers.Get(api.HeaderSamAgent); got != "reviewer-7.prod.acme.example" {
+		t.Errorf("%s = %q, want the agent the gateway serves", api.HeaderSamAgent, got)
+	}
+}
+
+// TestAgentCannotForgeItsIdentity is the other half. An agent that could set
+// the header would be able to borrow any other agent's authority, so the
+// gateway overwrites it rather than merging with it.
+func TestAgentCannotForgeItsIdentity(t *testing.T) {
+	t.Run("a different agent", func(t *testing.T) {
+		socket, calls := recordingSidecar(t)
+		client := entrypointClientForAgent(t, socket, "reviewer-7.prod.acme.example")
+
+		req, err := http.NewRequest(http.MethodGet, "http://"+api.MeshEntrypointHost+"/v1/models", nil)
+		if err != nil {
+			t.Fatalf("NewRequest: %v", err)
+		}
+		req.Header.Set(api.HeaderSamAgent, "privileged.prod.acme.example")
+
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("Do: %v", err)
+		}
+		_ = resp.Body.Close()
+
+		if got := (<-calls).headers.Get(api.HeaderSamAgent); got != "reviewer-7.prod.acme.example" {
+			t.Errorf("%s = %q, want the forged value replaced", api.HeaderSamAgent, got)
+		}
+	})
+
+	t.Run("any agent at all when the boundary has none", func(t *testing.T) {
+		socket, calls := recordingSidecar(t)
+		client := entrypointClient(t, socket)
+
+		req, err := http.NewRequest(http.MethodGet, "http://"+api.MeshEntrypointHost+"/v1/models", nil)
+		if err != nil {
+			t.Fatalf("NewRequest: %v", err)
+		}
+		req.Header.Set(api.HeaderSamAgent, "privileged.prod.acme.example")
+
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("Do: %v", err)
+		}
+		_ = resp.Body.Close()
+
+		if got := (<-calls).headers.Get(api.HeaderSamAgent); got != "" {
+			t.Errorf("%s = %q, want it stripped entirely", api.HeaderSamAgent, got)
+		}
+	})
 }
 
 // TestAgentReachesInferenceAndTools covers what an agent is supposed to have:

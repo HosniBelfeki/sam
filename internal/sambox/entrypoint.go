@@ -70,14 +70,7 @@ func (d *AgentDialer) entrypointHandler() http.Handler {
 			r.Out.URL.Scheme = "http"
 			r.Out.URL.Host = sidecarHost
 			r.Out.Host = sidecarHost
-
-			// Headers that assert an identity the agent does not have. The
-			// sidecar would honour them: X-Sam-Biscuit is the mesh datapath
-			// credential, and X-Sam-Authentication is the node's local gate.
-			// Authorization is left alone, because there it means the
-			// destination service's own credential and is the agent's to send.
-			r.Out.Header.Del(api.HeaderSamBiscuit)
-			r.Out.Header.Del(api.HeaderSamAuthentication)
+			d.assertAgent(r)
 		},
 		Transport: d.sidecarTransport(),
 	}
@@ -89,4 +82,24 @@ func (d *AgentDialer) entrypointHandler() http.Handler {
 		}
 		proxy.ServeHTTP(w, r)
 	})
+}
+
+// assertAgent replaces every identity-bearing header with what the gateway
+// knows, so an agent cannot claim to be anything by setting them itself.
+//
+// X-Sam-Biscuit is the mesh datapath credential and X-Sam-Authentication is the
+// node's local gate; both are the node's business, not the agent's. X-Sam-Agent
+// is the one the gateway does set, and it is always overwritten rather than
+// merged: an agent's own value must never survive.
+//
+// Authorization is deliberately untouched. There it means the destination
+// service's credential, which is the agent's to send.
+func (d *AgentDialer) assertAgent(r *httputil.ProxyRequest) {
+	r.Out.Header.Del(api.HeaderSamBiscuit)
+	r.Out.Header.Del(api.HeaderSamAuthentication)
+
+	r.Out.Header.Del(api.HeaderSamAgent)
+	if d.AgentID != "" {
+		r.Out.Header.Set(api.HeaderSamAgent, d.AgentID)
+	}
 }

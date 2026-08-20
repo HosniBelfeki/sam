@@ -40,6 +40,11 @@ type AgentDialer struct {
 	// socket, only the curated surface built on top of it (entrypoint.go).
 	SidecarSocket string
 
+	// AgentID is the principal this boundary serves, asserted to the node on
+	// every request (api.HeaderSamAgent). Empty means the sandbox is
+	// unidentified, and mesh policy sees only the node it came through.
+	AgentID string
+
 	// DialContext opens external destinations. Nil uses a plain net.Dialer;
 	// tests and future egress interception replace it.
 	DialContext func(ctx context.Context, network, address string) (net.Conn, error)
