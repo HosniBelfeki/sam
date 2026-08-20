@@ -87,6 +87,11 @@ var (
 	udsPathFlag         string
 	secretsFileFlag     string
 	interceptorsDirFlag string
+
+	// sandbox boundary flags
+	sandboxSocketFlag string
+	sidecarSocketFlag string
+	egressAllowFlag   []string
 )
 
 var logger = golog.Logger("sam-box-cli")
@@ -520,6 +525,61 @@ func main() {
 		},
 	}
 
+	// sandboxCmd is the shape sam-box is moving to: no libp2p host, no
+	// enrollment, no identity of its own. It is a client of the local
+	// sam-node's socket and a server to the sandbox, and nothing else.
+	sandboxCmd := &cobra.Command{
+		Use:   "sandbox",
+		Short: "Serve the sandbox boundary for an agent",
+		Long: "Serves SOCKS5 on a sandbox-facing Unix socket, so an unmodified agent\n" +
+			"reaches mesh inference and tools by name, and reaches nothing else\n" +
+			"unless egress policy allows it.",
+		Run: func(cmd *cobra.Command, args []string) {
+			golog.SetAllLoggers(golog.LevelInfo)
+			if logLevelFlag != "" {
+				if lvl, err := golog.LevelFromString(logLevelFlag); err == nil {
+					golog.SetAllLoggers(lvl)
+				}
+			}
+
+			if sandboxSocketFlag == "" {
+				logger.Fatal("missing required flag: --socket")
+			}
+			if sidecarSocketFlag == "" {
+				logger.Fatal("missing required flag: --sidecar-socket")
+			}
+
+			egress, err := sambox.NewEgressPolicy(egressAllowFlag)
+			if err != nil {
+				logger.Fatalf("Invalid egress policy: %v", err)
+			}
+
+			listener, err := sambox.ListenSandboxSocket(sandboxSocketFlag)
+			if err != nil {
+				logger.Fatalf("Failed to serve the sandbox boundary: %v", err)
+			}
+			defer func() {
+				_ = listener.Close()
+				_ = os.Remove(sandboxSocketFlag)
+			}()
+
+			server := &sambox.SOCKS5Server{
+				Dialer: &sambox.AgentDialer{
+					Router:        &sambox.Router{Egress: egress},
+					SidecarSocket: sidecarSocketFlag,
+				},
+			}
+
+			logger.Infof("Sandbox boundary listening on %s, node at %s", sandboxSocketFlag, sidecarSocketFlag)
+			logger.Infof("Agents reach the mesh at http://%s; %d egress destination(s) allowed", api.MeshEntrypointHost, len(egressAllowFlag))
+
+			if err := server.Serve(cmd.Context(), listener); err != nil {
+				logger.Fatalf("Sandbox boundary error: %v", err)
+			}
+			logger.Info("Sandbox boundary stopped")
+		},
+	}
+
 	// Register flags
 	runCmd.Flags().StringSliceVar(&listenAddrs, "listen", []string{"/ip4/0.0.0.0/udp/5001/quic-v1", "/ip4/0.0.0.0/tcp/5002"}, "libp2p Listen Addrs")
 	runCmd.Flags().StringVar(&jwtFlag, "jwt", "", "Pre-fetched JWT token")
@@ -547,6 +607,11 @@ func main() {
 	runCmd.Flags().StringVarP(&secretsFileFlag, "secrets-file", "s", "", "Path to the YAML file containing secrets configuration")
 	runCmd.Flags().StringVar(&interceptorsDirFlag, "interceptors-dir", "", "Path to the directory containing precompiled libinterceptor.so binaries")
 
+	sandboxCmd.Flags().StringVar(&sandboxSocketFlag, "socket", "", "Path to the sandbox-facing Unix socket to serve SOCKS5 on")
+	sandboxCmd.Flags().StringVar(&sidecarSocketFlag, "sidecar-socket", "", "Path to the local sam-node API Unix socket")
+	sandboxCmd.Flags().StringSliceVar(&egressAllowFlag, "egress-allow", nil, "Destinations outside the mesh an agent may reach, e.g. api.github.com or *.pypi.org (default: none)")
+	sandboxCmd.Flags().StringVar(&logLevelFlag, "log-level", "info", "Log level (debug, info, warn, error)")
+
 	joinCmd.Flags().BoolVar(&allowLoopbackFlag, "allow-loopback", false, "Allow publishing and connecting to loopback/link-local addresses")
 	joinCmd.Flags().DurationVar(&routerConnectTimeoutFlag, "router-connect-timeout", node.DefaultRouterConnectTimeout, "Timeout for dialing each router address")
 	joinCmd.Flags().BoolVar(&offlineAccessFlag, "offline-access", false, "Request OIDC offline access/refresh token for automatic renewal")
@@ -564,6 +629,7 @@ func main() {
 
 	rootCmd.AddCommand(runCmd)
 	rootCmd.AddCommand(joinCmd)
+	rootCmd.AddCommand(sandboxCmd)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
