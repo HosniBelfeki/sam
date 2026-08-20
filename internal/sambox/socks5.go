@@ -158,6 +158,12 @@ func (s *SOCKS5Server) Serve(ctx context.Context, l net.Listener) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			// Cancelling must drop flows, not wait them out: an established
+			// relay only ends when one side closes, so an idle keep-alive
+			// connection would otherwise hold shutdown open until some other
+			// timeout fires.
+			stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+			defer stop()
 			s.handle(ctx, conn)
 		}()
 	}

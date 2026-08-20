@@ -352,6 +352,56 @@ func TestNonSOCKS5GreetingIsDropped(t *testing.T) {
 	}
 }
 
+// TestServeDropsFlowsOnCancel pins that shutdown is prompt. An established
+// relay only ends when one side closes, so without this an idle keep-alive
+// connection holds the gateway open until some unrelated timeout fires.
+func TestServeDropsFlowsOnCancel(t *testing.T) {
+	echo := startEcho(t)
+
+	dir, err := os.MkdirTemp("", "sambox")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	socket := filepath.Join(dir, "agent.sock")
+
+	l, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+
+	server := &SOCKS5Server{
+		Dialer: DialerFunc(func(ctx context.Context, creds *Credentials, dst Destination) (net.Conn, error) {
+			return net.Dial("tcp", echo)
+		}),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	served := make(chan error, 1)
+	go func() { served <- server.Serve(ctx, l) }()
+
+	dialer, err := proxy.SOCKS5("unix", socket, nil, proxy.Direct)
+	if err != nil {
+		t.Fatalf("proxy.SOCKS5: %v", err)
+	}
+	conn, err := dialer.Dial("tcp", "api.github.com:443")
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	// The flow is established and idle, which is the case that used to hang.
+	cancel()
+	select {
+	case err := <-served:
+		if err != nil {
+			t.Fatalf("Serve: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Serve did not return after cancel; an idle flow is holding shutdown open")
+	}
+}
+
 func TestReplyCodeFor(t *testing.T) {
 	tests := []struct {
 		name string
