@@ -36,11 +36,10 @@ setup() {
   # virtio and nothing else. Checked here because the alternative is a guest
   # that panics with its explanation truncated by the panic itself.
   #
-  # grep -c rather than grep -q: where pipefail is set, a -q that matches exits
-  # early, strings takes SIGPIPE, and the pipeline reports failure for having
-  # succeeded.
+  # grep reads the binary directly rather than piping strings, which is not
+  # installed everywhere; a check that cannot run must not report a failure.
   local tun_driver
-  tun_driver="$(strings "${kernel}" 2>/dev/null | grep -c "Universal TUN/TAP" || true)"
+  tun_driver="$(grep -ac "Universal TUN/TAP" "${kernel}" 2>/dev/null || true)"
   [[ "${tun_driver}" -gt 0 ]] \
     || skip "guest kernel has no TUN driver; agent sandboxes need CONFIG_TUN"
 

@@ -140,8 +140,9 @@ Two separations do the work.
 member: it enrols, holds the mesh identity and maintains peer connections. The
 box holds no identity of its own — it consumes the node's API socket on the
 agent's behalf and names the agent on every request. Adding an agent therefore
-costs a `sam-box`, not a mesh member: [measured at about 18 MB and 59 ms](../../scale-report/),
-rather than a new enrolment and a new peer in the DHT.
+costs a `sam-box`, not a mesh member: [measured at about 25 MB and 150 ms](../../scale-report/),
+rather than a new enrolment and a new peer in the DHT. One node has been run
+with a thousand agents behind it.
 
 **The node's API stays on the node's side of the boundary.** An agent never
 reaches it. What the agent gets is the curated surface the gateway builds on

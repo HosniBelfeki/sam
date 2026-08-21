@@ -48,9 +48,9 @@ command -v "${FC}" >/dev/null 2>&1 || { echo "firecracker not found; set FC_BIN"
 # An agent sandbox has no network device and reaches the mesh through a tun, so
 # a kernel without the driver gives it no route and this measures nothing.
 #
-# grep -c rather than grep -q: under pipefail, a -q that matches exits early,
-# strings takes SIGPIPE, and the pipeline reports failure for having succeeded.
-tun_driver="$(strings "${KERNEL}" 2>/dev/null | grep -c "Universal TUN/TAP" || true)"
+# grep reads the binary directly rather than piping strings, which is not
+# installed everywhere; a check that cannot run must not report a failure.
+tun_driver="$(grep -ac "Universal TUN/TAP" "${KERNEL}" 2>/dev/null || true)"
 if [[ "${tun_driver}" -eq 0 ]]; then
     echo "guest kernel has no TUN driver; agent sandboxes need CONFIG_TUN" >&2
     exit 1

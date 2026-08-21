@@ -34,6 +34,12 @@ AGENT_DOMAIN="${AGENT_DOMAIN:-scale.sam-mesh.dev}"
 VM_MEM_MIB="${VM_MEM_MIB:-160}"
 VM_VCPUS="${VM_VCPUS:-1}"
 
+# How long a sandbox stays up after its agent finishes. A density measurement
+# needs the population resident at the same time, and left alone a sandbox
+# powers off the moment it is done -- so a thousand started in sequence are
+# never a thousand at once. Zero is the right default for real work.
+SANDBOX_LINGER="${SANDBOX_LINGER:-0}"
+
 if [ ! -d "$WORKDIR" ]; then
     echo "Error: $WORKDIR does not exist. Did cloud-init finish?" >&2
     exit 1
@@ -66,8 +72,12 @@ command -v "$SAM_BOX" >/dev/null 2>&1 || [ -x "$SAM_BOX" ] || fail "sam-box not 
 
 # An agent sandbox has no network device and reaches the mesh through a tun, so
 # a kernel without the driver gives every sandbox no route at all.
+#
+# grep reads the binary directly rather than piping strings, which is not
+# installed everywhere: a check that cannot run must not report that the check
+# failed, and this one did exactly that on a host without binutils.
 if [ -f "$WORKDIR/vmlinux.bin" ]; then
-    tun_driver="$(strings "$WORKDIR/vmlinux.bin" 2>/dev/null | grep -c "Universal TUN/TAP" || true)"
+    tun_driver="$(grep -ac "Universal TUN/TAP" "$WORKDIR/vmlinux.bin" 2>/dev/null || true)"
     [ "${tun_driver:-0}" -gt 0 ] || fail "guest kernel has no TUN driver; sandboxes need CONFIG_TUN"
 fi
 
@@ -192,9 +202,12 @@ EOF
         sleep 0.05
     done
 
+    # The kernel passes cmdline KEY=VALUE pairs it does not recognise to init
+    # as environment variables, which is the only way to tell PID 1 anything:
+    # it is started with an empty environment.
     fc_put "$API_SOCKET" /boot-source "{
         \"kernel_image_path\": \"$WORKDIR/vmlinux.bin\",
-        \"boot_args\": \"console=ttyS0 reboot=k panic=1 pci=off ro\"
+        \"boot_args\": \"console=ttyS0 reboot=k panic=1 pci=off ro SANDBOX_LINGER=${SANDBOX_LINGER}\"
     }"
 
     fc_put "$API_SOCKET" /machine-config "{

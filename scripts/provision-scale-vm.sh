@@ -16,10 +16,20 @@ while [[ "$#" -gt 0 ]]; do
         --local-binaries) GCS_URL="$2"; shift ;;
         --count) COUNT="$2"; shift ;;
         --machine-type) MACHINE_TYPE="$2"; shift ;;
+        # Spot is the right default for a fleet of minions, and the wrong one for
+        # a measurement: a run reclaimed halfway through produces no result and
+        # costs the same as one that finished.
+        --no-spot) SPOT=0 ;;
         *) echo "Unknown parameter passed: $1"; exit 1 ;;
     esac
     shift
 done
+
+if [ "${SPOT:-1}" -eq 1 ]; then
+    SCHEDULING="--provisioning-model=SPOT --preemption-notice-duration=0s --instance-termination-action=STOP"
+else
+    SCHEDULING="--provisioning-model=STANDARD"
+fi
 
 METADATA="enable-osconfig=TRUE"
 
@@ -61,9 +71,7 @@ if [ "$COUNT" -eq 1 ]; then
         --metadata-from-file=startup-script=scripts/startup-script.sh \
         --no-restart-on-failure \
         --maintenance-policy=TERMINATE \
-        --provisioning-model=SPOT \
-        --preemption-notice-duration=0s \
-        --instance-termination-action=STOP \
+        ${SCHEDULING} \
         --service-account=628944397724-compute@developer.gserviceaccount.com \
         --scopes=https://www.googleapis.com/auth/devstorage.read_only,https://www.googleapis.com/auth/logging.write,https://www.googleapis.com/auth/monitoring.write,https://www.googleapis.com/auth/service.management.readonly,https://www.googleapis.com/auth/servicecontrol,https://www.googleapis.com/auth/trace.append \
         --tags=http-server,https-server,lb-health-check \
@@ -88,9 +96,7 @@ else
         --metadata-from-file=startup-script=scripts/startup-script.sh \
         --no-restart-on-failure \
         --maintenance-policy=TERMINATE \
-        --provisioning-model=SPOT \
-        --preemption-notice-duration=0s \
-        --instance-termination-action=STOP \
+        ${SCHEDULING} \
         --service-account=628944397724-compute@developer.gserviceaccount.com \
         --scopes=https://www.googleapis.com/auth/devstorage.read_only,https://www.googleapis.com/auth/logging.write,https://www.googleapis.com/auth/monitoring.write,https://www.googleapis.com/auth/service.management.readonly,https://www.googleapis.com/auth/servicecontrol,https://www.googleapis.com/auth/trace.append \
         --tags=http-server,https-server,lb-health-check \

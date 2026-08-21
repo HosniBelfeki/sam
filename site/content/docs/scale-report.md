@@ -227,12 +227,19 @@ Written down because a result without them is advocacy.
 ## Reproducing this
 
 ```bash
-# Requires docker and kind; stands up a real mesh, then tears it down.
+# The boundary measurements: requires docker and kind, stands up a real mesh.
 ./tests/scale/run-density.sh --steps 1,2,4,8,16,32,64 --requests 500
 
-# Results, including environment.json and the raw per-step observations,
-# land in tests/scale/results/<timestamp>/ with a rendered table.md.
+# The thousand-agent run: needs a host with KVM, a guest kernel with
+# CONFIG_TUN, and a bootstrap token for a control plane.
+./scripts/provision-scale-vm.sh --no-spot --local-binaries gs://your-bucket/sam
+# then, on the host:
+SANDBOX_LINGER=2400 /opt/microvm/launch-microvms.sh 1000
+/opt/microvm/collect-fleet.sh --node-socket /var/run/sam-node.sock --duration 1500
 ```
+
+Results land in `tests/scale/results/`, including `environment.json` and the
+raw per-step observations, with a rendered `table.md`.
 
 Individual measurements can be taken by hand:
 
@@ -255,5 +262,86 @@ from wherever it is bound.
 This measures a boundary on a host. It says nothing yet about a thousand agents
 in real sandboxes against a public testnet, where microVM memory, control-plane
 enrolment and DHT behaviour all start to matter and none of them are exercised
-above. That experiment is the next one, and it is described in
-[the scale experiment guide](../scale-experiment/).
+above. That experiment is [below](#a-thousand-agents-on-one-host).
+
+## A thousand agents on one host
+
+The measurements above are of a boundary, not of a sandbox: host processes, no
+kernel per agent, no mesh beyond the machine. The obvious objection is that
+none of it survives contact with the real arrangement, where every agent is a
+Firecracker microVM with its own kernel and the node has to be a real member of
+a real mesh.
+
+So: one `n2-standard-64`, one `sam-node` enrolled in the public `bananas`
+testnet, and a thousand agents. Each agent is a microVM with **no network
+device at all**, reaching the mesh through its own `sam-box` over vsock.
+
+_Recorded 2026-08-21. Raw samples in
+[`tests/scale/results/fleet-1k`](https://github.com/google/sam/tree/main/tests/scale/results/fleet-1k)._
+
+### What a thousand agents cost
+
+| | total | per agent |
+| --- | --- | --- |
+| Guest microVMs | 162.7 GiB | **167 MiB** |
+| Boundaries (`sam-box`) | 24.6 GiB | **25 MiB** |
+| Node (one, for all of them) | 386 MiB | 0.4 MiB |
+| **Together** | **187 GiB of 251 GiB** | **192 MiB** |
+
+The node is the number worth pausing on. One `sam-node` served a thousand
+distinct agent principals in 386 MB, because an agent is not a peer: it has no
+enrolment, no key and no place in the DHT. The mesh gained a thousand
+principals and no members.
+
+### How fast they came up
+
+A thousand sandboxes launched in **149 seconds — 6.7 per second**, median
+153 ms each, p95 245 ms. The population became reachable as fast as it was
+started:
+
+| elapsed | agents serving | microVMs | guest memory |
+| --- | --- | --- | --- |
+| 0 s | 71 | 120 | 17.2 GiB |
+| 44 s | 328 | 383 | 62.1 GiB |
+| 99 s | 691 | 734 | 119.7 GiB |
+| 160 s | **1000** | 1000 | 162.7 GiB |
+| 323 s | 1000 | 1000 | 162.7 GiB |
+
+Agents trail microVMs by a few seconds and never by more than about fifty —
+that gap is a guest booting and its agent resolving a mesh name, not a queue
+forming. Nothing degraded as the population grew, and the last hundred came up
+as quickly as the first.
+
+`sam_node_agents_untracked_total` was **0**: every agent that ran was counted,
+so the thousand is a thousand and not a ceiling.
+
+### What this run says
+
+**An agent costs about 192 MiB and 150 ms**, nearly all of it the microVM. The
+boundary is 25 MB of that and the node's share is under half a megabyte. A
+host's agent count is decided by how much memory the agents themselves want.
+
+**The mesh does not grow when the agent population does.** A thousand agents
+arrived as one member with one enrolment. That is the whole reason for
+separating the principal from the peer, and it is the difference between a
+mesh that can hold this population and one that cannot.
+
+**It ran against a real, shared control plane** — not a fixture — with one
+bootstrap enrolment.
+
+### Threats to validity
+
+- **One host, one run.** No repetitions, no confidence intervals.
+- **The agents are the example harness**, which discovers tools, calls a model
+  and stops. A heavier agent needs more guest memory, and 167 MiB is a
+  statement about this workload rather than about agents in general.
+- **The population is idle at peak.** Every agent reached the mesh and was
+  counted; they were not all issuing requests when memory was measured, so this
+  is a density result and not a throughput one.
+- **A thousand is not a limit.** It is what fits comfortably in 251 GiB with
+  this agent. Nothing here found a ceiling, which also means nothing here
+  located one.
+- **Spot instances were preempted twice** before this run, mid-measurement. The
+  final run used a standard instance. Worth knowing if you reproduce it: an
+  experiment that takes ten minutes and a machine that lasts ten minutes do not
+  mix.

@@ -44,5 +44,14 @@ if ! /usr/local/bin/nano-init run vsock://2:1080 python3 /app/agent/agent.py "${
   echo "sandbox init failed; see above" > /dev/console
 fi
 
+# A density measurement needs the population to exist at the same time. Left to
+# itself a sandbox powers off the moment its agent is done, so a thousand of
+# them started in sequence are never a thousand at once, and the memory figure
+# would describe how many passed through rather than how many fit.
+if [ "${SANDBOX_LINGER:-0}" -gt 0 ] 2>/dev/null; then
+  echo "Agent finished; holding the sandbox for ${SANDBOX_LINGER}s." > /dev/console
+  sleep "${SANDBOX_LINGER}"
+fi
+
 sleep 3
 reboot -f
