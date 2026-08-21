@@ -383,6 +383,19 @@ func stdinIsInteractive() bool {
 	return isatty.IsTerminal(fd) || isatty.IsCygwinTerminal(fd)
 }
 
+// bodySnippet renders a response body for error messages, bounded so a
+// misbehaving server can't flood logs.
+func bodySnippet(body []byte) string {
+	s := strings.TrimSpace(string(body))
+	if s == "" {
+		return "(empty response body)"
+	}
+	if len(s) > 256 {
+		s = s[:256] + "..."
+	}
+	return s
+}
+
 // DeviceLogin performs OAuth 2.0 Device Authorization Grant (RFC 8628).
 func (n *SamNode) DeviceLogin(ctx context.Context, deviceAuthURL, tokenURL, clientID, audience string, requestRefresh bool) (string, error) {
 	if deviceAuthURL == "" {
@@ -546,16 +559,23 @@ func (n *SamNode) DeviceLogin(ctx context.Context, deviceAuthURL, tokenURL, clie
 			return jwt, nil
 		}
 
-		if tokenResp.StatusCode != http.StatusBadRequest {
-			return "", fmt.Errorf("token request failed with status: %s", tokenResp.Status)
-		}
-
 		var errResp struct {
 			Error            string `json:"error"`
 			ErrorDescription string `json:"error_description"`
 		}
-		if err := json.Unmarshal(body, &errResp); err != nil {
-			return "", fmt.Errorf("failed to decode token polling error response: %w", err)
+		_ = json.Unmarshal(body, &errResp)
+		pending := errResp.Error == "authorization_pending" || errResp.Error == "slow_down"
+
+		// RFC 8628 §3.5 delivers polling errors as HTTP 400 with an OAuth error
+		// body. Known exception: dex returns the pending/slow_down signals with
+		// HTTP 401. Anything else is a real failure and is surfaced verbatim.
+		rfcError := tokenResp.StatusCode == http.StatusBadRequest && errResp.Error != ""
+		dexPending := tokenResp.StatusCode == http.StatusUnauthorized && pending
+		if !rfcError && !dexPending {
+			if errResp.Error != "" {
+				return "", fmt.Errorf("token request failed with status %s: %s - %s", tokenResp.Status, errResp.Error, errResp.ErrorDescription)
+			}
+			return "", fmt.Errorf("token request failed with status %s: %s", tokenResp.Status, bodySnippet(body))
 		}
 
 		switch errResp.Error {

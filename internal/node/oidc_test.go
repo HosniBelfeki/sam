@@ -510,6 +510,106 @@ func TestDeviceLoginRetriesOnTransientTokenError(t *testing.T) {
 	}
 }
 
+// TestDeviceLoginPending401 verifies polling survives providers (e.g. dex)
+// that return authorization_pending with HTTP 401 instead of the
+// RFC 8628-mandated 400: the OAuth error code in the body wins over the
+// HTTP status code.
+func TestDeviceLoginPending401(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/device", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"device_code":      "dev_code_1",
+			"user_code":        "CCCC-DDDD",
+			"verification_uri": "https://example.com/device",
+			"expires_in":       60,
+			"interval":         1,
+		})
+	})
+
+	var pollCount int32
+	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if atomic.AddInt32(&pollCount, 1) == 1 {
+			w.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "authorization_pending"})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"id_token": "token_after_pending_401"})
+	})
+
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	node := &SamNode{}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	token, err := node.DeviceLogin(ctx, server.URL+"/device", server.URL+"/token", "client_id_test", "sam-e2e", false)
+	if err != nil {
+		t.Fatalf("DeviceLogin failed: %v", err)
+	}
+	if token != "token_after_pending_401" {
+		t.Fatalf("Expected token_after_pending_401, got %q", token)
+	}
+	if got := atomic.LoadInt32(&pollCount); got < 2 {
+		t.Fatalf("expected at least 2 poll attempts, got %d", got)
+	}
+}
+
+// TestDeviceLoginFatalErrors verifies polling aborts on terminal responses:
+// a non-OAuth error body (regardless of status) and an OAuth error code
+// that is not a pending/slow_down signal.
+func TestDeviceLoginFatalErrors(t *testing.T) {
+	cases := []struct {
+		name    string
+		status  int
+		body    string
+		wantErr string
+	}{
+		{"non-oauth 401", http.StatusUnauthorized, `{"message":"nope"}`, "token request failed with status"},
+		{"invalid_client 401", http.StatusUnauthorized, `{"error":"invalid_client","error_description":"unknown client"}`, "invalid_client"},
+		{"access_denied 400", http.StatusBadRequest, `{"error":"access_denied"}`, "denied"},
+		{"oauth-shaped 500 is not a protocol error", http.StatusInternalServerError, `{"error":"server_error"}`, "server_error"},
+		{"html 502 surfaces the body", http.StatusBadGateway, `<html>bad gateway</html>`, "bad gateway"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mux := http.NewServeMux()
+			mux.HandleFunc("/device", func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{
+					"device_code":      "dev_code_1",
+					"user_code":        "EEEE-FFFF",
+					"verification_uri": "https://example.com/device",
+					"expires_in":       60,
+					"interval":         1,
+				})
+			})
+			mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			})
+
+			server := httptest.NewServer(mux)
+			defer server.Close()
+
+			node := &SamNode{}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			_, err := node.DeviceLogin(ctx, server.URL+"/device", server.URL+"/token", "client_id_test", "sam-e2e", false)
+			if err == nil {
+				t.Fatal("expected DeviceLogin to fail")
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("expected error containing %q, got %v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
 func TestParseAuthMode(t *testing.T) {
 	cases := []struct {
 		in      string
