@@ -1,6 +1,6 @@
 module github.com/google/sam/cmd/nano-init
 
-go 1.26.5
+go 1.26.3
 
 require (
 	github.com/mdlayher/vsock v1.3.0

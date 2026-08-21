@@ -18,11 +18,12 @@ teardown() {
   mesh_cleanup_test_resources
 }
 
-# agent_curl runs a command inside the agent sandbox, which reaches the boundary
-# over the socket and nothing else.
+# agent_curl runs a command inside the agent sandbox. It is an ordinary curl
+# with no proxy flag: the sandbox has one route and it leads to the boundary, so
+# reaching the mesh takes no cooperation from the client.
 agent_curl() {
   docker exec "${MESH_PREFIX}-agent" curl -s -o /dev/null -w '%{http_code}' \
-    --max-time 10 --socks5-hostname 127.0.0.1:1080 "$@"
+    --max-time 10 "$@"
 }
 
 @test "an agent with no network reaches the mesh through its socket, and nothing else" {
@@ -62,16 +63,31 @@ agent_curl() {
     false
   }
 
-  # The sandbox: no network, no credential, only the boundary socket. socat
-  # stands in for the tun2socks a real sandbox runs, giving an ordinary client a
-  # TCP address for a socket.
+  # The sandbox: no network, no credential, no proxy configuration. nano-init is
+  # PID 1 and builds the only route out, so the client above is unmodified and
+  # does not know it is confined. NET_ADMIN and /dev/net/tun are what building
+  # that route costs.
   docker run -d --name "${MESH_PREFIX}-agent" \
     --network none \
-    --user "$(id -u):$(id -g)" \
+    --cap-add NET_ADMIN \
+    --device /dev/net/tun \
+    --user 0:0 \
     -v "${MESH_SOCKET_DIR}:/sockets" \
+    --entrypoint /usr/local/bin/nano-init \
     "${MESH_RUNTIME_IMAGE}" \
-    socat TCP-LISTEN:1080,fork,reuseaddr UNIX-CONNECT:/sockets/agent.sock >/dev/null
-  sleep 1
+    run /sockets/agent.sock sleep 300 >/dev/null
+
+  # Wait for the route rather than sleeping: a request issued before tun0 is up
+  # fails for a reason that has nothing to do with the mesh.
+  local waited=0
+  until docker exec "${MESH_PREFIX}-agent" ip route show default 2>/dev/null | grep -q tun0; do
+    sleep 0.2
+    waited=$((waited + 1))
+    [[ "${waited}" -lt 50 ]] || {
+      docker logs "${MESH_PREFIX}-agent"
+      false
+    }
+  done
 
   # What an agent is for: the mesh's inference and tool endpoints, by name.
   run agent_curl "http://mesh.sam.alt/v1/models"
@@ -100,9 +116,8 @@ agent_curl() {
     }
   done
 
-  # Egress is deny-by-default, and a name nobody allowed fails the SOCKS5
-  # handshake rather than being dialled.
-  run docker exec "${MESH_PREFIX}-agent" curl -s --max-time 10 \
-    --socks5-hostname 127.0.0.1:1080 "http://blocked.invalid/"
+  # Egress is deny-by-default, and a name nobody allowed is refused by the
+  # boundary rather than dialled.
+  run docker exec "${MESH_PREFIX}-agent" curl -s --max-time 10 "http://blocked.invalid/"
   [[ "$status" -ne 0 ]]
 }
