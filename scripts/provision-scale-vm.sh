@@ -40,6 +40,8 @@ if [ -n "$GCS_URL" ]; then
         gcloud storage cp rootfs.ext4 "$GCS_URL/rootfs.ext4"
     fi
     gcloud storage cp scripts/launch-microvms.sh "$GCS_URL/launch-microvms.sh"
+    # A run that cannot report on itself is not worth the machine it ran on.
+    gcloud storage cp tests/scale/collect-fleet.sh "$GCS_URL/collect-fleet.sh"
     
     METADATA="enable-osconfig=TRUE,sam-binaries-url=$GCS_URL"
 fi

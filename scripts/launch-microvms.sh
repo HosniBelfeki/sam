@@ -48,6 +48,42 @@ RUN_DIR="${RUN_DIR:-/var/run}"
 LOG_DIR="${LOG_DIR:-/var/log}"
 SAM_NODE="${SAM_NODE:-sam-node}"
 SAM_BOX="${SAM_BOX:-sam-box}"
+BOOTSTRAP_TOKEN_PATH="${BOOTSTRAP_TOKEN_PATH:-/etc/sam-bootstrap-token}"
+
+# Everything is checked before anything is started. Launching a thousand
+# sandboxes against a node that turned out to be unenrollable wastes the whole
+# run and reports it as a boundary problem, and a token file that exists but is
+# empty produces a node that quietly waits to be enrolled forever rather than
+# an error anyone can act on.
+preflight_failed=0
+fail() { echo "preflight: $*" >&2; preflight_failed=1; }
+
+command -v firecracker >/dev/null 2>&1 || fail "firecracker is not installed"
+[ -w /dev/kvm ] || fail "/dev/kvm is not writable; nested virtualisation is required"
+[ -f "$WORKDIR/vmlinux.bin" ] || fail "no guest kernel at $WORKDIR/vmlinux.bin"
+[ -f "$WORKDIR/rootfs.ext4" ] || fail "no guest rootfs at $WORKDIR/rootfs.ext4"
+command -v "$SAM_BOX" >/dev/null 2>&1 || [ -x "$SAM_BOX" ] || fail "sam-box not found ($SAM_BOX)"
+
+# An agent sandbox has no network device and reaches the mesh through a tun, so
+# a kernel without the driver gives every sandbox no route at all.
+if [ -f "$WORKDIR/vmlinux.bin" ]; then
+    tun_driver="$(strings "$WORKDIR/vmlinux.bin" 2>/dev/null | grep -c "Universal TUN/TAP" || true)"
+    [ "${tun_driver:-0}" -gt 0 ] || fail "guest kernel has no TUN driver; sandboxes need CONFIG_TUN"
+fi
+
+# A node that is already serving needs no credential. One that has to be
+# started does, and finding that out after a fleet is up is too late.
+if [ ! -S "$NODE_UDS" ]; then
+    command -v "$SAM_NODE" >/dev/null 2>&1 || [ -x "$SAM_NODE" ] || fail "sam-node not found ($SAM_NODE)"
+    if [ ! -s "$BOOTSTRAP_TOKEN_PATH" ]; then
+        fail "no bootstrap token at $BOOTSTRAP_TOKEN_PATH (set BOOTSTRAP_TOKEN_PATH), and no node already serving $NODE_UDS"
+    fi
+fi
+
+if [ "$preflight_failed" -ne 0 ]; then
+    echo "preflight: refusing to start anything" >&2
+    exit 1
+fi
 
 mkdir -p "${RUN_DIR}" "${LOG_DIR}"
 
@@ -62,6 +98,7 @@ else
     "${SAM_NODE}" run \
         --data-dir "${NODE_DIR}" \
         --control-plane "$CONTROL_PLANE" \
+        --bootstrap-token-path "${BOOTSTRAP_TOKEN_PATH}" \
         --bind-addr "" \
         --socket-path "${NODE_UDS}" \
         > "${LOG_DIR}/sam-node.log" 2>&1 &
@@ -75,6 +112,23 @@ else
     done
     [ -S "${NODE_UDS}" ] || {
         echo "node never bound ${NODE_UDS}" >&2
+        tail -20 "${LOG_DIR}/sam-node.log" >&2
+        exit 1
+    }
+
+    # A socket is not enrolment. A node with no identity serves a reduced
+    # surface for enrolment and nothing else, so it binds the socket and then
+    # waits forever -- which looks like success from here. /metrics exists only
+    # on the full sidecar, so it is the cheapest honest proof of enrolment.
+    enrolled=0
+    for _ in $(seq 1 300); do
+        code="$(curl -s -o /dev/null -w '%{http_code}' --unix-socket "${NODE_UDS}" \
+            http://localhost/metrics 2>/dev/null || true)"
+        if [ "${code}" = "200" ]; then enrolled=1; break; fi
+        sleep 1
+    done
+    [ "${enrolled}" -eq 1 ] || {
+        echo "node bound its socket but never enrolled; is the bootstrap token valid?" >&2
         tail -20 "${LOG_DIR}/sam-node.log" >&2
         exit 1
     }

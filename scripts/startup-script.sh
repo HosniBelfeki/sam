@@ -48,8 +48,10 @@ if [ -n "$BIN_URL" ] && [ "$BIN_URL" != "null" ]; then
     # Download the pre-built MicroVM rootfs
     mkdir -p /opt/microvm
     gcloud storage cp "$BIN_URL/rootfs.ext4" /opt/microvm/rootfs.ext4
-    # Download the launch script
+    # Download the launch script and the collector that reports on the run
     gcloud storage cp "$BIN_URL/launch-microvms.sh" /opt/microvm/launch-microvms.sh
+    gcloud storage cp "$BIN_URL/collect-fleet.sh" /opt/microvm/collect-fleet.sh || true
+    chmod +x /opt/microvm/collect-fleet.sh 2>/dev/null || true
 else
     echo "No custom binaries specified. Installing latest release from github..."
     export SAM_INSTALL_DIR=/usr/local/bin

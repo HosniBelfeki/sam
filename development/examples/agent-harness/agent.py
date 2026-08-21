@@ -64,7 +64,10 @@ async def discover_tools(session):
                 "function": {
                     "name": tool.name,
                     "description": tool.description or "",
-                    "parameters": tool.inputSchema
+                    # input_schema, not inputSchema: the SDK renamed it in 2.0
+                    # along with the transport, and the old name raises an
+                    # AttributeError only once a tool is actually discovered.
+                    "parameters": tool.input_schema
                     or {"type": "object", "properties": {}},
                 },
             }
