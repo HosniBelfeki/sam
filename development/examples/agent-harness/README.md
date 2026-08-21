@@ -24,9 +24,12 @@ Full walkthrough: [Running agents on SAM](https://sam-mesh.dev/docs/user/running
 | | |
 | --- | --- |
 | `agent.py` | The harness. Discovers tools, calls a model, runs the loop. |
-| `entrypoint.sh` | The sandbox's route: a tun that leads to the boundary and nowhere else. |
 | `bundle.yaml` | Who this agent is and what it may reach. Read by `sam-box`, outside the sandbox. |
-| `Dockerfile` | The sandbox image: the harness and the plumbing that gives it a route. |
+| `Dockerfile` | The sandbox image: the harness, plus `nano-init` to give it a route. |
+
+The image contains no tun2proxy, no socat and no iproute2. `nano-init` carries
+its own TCP stack and speaks netlink directly, so a sandbox can be the agent
+and nothing else.
 
 ## Running it
 
