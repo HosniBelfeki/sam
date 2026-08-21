@@ -202,6 +202,41 @@ func TestControlPlaneBasic(t *testing.T) {
 		t.Errorf("expected 0 active routers, got %d", len(info.RouterAddresses))
 	}
 
+	// With an explicit OIDC client id, /info must advertise it while the
+	// audience stays the first allowed audience.
+	t.Run("explicit oidc client id", func(t *testing.T) {
+		dbPath := filepath.Join(t.TempDir(), "cp-clientid.db")
+		st, err := storage.NewSQLStore("sqlite", dbPath)
+		if err != nil {
+			t.Fatalf("failed to create store: %v", err)
+		}
+		defer func() { _ = st.Close() }()
+
+		srv2, err := NewServer(Options{
+			DriverName:       "sqlite",
+			DataSourceName:   dbPath,
+			OIDCIssuer:       issuer,
+			OIDCClientID:     "sam-cli-app",
+			AllowedAudiences: []string{"sam-mesh-audience"},
+		}, st)
+		if err != nil {
+			t.Fatalf("failed to create server: %v", err)
+		}
+
+		rec := httptest.NewRecorder()
+		srv2.HandleInfo(rec, httptest.NewRequest(http.MethodGet, "/info", nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("unexpected /info status: %d", rec.Code)
+		}
+		var info2 api.ControlPlaneInfoResponse
+		if err := proto.Unmarshal(rec.Body.Bytes(), &info2); err != nil {
+			t.Fatalf("failed to unmarshal ControlPlaneInfoResponse: %v", err)
+		}
+		if info2.ClientId != "sam-cli-app" || info2.Audience != "sam-mesh-audience" {
+			t.Errorf("unexpected client id/audience: %+v", &info2)
+		}
+	})
+
 	// 2. Test /keys
 	resp, err = client.Get(baseURL + "/keys")
 	if err != nil {
