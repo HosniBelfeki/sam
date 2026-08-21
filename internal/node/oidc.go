@@ -386,12 +386,12 @@ func stdinIsInteractive() bool {
 // bodySnippet renders a response body for error messages, bounded so a
 // misbehaving server can't flood logs.
 func bodySnippet(body []byte) string {
+	if len(body) > 256 {
+		return strings.TrimSpace(string(body[:256])) + "..."
+	}
 	s := strings.TrimSpace(string(body))
 	if s == "" {
 		return "(empty response body)"
-	}
-	if len(s) > 256 {
-		s = s[:256] + "..."
 	}
 	return s
 }
@@ -527,7 +527,9 @@ func (n *SamNode) DeviceLogin(ctx context.Context, deviceAuthURL, tokenURL, clie
 			continue
 		}
 
-		body, readErr := io.ReadAll(tokenResp.Body)
+		// Cap the read: the poll target comes from discovery and a misbehaving
+		// server must not be able to exhaust memory.
+		body, readErr := io.ReadAll(io.LimitReader(tokenResp.Body, 1<<20))
 		if closeErr := tokenResp.Body.Close(); closeErr != nil {
 			logger.Errorf("Failed to close response body: %v", closeErr)
 		}
@@ -575,7 +577,11 @@ func (n *SamNode) DeviceLogin(ctx context.Context, deviceAuthURL, tokenURL, clie
 		dexPending := tokenResp.StatusCode == http.StatusUnauthorized && pending
 		if !rfcError && !dexPending {
 			if errResp.Error != "" {
-				return "", fmt.Errorf("token request failed with status %s: %s - %s", tokenResp.Status, errResp.Error, errResp.ErrorDescription)
+				msg := errResp.Error
+				if errResp.ErrorDescription != "" {
+					msg += " - " + errResp.ErrorDescription
+				}
+				return "", fmt.Errorf("token request failed with status %s: %s", tokenResp.Status, msg)
 			}
 			return "", fmt.Errorf("token request failed with status %s: %s", tokenResp.Status, bodySnippet(body))
 		}

@@ -71,6 +71,9 @@ func VerifyJWT(ctx context.Context, jwtStr string, allowedAudiences []string, pr
 				break
 			}
 		}
+		if validAudience {
+			break
+		}
 	}
 	if !validAudience {
 		return nil, nil, fmt.Errorf("untrusted audience(s): %s", strings.Join(auds, ", "))
