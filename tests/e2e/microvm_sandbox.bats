@@ -13,6 +13,10 @@
 # This deliberately does not stand up a mesh. A mesh would make the test slower
 # and would not make it prove anything more: what is in question is whether a
 # microVM can reach the boundary at all.
+#
+# FC_MEM_MIB sizes the guest, defaulting to 160: the smallest size measured to
+# run the example Python harness at full speed. Raise it for a heavier agent,
+# and see tests/scale/measure-guest.sh to measure your own.
 
 load "lib/container_mesh.bash"
 
@@ -31,7 +35,13 @@ setup() {
   # Firecracker CI kernels are built without CONFIG_TUN: they carry vsock and
   # virtio and nothing else. Checked here because the alternative is a guest
   # that panics with its explanation truncated by the panic itself.
-  strings "${kernel}" 2>/dev/null | grep -q "Universal TUN/TAP" \
+  #
+  # grep -c rather than grep -q: where pipefail is set, a -q that matches exits
+  # early, strings takes SIGPIPE, and the pipeline reports failure for having
+  # succeeded.
+  local tun_driver
+  tun_driver="$(strings "${kernel}" 2>/dev/null | grep -c "Universal TUN/TAP" || true)"
+  [[ "${tun_driver}" -gt 0 ]] \
     || skip "guest kernel has no TUN driver; agent sandboxes need CONFIG_TUN"
 
   FC_DIR="$(mktemp -d /tmp/fc-smoke-XXXXXX)"
@@ -79,7 +89,7 @@ fc_put() {
     \"kernel_image_path\": \"${kernel}\",
     \"boot_args\": \"console=ttyS0 reboot=k panic=1 pci=off\"
   }"
-  fc_put /machine-config '{ "vcpu_count": 1, "mem_size_mib": 256 }'
+  fc_put /machine-config "{ \"vcpu_count\": ${FC_VCPUS:-1}, \"mem_size_mib\": ${FC_MEM_MIB:-160} }"
   fc_put /drives/rootfs "{
     \"drive_id\": \"rootfs\",
     \"path_on_host\": \"${FC_DIR}/rootfs.ext4\",

@@ -20,7 +20,18 @@ AGENT_DOMAIN="${AGENT_DOMAIN:-scale.sam-mesh.dev}"
 # Firecracker defaults to 128 MiB, which silently decides how many agents fit
 # on a host. Saying it out loud makes density a parameter of the experiment
 # rather than a property of the tool.
-VM_MEM_MIB="${VM_MEM_MIB:-256}"
+#
+# 160 is the smallest size measured to run the example Python harness at full
+# speed: 144 works but boots a second slower for being cramped, and 136 never
+# reaches the boundary at all. A heavier agent needs more, so measure your own
+# rootfs with tests/scale/measure-guest.sh rather than trusting a number
+# written for this one.
+#
+# Worth knowing when budgeting: mem_size_mib is a ceiling, not an allocation.
+# The host only pays for pages the guest touches, so raising it is cheap and
+# the real cost per agent is roughly the guest's working set plus about 18 MiB
+# for its sam-box.
+VM_MEM_MIB="${VM_MEM_MIB:-160}"
 VM_VCPUS="${VM_VCPUS:-1}"
 
 if [ ! -d "$WORKDIR" ]; then
