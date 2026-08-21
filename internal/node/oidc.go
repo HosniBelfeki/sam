@@ -563,6 +563,8 @@ func (n *SamNode) DeviceLogin(ctx context.Context, deviceAuthURL, tokenURL, clie
 			Error            string `json:"error"`
 			ErrorDescription string `json:"error_description"`
 		}
+		// Best-effort: non-JSON bodies (proxy HTML, empty) leave Error empty
+		// and are reported raw via bodySnippet below.
 		_ = json.Unmarshal(body, &errResp)
 		pending := errResp.Error == "authorization_pending" || errResp.Error == "slow_down"
 
