@@ -31,7 +31,7 @@ import os
 import sys
 
 from mcp import ClientSession
-from mcp.client.sse import sse_client
+from mcp.client.streamable_http import streamable_http_client
 from openai import AsyncOpenAI
 
 # The mesh's own name for itself. Not DNS, not routable, and deliberately not
@@ -93,7 +93,10 @@ async def run(task, model, max_steps):
     # the mesh. The SDK requires the argument, so it gets a placeholder.
     client = AsyncOpenAI(base_url=f"{MESH}/v1", api_key="unused")
 
-    async with sse_client(f"{MESH}/mcp") as (read, write):
+    # Streamable HTTP, which is what the mesh serves. The older SSE transport
+    # is answered with 400, and that arrives late enough to look like a network
+    # problem rather than a protocol one.
+    async with streamable_http_client(f"{MESH}/mcp") as (read, write):
         async with ClientSession(read, write) as session:
             await session.initialize()
 

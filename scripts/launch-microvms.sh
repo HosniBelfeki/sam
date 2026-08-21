@@ -39,34 +39,47 @@ if [ ! -d "$WORKDIR" ]; then
     exit 1
 fi
 
-NODE_UDS="/var/run/sam-node.sock"
-NODE_DIR="/var/lib/sam-node"
+# Everything the host writes is overridable, so this can be exercised on a
+# workstation before it is trusted on a fleet. The defaults are the paths a
+# provisioned VM has.
+NODE_UDS="${NODE_UDS:-/var/run/sam-node.sock}"
+NODE_DIR="${NODE_DIR:-/var/lib/sam-node}"
+RUN_DIR="${RUN_DIR:-/var/run}"
+LOG_DIR="${LOG_DIR:-/var/log}"
+SAM_NODE="${SAM_NODE:-sam-node}"
+SAM_BOX="${SAM_BOX:-sam-box}"
+
+mkdir -p "${RUN_DIR}" "${LOG_DIR}"
 
 echo "=== One node for the host ==="
-mkdir -p "$NODE_DIR"
-if ! pgrep -f "sam-node run .*${NODE_UDS}" >/dev/null; then
-    rm -f "$NODE_UDS"
-    sam-node run \
-        --data-dir "$NODE_DIR" \
+# An existing socket is taken as an existing node. That makes this safe to run
+# twice, and lets an operator start the node however their environment needs
+# rather than only the way this script would.
+if [ -S "${NODE_UDS}" ]; then
+    echo "Using the node already serving ${NODE_UDS}"
+else
+    mkdir -p "${NODE_DIR}"
+    "${SAM_NODE}" run \
+        --data-dir "${NODE_DIR}" \
         --control-plane "$CONTROL_PLANE" \
         --bind-addr "" \
-        --socket-path "$NODE_UDS" \
-        > /var/log/sam-node.log 2>&1 &
+        --socket-path "${NODE_UDS}" \
+        > "${LOG_DIR}/sam-node.log" 2>&1 &
 
     # The boundaries are useless before the node answers, and starting a
     # thousand of them against a socket that does not exist yet produces a
     # thousand identical failures instead of one clear one.
     for _ in $(seq 1 600); do
-        [ -S "$NODE_UDS" ] && break
+        [ -S "${NODE_UDS}" ] && break
         sleep 0.1
     done
-    [ -S "$NODE_UDS" ] || {
-        echo "node never bound $NODE_UDS" >&2
-        tail -20 /var/log/sam-node.log >&2
+    [ -S "${NODE_UDS}" ] || {
+        echo "node never bound ${NODE_UDS}" >&2
+        tail -20 "${LOG_DIR}/sam-node.log" >&2
         exit 1
     }
+    echo "Node ready at ${NODE_UDS}"
 fi
-echo "Node ready at $NODE_UDS"
 
 fc_put() {
     curl -sf -X PUT --unix-socket "$1" \
@@ -79,10 +92,10 @@ for i in $(seq 1 "$COUNT"); do
     # Firecracker's vsock multiplexes guest connections onto
     # "<uds_path>_<port>", so the boundary must listen on that exact name for
     # the guest's connections to CID 2 port 1080 to arrive.
-    VSOCK_UDS="/var/run/sam-$VM_ID.vsock"
+    VSOCK_UDS="${RUN_DIR}/sam-$VM_ID.vsock"
     BOUNDARY_UDS="${VSOCK_UDS}_1080"
     API_SOCKET="/tmp/firecracker-$VM_ID.socket"
-    BUNDLE="/var/run/sam-$VM_ID.bundle.yaml"
+    BUNDLE="${RUN_DIR}/sam-$VM_ID.bundle.yaml"
 
     rm -f "$VSOCK_UDS" "$BOUNDARY_UDS" "$API_SOCKET"
 
@@ -104,14 +117,14 @@ EOF
 
     # There is no credential issuer in this harness, and the flag says so
     # rather than a default quietly meaning it.
-    sam-box run \
+    "${SAM_BOX}" run \
         --socket "$BOUNDARY_UDS" \
-        --sidecar-socket "$NODE_UDS" \
+        --sidecar-socket "${NODE_UDS}" \
         --bundle "$BUNDLE" \
         --insecure-unverified-bundle \
-        > "/var/log/sam-box-$VM_ID.log" 2>&1 &
+        > "${LOG_DIR}/sam-box-$VM_ID.log" 2>&1 &
 
-    firecracker --api-sock "$API_SOCKET" > "/var/log/fc-$VM_ID.log" 2>&1 &
+    firecracker --api-sock "$API_SOCKET" > "${LOG_DIR}/fc-$VM_ID.log" 2>&1 &
 
     for _ in $(seq 1 100); do
         [ -S "$API_SOCKET" ] && break
