@@ -194,7 +194,7 @@ EOF
 
     fc_put "$API_SOCKET" /boot-source "{
         \"kernel_image_path\": \"$WORKDIR/vmlinux.bin\",
-        \"boot_args\": \"console=ttyS0 reboot=k panic=1 pci=off\"
+        \"boot_args\": \"console=ttyS0 reboot=k panic=1 pci=off ro\"
     }"
 
     fc_put "$API_SOCKET" /machine-config "{
@@ -202,12 +202,15 @@ EOF
         \"mem_size_mib\": $VM_MEM_MIB
     }"
 
-    cp "$WORKDIR/rootfs.ext4" "$WORKDIR/rootfs-$VM_ID.ext4"
+    # One rootfs, shared read-only by every sandbox. A private copy per agent
+    # is 500 MB of disk and a 500 MB write before the guest can even boot,
+    # which at a thousand agents exhausts the disk long before the memory. The
+    # guest gives itself tmpfs for the few paths that must be writable.
     fc_put "$API_SOCKET" /drives/rootfs "{
         \"drive_id\": \"rootfs\",
-        \"path_on_host\": \"$WORKDIR/rootfs-$VM_ID.ext4\",
+        \"path_on_host\": \"$WORKDIR/rootfs.ext4\",
         \"is_root_device\": true,
-        \"is_read_only\": false
+        \"is_read_only\": true
     }"
 
     # Guest CID 3 is the first available guest CID. Connections the guest makes

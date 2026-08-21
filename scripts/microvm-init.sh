@@ -19,6 +19,17 @@ mount -t proc proc /proc 2>/dev/null || true
 mount -t sysfs sysfs /sys 2>/dev/null || true
 mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
 
+# The root filesystem is shared read-only by every sandbox on the host, because
+# a private 500 MB copy per agent is half a terabyte at a thousand agents and
+# the disk is the first thing to run out. Nothing here needs to persist, so the
+# few paths that must be writable are given tmpfs and the rest stays shared.
+mount -t tmpfs tmpfs /tmp 2>/dev/null || true
+if ! touch /etc/.writable 2>/dev/null; then
+    mkdir -p /tmp/etc && cp -a /etc/. /tmp/etc/ 2>/dev/null || true
+    mount --bind /tmp/etc /etc 2>/dev/null || true
+fi
+rm -f /etc/.writable 2>/dev/null || true
+
 TASK="${AGENT_TASK:-Describe the tools you have and what each is for.}"
 
 # The kernel hands PID 1 an empty environment, so there is no PATH to inherit
