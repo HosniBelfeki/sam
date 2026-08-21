@@ -4,29 +4,40 @@ set -e
 # Usage: ./scripts/build-rootfs.sh [GCS_URL]
 GCS_URL=${1:-}
 
-echo "Building Alpine Linux rootfs with Python, tun2proxy v0.8.3, and Chaos Agent..."
-cat << 'EOF' > Dockerfile
+# The guest ships the canonical agent harness, not the chaos agent. The chaos
+# agent is driven by a real model and is the right tool for asking whether the
+# mesh survives an autonomous caller; it is the wrong one for a scale run,
+# because it never issues the same request twice and needs model credentials
+# inside the sandbox, which is the arrangement this design exists to avoid.
+AGENT_SRC="${AGENT_SRC:-development/examples/agent-harness}"
+
+echo "Building Alpine rootfs: python and ${AGENT_SRC}..."
+cat << EOF > Dockerfile
+FROM golang:1.26.5 AS init
+WORKDIR /src
+COPY cmd/nano-init/go.mod cmd/nano-init/go.sum ./
+RUN go mod download
+COPY cmd/nano-init/ ./
+RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /nano-init .
+
 FROM alpine:3.18
-RUN apk add --no-cache python3 py3-pip openrc iproute2 socat curl
+# python for the agent, and nothing else. nano-init carries its own TCP stack
+# and speaks netlink directly, so there is no tun2proxy to download, no socat
+# and no iproute2. That also removes the last unverified binary from this
+# image: tun2proxy arrived by curl from a GitHub release with no checksum.
+RUN apk add --no-cache python3 py3-pip
 
-# Install tun2proxy
-RUN apk add --no-cache unzip \
-    && curl -sSL -o /tmp/tun.zip https://github.com/tun2proxy/tun2proxy/releases/download/v0.8.3/tun2proxy-x86_64-unknown-linux-musl.zip \
-    && unzip /tmp/tun.zip tun2proxy-bin -d /tmp/ \
-    && mv /tmp/tun2proxy-bin /usr/local/bin/tun2proxy \
-    && chmod +x /usr/local/bin/tun2proxy \
-    && rm /tmp/tun.zip
+COPY ${AGENT_SRC} /app/agent
+RUN pip3 install --no-cache-dir -r /app/agent/requirements.txt --break-system-packages
 
-COPY cmd/chaos-agent /app/chaos-agent
-RUN pip3 install --no-cache-dir -r /app/chaos-agent/requirements.txt --break-system-packages
-
+COPY --from=init /nano-init /usr/local/bin/nano-init
 RUN rm -f /sbin/init
 COPY --chmod=755 scripts/microvm-init.sh /sbin/init
 EOF
 
 # Build the docker container
-docker build -t chaos-rootfs -f Dockerfile .
-CONTAINER_ID=$(docker create chaos-rootfs)
+docker build -t agent-rootfs -f Dockerfile .
+CONTAINER_ID=$(docker create agent-rootfs)
 docker export $CONTAINER_ID > rootfs.tar
 docker rm $CONTAINER_ID
 
