@@ -22,7 +22,7 @@ import (
 	"strconv"
 	"strings"
 
-	"golang.org/x/sys/unix"
+	"github.com/mdlayher/vsock"
 )
 
 // A sandbox reaches its boundary one of two ways, and the difference is the
@@ -31,19 +31,35 @@ import (
 // A container gets the socket bind-mounted in, so it dials a path. A microVM
 // has no shared filesystem and no network device, so it dials vsock, and
 // Firecracker delivers that to a Unix socket on the host named
-// "<uds_path>_<port>". Both arrive at the same sam-box, which is why one
-// binary serves both and neither sandbox contains anything that knows which
-// kind it is beyond this string.
+// "<uds_path>_<port>". Both arrive at the same sam-box, which is why one binary
+// serves both and nothing else in the sandbox knows which kind it is.
+//
+// The vsock socket work is a library rather than forty lines of syscalls here.
+// It was forty lines of syscalls, and they were wrong: net.FileConn refuses an
+// AF_VSOCK descriptor outright, and the replacement leaned on os.File's poller
+// registration for deadlines, which degrades silently to no deadlines at all if
+// registration fails. Both are the kind of mistake that surfaces as a hung flow
+// under load rather than an error at startup. This module already carries a
+// TCP stack, so a thousand lines of well-exercised socket handling is not the
+// dependency worth economising on.
 
 const vsockScheme = "vsock://"
 
 // dialBoundary opens a connection to the boundary named by spec, which is
 // either "vsock://<cid>:<port>" or a Unix socket path.
 func dialBoundary(ctx context.Context, spec string) (net.Conn, error) {
-	if strings.HasPrefix(spec, vsockScheme) {
-		return dialVsock(ctx, strings.TrimPrefix(spec, vsockScheme))
+	if !strings.HasPrefix(spec, vsockScheme) {
+		return (&net.Dialer{Timeout: boundaryDialTimeout}).DialContext(ctx, "unix", spec)
 	}
-	return (&net.Dialer{Timeout: boundaryDialTimeout}).DialContext(ctx, "unix", spec)
+
+	cid, port, err := parseVsock(strings.TrimPrefix(spec, vsockScheme))
+	if err != nil {
+		return nil, err
+	}
+	// There is no context-aware Dial, and none is needed: the peer is the
+	// hypervisor on the other side of a virtual bus, so this either succeeds
+	// or fails immediately rather than waiting on anything that could hang.
+	return vsock.Dial(cid, port, nil)
 }
 
 // checkBoundary reports whether the boundary named by spec could plausibly be
@@ -54,9 +70,8 @@ func checkBoundary(spec string) error {
 		if _, _, err := parseVsock(strings.TrimPrefix(spec, vsockScheme)); err != nil {
 			return err
 		}
-		// Whether the host is listening cannot be known until a connection is
-		// attempted, and attempting one here would consume a flow the agent
-		// has not asked for yet.
+		// Whether the host is listening cannot be known without connecting,
+		// and connecting here would consume a flow the agent has not asked for.
 		return nil
 	}
 	if _, err := os.Stat(spec); err != nil {
@@ -80,37 +95,4 @@ func parseVsock(hostPort string) (cid, port uint32, err error) {
 		return 0, 0, fmt.Errorf("vsock port %q: %w", rawPort, err)
 	}
 	return uint32(parsedCID), uint32(parsedPort), nil
-}
-
-// dialVsock opens an AF_VSOCK connection.
-//
-// This is done by hand rather than with a library because it is one socket, one
-// connect, and a library would be a dependency carried into every sandbox for
-// forty lines.
-func dialVsock(ctx context.Context, hostPort string) (net.Conn, error) {
-	cid, port, err := parseVsock(hostPort)
-	if err != nil {
-		return nil, err
-	}
-
-	fd, err := unix.Socket(unix.AF_VSOCK, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
-	if err != nil {
-		return nil, fmt.Errorf("vsock socket: %w", err)
-	}
-
-	if err := unix.Connect(fd, &unix.SockaddrVM{CID: cid, Port: port}); err != nil {
-		_ = unix.Close(fd)
-		return nil, fmt.Errorf("vsock connect %d:%d: %w", cid, port, err)
-	}
-
-	// net.FileConn dups the descriptor and hands it to the runtime poller, so
-	// the original has to be closed or every flow leaks one.
-	file := os.NewFile(uintptr(fd), "vsock")
-	defer func() { _ = file.Close() }()
-
-	conn, err := net.FileConn(file)
-	if err != nil {
-		return nil, fmt.Errorf("vsock conn: %w", err)
-	}
-	return conn, nil
 }
