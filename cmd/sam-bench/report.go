@@ -33,6 +33,7 @@ func newReportCmd() *cobra.Command {
 	var (
 		by      string
 		metrics []string
+		gauges  []string
 	)
 
 	cmd := &cobra.Command{
@@ -48,13 +49,14 @@ func newReportCmd() *cobra.Command {
 				return err
 			}
 			sortBy(observations, by)
-			_, err = fmt.Fprint(cmd.OutOrStdout(), render(observations, by, metrics))
+			_, err = fmt.Fprint(cmd.OutOrStdout(), render(observations, by, metrics, gauges))
 			return err
 		},
 	}
 
 	cmd.Flags().StringVar(&by, "by", "agents", "Label the runs varied, used to order the rows")
-	cmd.Flags().StringArrayVar(&metrics, "metric", nil, "Extra series to include as a column, as the difference across the run; repeatable")
+	cmd.Flags().StringArrayVar(&metrics, "metric", nil, "Counter to include as a column, as the difference across the run; repeatable")
+	cmd.Flags().StringArrayVar(&gauges, "gauge", nil, "Gauge to include as total and per-source columns, as read after the run; repeatable")
 	return cmd
 }
 
@@ -91,9 +93,12 @@ func sortBy(observations []observation, label string) {
 	})
 }
 
-func render(observations []observation, by string, metrics []string) string {
+func render(observations []observation, by string, metrics, gauges []string) string {
 	header := []string{by, "requests", "conc", "ok", "failed", "rps", "ttfb p50", "ttfb p95", "ttfb p99", "ttfb max"}
 	header = append(header, metrics...)
+	for _, g := range gauges {
+		header = append(header, g+" total", g+" each")
+	}
 
 	rows := make([][]string, 0, len(observations))
 	for _, obs := range observations {
@@ -113,6 +118,15 @@ func render(observations []observation, by string, metrics []string) string {
 		for _, m := range metrics {
 			row = append(row, fmt.Sprintf("%.0f", delta(obs, m)))
 		}
+		for _, g := range gauges {
+			total, sources := gauge(obs, g)
+			row = append(row, fmt.Sprintf("%.0f", total))
+			if sources == 0 {
+				row = append(row, "-")
+				continue
+			}
+			row = append(row, fmt.Sprintf("%.0f", total/float64(sources)))
+		}
 		rows = append(rows, row)
 	}
 
@@ -123,6 +137,21 @@ func render(observations []observation, by string, metrics []string) string {
 		b.WriteString("| " + strings.Join(row, " | ") + " |\n")
 	}
 	return b.String()
+}
+
+// gauge totals a series across sources as read after the run, and says how
+// many sources reported it. A gauge is a level rather than an accumulation, so
+// unlike a counter its difference across the run means nothing.
+func gauge(obs observation, series string) (total float64, sources int) {
+	for _, after := range obs.After {
+		value, ok := after[series]
+		if !ok {
+			continue
+		}
+		total += value
+		sources++
+	}
+	return total, sources
 }
 
 // delta is how much a series moved across the run, summed over every scrape

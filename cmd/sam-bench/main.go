@@ -61,6 +61,7 @@ type observation struct {
 func main() {
 	var (
 		socket      string
+		unixTarget  string
 		target      string
 		method      string
 		body        string
@@ -105,6 +106,7 @@ func main() {
 
 			obs.Report, err = bench.Run(cmd.Context(), bench.Options{
 				Socket:            socket,
+				UnixTarget:        unixTarget,
 				Target:            target,
 				Method:            method,
 				Body:              []byte(body),
@@ -130,6 +132,7 @@ func main() {
 
 	flags := runCmd.Flags()
 	flags.StringVar(&socket, "socket", "", "Sandbox boundary SOCKS5 socket to measure through; omit to measure the same workload without a boundary, which is the baseline")
+	flags.StringVar(&unixTarget, "target-unix", "", "Dial the target over this Unix socket rather than resolving its host, so a baseline needs no relay in the path")
 	flags.StringVar(&target, "target", "", "URL to request, e.g. http://mesh.sam.alt/v1/models (required)")
 	flags.StringVar(&method, "method", "GET", "HTTP method")
 	flags.StringVar(&body, "body", "", "Request body")

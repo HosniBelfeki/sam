@@ -50,6 +50,13 @@ type Options struct {
 	// numbers are only meaningful against.
 	Socket string
 
+	// UnixTarget dials the target over this Unix socket instead of resolving
+	// its host. It is how the baseline reaches the node's own API without a
+	// relay in between: putting one there, socat or otherwise, would add a
+	// userspace hop to the baseline and quietly flatter everything measured
+	// against it.
+	UnixTarget string
+
 	// Target is the URL to request, e.g. http://mesh.sam.alt/v1/models.
 	Target string
 
@@ -292,7 +299,10 @@ func newClient(opts Options) (*http.Client, error) {
 		DisableKeepAlives:   opts.NewFlowPerRequest,
 	}
 
-	if opts.Socket != "" {
+	switch {
+	case opts.Socket != "" && opts.UnixTarget != "":
+		return nil, errors.New("bench: a run goes through the boundary or straight to a socket, not both")
+	case opts.Socket != "":
 		dialer, err := proxy.SOCKS5("unix", opts.Socket, nil, proxy.Direct)
 		if err != nil {
 			return nil, fmt.Errorf("bench: dial boundary %s: %w", opts.Socket, err)
@@ -302,7 +312,11 @@ func newClient(opts Options) (*http.Client, error) {
 			return nil, errors.New("bench: SOCKS5 dialer does not support contexts")
 		}
 		transport.DialContext = contextDialer.DialContext
-	} else {
+	case opts.UnixTarget != "":
+		transport.DialContext = func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "unix", opts.UnixTarget)
+		}
+	default:
 		transport.DialContext = (&net.Dialer{}).DialContext
 	}
 

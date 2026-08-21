@@ -63,6 +63,47 @@ func TestDeltaSumsTheMovementAcrossEverySource(t *testing.T) {
 	}
 }
 
+func TestGaugeIsReadAsALevelNotAnAccumulation(t *testing.T) {
+	// Memory is a level. Reporting its difference across a run would say a
+	// sandbox costs nothing, because it was already resident when the run
+	// started, which is the opposite of what the density question asks.
+	obs := observation{
+		Before: map[string]map[string]float64{
+			"box-1": {"process_resident_memory_bytes": 20},
+			"box-2": {"process_resident_memory_bytes": 20},
+		},
+		After: map[string]map[string]float64{
+			"box-1": {"process_resident_memory_bytes": 21},
+			"box-2": {"process_resident_memory_bytes": 23},
+		},
+	}
+
+	total, sources := gauge(obs, "process_resident_memory_bytes")
+	if total != 44 {
+		t.Errorf("total = %v, want 44", total)
+	}
+	if sources != 2 {
+		t.Errorf("sources = %v, want 2", sources)
+	}
+	if got := delta(obs, "process_resident_memory_bytes"); got == total {
+		t.Error("a gauge read as a counter produced the same figure, so the distinction is not being made")
+	}
+}
+
+func TestGaugeIgnoresSourcesThatNeverReportedIt(t *testing.T) {
+	// Averaging over sources that did not export the series would divide by
+	// the wrong number and understate the per-sandbox cost.
+	obs := observation{After: map[string]map[string]float64{
+		"box-1": {"process_resident_memory_bytes": 10},
+		"box-2": {"something_else": 99},
+	}}
+
+	total, sources := gauge(obs, "process_resident_memory_bytes")
+	if total != 10 || sources != 1 {
+		t.Errorf("gauge = (%v, %v), want (10, 1)", total, sources)
+	}
+}
+
 func TestRenderPutsEveryObservationInTheTable(t *testing.T) {
 	observations := []observation{
 		{
@@ -75,7 +116,7 @@ func TestRenderPutsEveryObservationInTheTable(t *testing.T) {
 		},
 	}
 
-	table := render(observations, "agents", nil)
+	table := render(observations, "agents", nil, nil)
 	lines := strings.Split(strings.TrimSpace(table), "\n")
 	if len(lines) != 4 {
 		t.Fatalf("got %d lines, want a header, a rule and two rows:\n%s", len(lines), table)

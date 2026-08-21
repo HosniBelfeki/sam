@@ -149,6 +149,21 @@ func TestRunCountsErrorStatusesAsFailures(t *testing.T) {
 	}
 }
 
+func TestRunRefusesTwoPathsAtOnce(t *testing.T) {
+	// Going through the boundary and straight to a socket are the two sides
+	// of the comparison. Silently picking one would label a baseline as a
+	// mesh measurement, or the reverse, and nothing downstream could tell.
+	_, err := Run(context.Background(), Options{
+		Target:     "http://localhost/v1/models",
+		Requests:   1,
+		Socket:     "/tmp/boundary.sock",
+		UnixTarget: "/tmp/node.sock",
+	})
+	if err == nil {
+		t.Error("Run accepted both a boundary and a direct socket")
+	}
+}
+
 func TestRunRejectsAWorkloadItCannotMeasure(t *testing.T) {
 	for _, opts := range []Options{
 		{Requests: 1},
