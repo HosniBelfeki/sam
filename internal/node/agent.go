@@ -65,7 +65,9 @@ func agentFromLocalGateway(r *http.Request) string {
 	if !fromLocalSocket(r) {
 		return ""
 	}
-	return agentClaim(r.Header.Get(api.HeaderSamAgent))
+	agentID := agentClaim(r.Header.Get(api.HeaderSamAgent))
+	recordAgentSeen(agentID)
+	return agentID
 }
 
 // agentClaim validates an agent identifier arriving from elsewhere, returning
