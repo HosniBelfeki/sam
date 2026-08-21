@@ -80,14 +80,14 @@ echo "==> Waiting for the agents to reach the mesh"
 # The claim under test: one node, N boundaries, N distinct agents. Anything
 # less means a sandbox never got out, and anything more means identities are
 # leaking across sandboxes.
-seen=0
-for _ in $(seq 1 120); do
-    seen="$(docker exec "${MESH_PREFIX}-node-1" \
-        curl -s --unix-socket /sockets/node.sock http://localhost/metrics 2>/dev/null \
-        | awk '/^sam_node_agents_seen /{printf "%d", $2}' || echo 0)"
-    [[ "${seen:-0}" -ge "${COUNT}" ]] && break
-    sleep 1
-done
+#
+# Collected the same way the fleet run collects it, so the reporting path is
+# exercised here rather than for the first time on a cloud machine.
+"${REPO_ROOT}/tests/scale/collect-fleet.sh" \
+    --node-socket "${MESH_SOCKET_DIR}/node.sock" \
+    --duration 120 --interval 5 --out "${WORK}/fleet.jsonl" || true
+
+seen="$(awk -F'[:,]' '/agents_seen/ {for (i=1;i<=NF;i++) if ($i ~ /"agents_seen"/ && $(i+1)+0 > m) m = $(i+1)+0} END {print m+0}' "${WORK}/fleet.jsonl")"
 
 echo
 echo "agents the node is serving: ${seen:-0} (expected ${COUNT})"

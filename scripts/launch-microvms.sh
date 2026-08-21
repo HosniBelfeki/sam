@@ -86,6 +86,13 @@ fc_put() {
         "http://localhost$2" -H 'Content-Type: application/json' -d "$3" > /dev/null
 }
 
+# When each sandbox was launched, so a run can say how long a population took
+# to come up rather than only that it did. Readiness is not recorded here: a
+# sandbox is useful when its agent reaches the mesh, and only the node knows
+# that. Pair this with the agent count over time from collect-fleet.sh.
+TIMINGS="${LOG_DIR}/launch-timings.csv"
+echo "index,launched_epoch_ms" > "${TIMINGS}"
+
 echo "=== Launching $COUNT agent sandboxes ==="
 for i in $(seq 1 "$COUNT"); do
     VM_ID="vm-$i"
@@ -159,6 +166,7 @@ EOF
 
     fc_put "$API_SOCKET" /actions '{ "action_type": "InstanceStart" }'
 
+    echo "$i,$(date +%s%3N)" >> "${TIMINGS}"
     echo "Started $VM_ID as agent-${i}.${AGENT_DOMAIN} (${VM_VCPUS} vCPU, ${VM_MEM_MIB} MiB)"
 done
 
