@@ -22,8 +22,17 @@ FC_PID=""
 setup() {
   command -v firecracker >/dev/null 2>&1 || skip "firecracker is not installed"
   [[ -r /dev/kvm && -w /dev/kvm ]] || skip "no writable /dev/kvm on this machine"
-  [[ -f "${FC_KERNEL:-/opt/microvm/vmlinux.bin}" ]] || skip "no guest kernel; set FC_KERNEL"
+
+  local kernel="${FC_KERNEL:-/opt/microvm/vmlinux.bin}"
+  [[ -f "${kernel}" ]] || skip "no guest kernel; set FC_KERNEL"
   [[ -f "${FC_ROOTFS:-/opt/microvm/rootfs.ext4}" ]] || skip "no guest rootfs; set FC_ROOTFS (scripts/build-rootfs.sh)"
+
+  # An agent sandbox needs a tun to have any route at all, and the stock
+  # Firecracker CI kernels are built without CONFIG_TUN: they carry vsock and
+  # virtio and nothing else. Checked here because the alternative is a guest
+  # that panics with its explanation truncated by the panic itself.
+  strings "${kernel}" 2>/dev/null | grep -q "Universal TUN/TAP" \
+    || skip "guest kernel has no TUN driver; agent sandboxes need CONFIG_TUN"
 
   FC_DIR="$(mktemp -d /tmp/fc-smoke-XXXXXX)"
 }

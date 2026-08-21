@@ -56,9 +56,22 @@ else
     curl --retry 5 --retry-connrefused --retry-delay 5 -sL https://sam-mesh.dev/install.sh | bash
 fi
 
-# Download the uncompressed Linux kernel for Firecracker
+# Download the uncompressed Linux kernel for Firecracker.
+#
+# It has to be one built with CONFIG_TUN. An agent sandbox has no network
+# device and reaches the mesh through a tun, so a kernel without the driver
+# gives it no route at all and its init exits before it can say why. The
+# quickstart kernel this used to fetch does not have it, and neither do the
+# 5.10 or 6.1 CI kernels; 6.18 does. Each image has its .config published
+# beside it, so this is checkable rather than folklore.
 mkdir -p /opt/microvm
-curl --retry 5 --retry-connrefused --retry-delay 5 -fsSL -o /opt/microvm/vmlinux.bin https://s3.amazonaws.com/spec.ccfc.min/img/quickstart_guide/x86_64/kernels/vmlinux.bin
+FC_KERNEL_URL="${FC_KERNEL_URL:-https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/20260819-0a745def42dd-0/x86_64/debug/vmlinux-6.18.41}"
+curl --retry 5 --retry-connrefused --retry-delay 5 -fsSL -o /opt/microvm/vmlinux.bin "${FC_KERNEL_URL}"
+
+if ! strings /opt/microvm/vmlinux.bin | grep -q "Universal TUN/TAP"; then
+    echo "FATAL: guest kernel has no TUN driver; agent sandboxes cannot build a route" >&2
+    exit 1
+fi
 
 # Ensure launch script is executable (if it was downloaded via GCS)
 chmod +x /opt/microvm/launch-microvms.sh || true

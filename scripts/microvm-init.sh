@@ -12,10 +12,26 @@
 # port 1080 arrives on the host at the path sam-box serves.
 set -eu
 
-mount -t proc proc /proc
-mount -t sysfs sysfs /sys
-mount -t devtmpfs devtmpfs /dev
+# Best effort, not preconditions: a kernel configured with devtmpfs has already
+# mounted /dev by the time init runs, and under `set -e` that redundant mount
+# is enough to kill PID 1 before it does anything.
+mount -t proc proc /proc 2>/dev/null || true
+mount -t sysfs sysfs /sys 2>/dev/null || true
+mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
 
-exec /usr/local/bin/nano-init run vsock://2:1080 \
-  python3 /app/agent/agent.py "${AGENT_TASK:-Describe the tools you have and what each is for.}" \
-  > /dev/console 2>&1
+TASK="${AGENT_TASK:-Describe the tools you have and what each is for.}"
+
+# The kernel hands PID 1 an empty environment, so there is no PATH to inherit
+# and anything looked up by name is not found.
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# Not exec: when PID 1 exits the kernel panics immediately, and the panic
+# reaches the console before whatever init was trying to say about why it
+# failed. Holding the process open long enough for the console to drain is the
+# difference between a diagnosis and a stack trace.
+if ! /usr/local/bin/nano-init run vsock://2:1080 python3 /app/agent/agent.py "${TASK}" > /dev/console 2>&1; then
+  echo "sandbox init failed; see above" > /dev/console
+fi
+
+sleep 3
+reboot -f

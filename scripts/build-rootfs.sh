@@ -1,6 +1,10 @@
 #!/bin/bash
 set -e
 
+# The Dockerfile below copies repo-relative paths, so the build context has to
+# be the repo root regardless of where this was invoked from.
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
 # Usage: ./scripts/build-rootfs.sh [GCS_URL]
 GCS_URL=${1:-}
 

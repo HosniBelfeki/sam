@@ -274,6 +274,13 @@ connections onto **`<uds_path>_<port>`** on the host. A guest connecting to CID
 why the same `sam-box` works for containers and microVMs with no code in it that
 knows the difference.
 
+Another costs a day: **the guest kernel must have `CONFIG_TUN=y`**. The stock
+Firecracker CI kernels do not — they carry vsock and virtio and little else — so
+a sandbox on one of them cannot build a tun, has no route, and its init exits
+before it can explain why. Of the published CI kernels, 6.18 has it and 5.10 and
+6.1 do not; the `.config` is published next to each image, so this is worth
+checking before building a rootfs around one.
+
 ## Why this shape
 
 The tempting alternative is to give the agent a token and a proxy and trust it

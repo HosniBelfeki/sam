@@ -148,7 +148,11 @@ func setupNetwork(ctx context.Context, boundarySocket string, names *resolver) e
 		Mode:      netlink.TUNTAP_MODE_TUN,
 	}
 	if err := netlink.LinkAdd(tun); err != nil {
-		return fmt.Errorf("create %s: %w", tunName, err)
+		// The usual cause is a guest kernel built without CONFIG_TUN, which is
+		// the case for the stock Firecracker CI kernels: they carry vsock but
+		// no tun driver. Without it there is no way to give the sandbox a
+		// route, so this is fatal rather than something to work around.
+		return fmt.Errorf("create %s (does this kernel have CONFIG_TUN?): %w", tunName, err)
 	}
 	if err := netlink.LinkSetUp(tun); err != nil {
 		return fmt.Errorf("bring up %s: %w", tunName, err)
