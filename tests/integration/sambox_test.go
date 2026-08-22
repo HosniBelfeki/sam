@@ -16,8 +16,8 @@ package integration_test
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -25,174 +25,175 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/sam/internal/sambox"
 )
 
-// TestSamBoxNanoInitIntegration exercises the real nano-init process end-to-end
-// against an in-process sam-box gateway.
+// TestSandboxReachesOnlyWhatPolicyAllows joins the two halves of the sandbox:
+// the real nano-init process building the only route out, and the real sam-box
+// boundary deciding what that route reaches.
 //
-// nano-init is a container PID-1: it legitimately rewrites /etc/resolv.conf,
-// spoofs DNS and rebinds ports. Running it directly on the host would mutate the
-// machine (and under `sudo make test` that write actually succeeds and breaks the
-// CI runner's DNS). We therefore run it inside a fresh mount + network + UTS
-// namespace with a private mount propagation and a bind-mounted /etc/resolv.conf,
-// so none of its writes ever reach the real host.
+// The seam this covers is the name. nano-init answers the agent's lookup with a
+// placeholder address, turns the flow back into the name that address stood for,
+// and the boundary rules on the name -- so an unmodified curl, with no proxy
+// configuration and no cooperation of its own, reaches an allowed host and is
+// refused a blocked one. Each side is unit-tested alone; only together do they
+// show the name surviving the trip.
 //
-// Creating those namespaces (and the bind mount) requires root/CAP_SYS_ADMIN, so
-// the test skips when it cannot isolate itself (e.g. a non-root local run).
-func TestSamBoxNanoInitIntegration(t *testing.T) {
+// nano-init is a container PID 1: it builds a tun, routes everything through it
+// and rewrites /etc/resolv.conf. Doing that on the host would break the
+// machine's DNS, so the test re-executes itself inside a fresh user, mount and
+// network namespace with /etc/resolv.conf bind-mounted over. Where an
+// unprivileged user namespace is unavailable, the test skips.
+func TestSandboxReachesOnlyWhatPolicyAllows(t *testing.T) {
+	const (
+		allowedHost = "allowed.example"
+		blockedHost = "blocked.example"
+		serverBody  = "reached the far side"
+	)
+
 	if os.Getenv("SAM_TEST_IS_ISOLATED") != "1" {
-		if _, err := exec.LookPath("unshare"); err != nil {
-			t.Skip("requires the `unshare` binary to isolate nano-init from the host")
+		for _, tool := range []string{"unshare", "bash", "curl", "ip"} {
+			if _, err := exec.LookPath(tool); err != nil {
+				t.Skipf("requires %q to isolate nano-init from the host", tool)
+			}
 		}
 
-		// Compile the binary in the host/parent context where permissions are regular
+		// Built out here: nano-init is a separate module, and inside the
+		// namespace there is no network to fetch one.
 		nanoInitBin := buildBinary(t, "./cmd/nano-init")
 
 		self, err := os.Executable()
 		if err != nil {
-			t.Fatalf("Failed to get self executable: %v", err)
+			t.Fatalf("locating the test binary: %v", err)
 		}
 
-		tempFile := filepath.Join(t.TempDir(), "resolv.conf")
-		if err := os.WriteFile(tempFile, []byte(""), 0644); err != nil {
-			t.Fatalf("Failed to create temp resolv.conf: %v", err)
+		resolvConf := filepath.Join(t.TempDir(), "resolv.conf")
+		if err := os.WriteFile(resolvConf, nil, 0o644); err != nil {
+			t.Fatalf("creating a stand-in resolv.conf: %v", err)
 		}
 
-		bashCmd := fmt.Sprintf(
-			"ip link set lo up && mount --bind %s /etc/resolv.conf && %s -test.run=TestSamBoxNanoInitIntegration",
-			tempFile,
-			self,
-		)
-
-		cmd := exec.Command("unshare", "-m", "-n", "-r", "bash", "-c", bashCmd)
+		cmd := exec.Command("unshare", "-m", "-n", "-r", "bash", "-c", fmt.Sprintf(
+			"ip link set lo up && mount --bind %s /etc/resolv.conf && exec %s -test.run='^%s$' -test.v",
+			resolvConf, self, t.Name(),
+		))
 		cmd.Env = append(os.Environ(),
 			"SAM_TEST_IS_ISOLATED=1",
 			"SAM_NANO_INIT_BIN="+nanoInitBin,
 		)
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
+		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 		if err := cmd.Run(); err != nil {
-			t.Fatalf("Re-execution under unshare failed: %v", err)
+			t.Fatalf("the isolated run failed: %v", err)
 		}
 		return
 	}
 
-	if os.Geteuid() != 0 {
-		t.Skip("requires root (or mapped root namespace) to create mount/network namespaces and bind-mount /etc/resolv.conf")
-	}
-
 	nanoInitBin := os.Getenv("SAM_NANO_INIT_BIN")
 	if nanoInitBin == "" {
-		t.Fatal("SAM_NANO_INIT_BIN environment variable not set")
+		t.Fatal("SAM_NANO_INIT_BIN is unset: this process was not re-executed by the parent")
 	}
 
-	// 1. Setup mock upstream "internet" server representing api.github.com
-	var mockServerReceivedAuth string
-	mockServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mockServerReceivedAuth = r.Header.Get("Authorization")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("mock-github-response-content"))
+	// What the sandbox is trying to reach. It is on loopback inside the
+	// namespace, which the boundary can dial and the sandbox cannot: the
+	// sandbox has no route except the tun.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, serverBody)
 	}))
-	defer mockServer.Close()
+	defer server.Close()
 
-	mockServerURL, err := url.Parse(mockServer.URL)
+	serverURL, err := url.Parse(server.URL)
 	if err != nil {
-		t.Fatalf("Failed to parse mock server URL: %v", err)
+		t.Fatalf("parsing the server URL: %v", err)
 	}
 
-	// 2. Start sam-box in-process on a temporary UDS path
-	tempDir := t.TempDir()
-	udsPath := filepath.Join(tempDir, "sam-box-test.sock")
-
-	udsListener, err := net.Listen("unix", udsPath)
+	// Socket paths have a ~104 byte kernel budget, which a test name spends
+	// quickly, so this is not t.TempDir().
+	sockDir, err := os.MkdirTemp("", "sandbox")
 	if err != nil {
-		t.Fatalf("Failed to listen on UDS socket: %v", err)
+		t.Fatalf("MkdirTemp: %v", err)
 	}
-	defer func() { _ = udsListener.Close() }()
+	defer func() { _ = os.RemoveAll(sockDir) }()
+	agentSocket := filepath.Join(sockDir, "agent.sock")
 
-	gatewayTransport := &http.Transport{
-		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			host, _, err := net.SplitHostPort(addr)
-			if err != nil {
-				host = addr
-			}
-			if host == "api.github.com" {
-				return net.Dial(network, mockServerURL.Host)
-			}
-			return net.Dial(network, addr)
+	var dialed struct {
+		sync.Mutex
+		names []string
+	}
+
+	egress, err := sambox.NewEgressPolicy([]string{allowedHost})
+	if err != nil {
+		t.Fatalf("NewEgressPolicy: %v", err)
+	}
+	listener, err := sambox.ListenSandboxSocket(agentSocket)
+	if err != nil {
+		t.Fatalf("ListenSandboxSocket: %v", err)
+	}
+
+	boundary := &sambox.SOCKS5Server{
+		Dialer: &sambox.AgentDialer{
+			Router: &sambox.Router{Egress: egress},
+			// Stands in for the resolution the boundary would do itself. What
+			// is being recorded is that a name arrived here at all.
+			DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+				host, _, err := net.SplitHostPort(address)
+				if err != nil {
+					host = address
+				}
+				dialed.Lock()
+				dialed.names = append(dialed.names, host)
+				dialed.Unlock()
+				return (&net.Dialer{}).DialContext(ctx, network, serverURL.Host)
+			},
 		},
-		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: true,
-		},
 	}
 
-	interceptorsDir, err := filepath.Abs("../../bin")
-	if err != nil {
-		t.Fatalf("Failed to resolve interceptor dir: %v", err)
-	}
-	secretStore := map[string]sambox.SecretConfig{
-		"api.github.com": {
-			Kind:  sambox.SecretKindBearer,
-			Value: "my-github-token-123",
-		},
-	}
-	gateway, err := sambox.NewGateway(secretStore, gatewayTransport, interceptorsDir)
-	if err != nil {
-		t.Fatalf("Failed to initialize gateway: %v", err)
-	}
-
+	ctx, cancel := context.WithCancel(context.Background())
+	served := make(chan struct{})
 	go func() {
-		_ = gateway.Serve(udsListener)
+		defer close(served)
+		if err := boundary.Serve(ctx, listener); err != nil {
+			t.Errorf("boundary: %v", err)
+		}
+	}()
+	defer func() {
+		cancel()
+		<-served
 	}()
 
-	// 3. Start nano-init routines as a separate process (the target process will be a simple script/agent)
-	// We'll configure unprivileged ports for the test
-	dnsPort := "10053"
-
-	// Resolve the dynamic C interceptor path
-	interceptorPath, err := filepath.Abs("../../bin/libinterceptor.so")
-	if err != nil {
-		t.Fatalf("Failed to resolve interceptor path: %v", err)
-	}
-
-	// Run nano-init wrapper pointing to UDS, spawning curl
-	nanoInitCtx, nanoInitCancel := context.WithCancel(context.Background())
-	defer nanoInitCancel()
-
-	// Clean up /tmp/ephemeral_ca.pem before running
-	_ = os.Remove("/tmp/ephemeral_ca.pem")
-	defer func() { _ = os.Remove("/tmp/ephemeral_ca.pem") }()
-
-	nanoInitCmd := exec.CommandContext(nanoInitCtx, nanoInitBin, "run", udsPath,
-		"curl", "--cacert", "/tmp/ephemeral_ca.pem", "-s", "https://api.github.com/",
-	)
-	nanoInitCmd.Env = append(os.Environ(),
-		"SAM_DNS_PORT="+dnsPort,
-		"SAM_INTERCEPTOR_PATH="+interceptorPath,
+	// One nano-init run covers both cases: the tun it creates outlives the
+	// process, so a second run in this namespace would find it already there.
+	agent := fmt.Sprintf(
+		`curl -sS --max-time 20 http://%s/; echo "allowed-exit=$?"; `+
+			`curl -sS --max-time 20 http://%s/; echo "blocked-exit=$?"`,
+		allowedHost, blockedHost,
 	)
 
-	out, err := nanoInitCmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("nano-init failed: %v\nOutput:\n%s", err, out)
+	runCtx, runCancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer runCancel()
+
+	// The sandbox's exit status is the agent's, and the blocked curl fails on
+	// purpose, so a non-zero status is expected and the output is the verdict.
+	out, err := exec.CommandContext(runCtx, nanoInitBin, "run", agentSocket, "bash", "-c", agent).CombinedOutput()
+	t.Logf("nano-init exited with %v, sandbox output:\n%s", err, out)
+
+	if !strings.Contains(string(out), serverBody) {
+		t.Errorf("the sandbox did not reach %s", allowedHost)
+	}
+	if !strings.Contains(string(out), "allowed-exit=0") {
+		t.Errorf("reaching %s failed, want policy to allow it", allowedHost)
+	}
+	if strings.Contains(string(out), "blocked-exit=0") {
+		t.Errorf("reaching %s succeeded, want the boundary to refuse it", blockedHost)
 	}
 
-	outStr := string(out)
-	t.Logf("Agent Output:\n%s", outStr)
-
-	// 4. Assert that the request reached the mock server and received correct response
-	expectedAgentOutput := "mock-github-response-content"
-	if !containsString(outStr, expectedAgentOutput) {
-		t.Errorf("Expected agent to output %q, got output:\n%s", expectedAgentOutput, outStr)
+	dialed.Lock()
+	defer dialed.Unlock()
+	if len(dialed.names) != 1 || dialed.names[0] != allowedHost {
+		t.Errorf("the boundary dialled %q, want exactly [%q]: an address here means the name did not survive the tun",
+			dialed.names, allowedHost)
 	}
-
-	if mockServerReceivedAuth != "Bearer my-github-token-123" {
-		t.Errorf("Mock server did not receive the expected token: %q", mockServerReceivedAuth)
-	}
-}
-
-func containsString(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > len(substr) && (s[:len(substr)] == substr || containsString(s[1:], substr)))
 }
