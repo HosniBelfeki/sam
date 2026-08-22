@@ -11,8 +11,10 @@ Sovereign Agent Mesh when it runs inside a sandbox (a Firecracker microVM or a
 `--network none` container).
 
 It is a design document: it states the layering, the contracts each layer
-exposes, and the tests that hold those contracts in place. Scale testing depends
-on this being settled, not the other way round.
+exposes, and the tests that hold those contracts in place.
+
+What the result costs is measured in
+[Scale: what an agent costs]({{< relref "/docs/scale-report" >}}).
 
 ## 1. Goals
 
@@ -28,55 +30,31 @@ on this being settled, not the other way round.
    server is the same act as reaching `api.github.com`: connect to a name. Which
    names are mesh-internal and which are public is a policy decision made on the
    host, not a code path in the agent.
-5. **Deps stay put.** The design below adds no `go.mod` entry (see §9).
+5. **Deps stay put.** The design below adds no `go.mod` entry (see §7).
 
-## 2. What is wrong with the current layering
+## 2. Why one enforcement point
 
-Today there are three independent interception mechanisms and two overlapping
-local dataplanes.
+There are three common ways to intercept a sandbox's traffic at the application
+layer. Each of them leaks, and that is why none of them is used here.
 
-`cmd/nano-init` intercepts at the application layer, three ways at once:
+* **Proxy environment variables** are honoured only by HTTP-aware clients. A
+  harness that opens a raw socket, a Python library using `httpx` with
+  `trust_env=False`, or anything speaking gRPC or Postgres simply escapes.
+* **DNS spoofing** forces every flow through a MITM even when no secret needs
+  injecting, and it answers with loopback addresses, which destroys the
+  destination name the policy engine exists to reason about.
+* **An `LD_PRELOAD` socket shim** must be built and served for every arch/libc
+  pair, and a statically linked binary defeats it outright.
 
-* a **DNS spoofer** on `127.0.0.1:53` plus a rewritten `/etc/resolv.conf`,
-* **`HTTP_PROXY`/`HTTPS_PROXY` injection** into the child's environment,
-* an optional **`LD_PRELOAD` socket interceptor**, shipped per architecture and
-  per libc from the gateway's `/internal/bootstrap/libinterceptor.so`.
+The shared failure is that each one asks the agent to cooperate with its own
+confinement. An agent that has to *agree* to be confined is not confined: the
+next library that ignores the convention, the next subprocess that clears its
+environment, and the next protocol that is not HTTP are each outside the
+boundary.
 
-Each one leaks. Proxy variables are honoured only by HTTP-aware clients — a
-harness that opens a raw socket, a Python library using `httpx` with
-`trust_env=False`, or anything speaking gRPC or Postgres simply escapes. DNS
-spoofing forces every flow through a MITM even when no secret needs injecting,
-and it answers with loopback addresses, which destroys the destination name the
-policy engine actually wants to reason about. The `LD_PRELOAD` shim has to be
-built and served for every arch/libc pair, and is defeated by a static binary.
-The `nano-init` README is explicit that this is deliberate ("HTTP is an
-opinionated waist"), and that reasoning was sound when the only capability was
-HTTP. It stops being sound the moment an agent needs to `git clone`, or the
-moment a sandbox needs a deny-by-default network.
-
-Meanwhile there are two host-side dataplanes with disjoint capabilities:
-
-| | `sam-node` sidecar | `sam-box` gateway |
-|---|---|---|
-| Local MCP (`/mcp`) | yes | no |
-| OpenAI facade (`/v1/*`) | yes | no |
-| Mesh egress to a peer (`/sam/<peer>/…`) | yes | no |
-| Internet egress | no | yes |
-| Secret injection (MITM CA) | no | yes |
-| Domain filtering | no | no |
-| Own libp2p host + enrollment | yes | yes (duplicated) |
-
-An agent that wants inference *and* `api.github.com` cannot be served by either
-one. `scripts/microvm-init.sh` shows the seam directly: it starts `tun2proxy`
-pointed at the `sam-box` UDS **and** hands the harness
-`--mcp-url http://127.0.0.1:8080/mcp`, two mutually exclusive assumptions about
-what is listening on that port. It is also wired incorrectly — Firecracker
-multiplexes guest→host vsock connections onto `<uds_path>_<port>`, so the guest's
-`VSOCK-CONNECT:2:8080` surfaces on the host as `sam-box-1.sock_8080` while
-`sam-box` listens on `sam-box-1.sock`.
-
-Neither dataplane can filter by domain, which is the one network capability the
-use case actually asks for.
+Routing does not have that failure mode, because nothing has to agree to it. So
+the boundary is a route and a socket rather than a convention, and there is
+exactly one of them — one place where a flow is named, decided and opened.
 
 ## 3. The layering
 
@@ -223,7 +201,7 @@ mixed:
 
 The agent's facts ride as an **attenuation block appended to the node token**,
 not as a second credential. `biscuit-go` cannot verify a block signed by a third
-party (§10.2), so splitting them buys no extra cryptographic attribution while
+party (§8.2), so splitting them buys no extra cryptographic attribution while
 costing a second verification on every request. The identifier is still the
 agent's and still portable: teleport the actor to another worker and the SAM
 component there verifies the same workload credential and asserts the same
@@ -233,16 +211,15 @@ The residual trust, stated plainly: an enrolled node asserts its own agents.
 Mesh policy bounds that by binding namespaces to node attestation — only nodes
 attested `cluster=c1.acme` may assert `agent:*.c1.acme` — which the existing
 target-fact machinery already expresses. Non-repudiation *by the agent itself*
-needs proof of possession, which stays an upgrade path (§10.6).
+needs proof of possession, which stays an upgrade path (§8.6).
 
-## 4. Where the gateway lives — DECIDED: `sam-box`, without a libp2p host
+## 4. Where the gateway lives: `sam-box`, without a libp2p host
 
-`sam-node` and `sam-box` currently answer this twice: both run a libp2p host and
-both enroll. The decision is to keep two binaries but give them disjoint jobs.
+There are two binaries with disjoint jobs.
 
-**`sam-node` — the mesh member.** Unchanged. It owns the libp2p host,
-enrollment, identity, discovery and the sidecar API (`/mcp`, `/v1/*`,
-`/sam/service/*`, `/sam/<peer>/…`) over TCP and its Unix socket.
+**`sam-node` — the mesh member.** It owns the libp2p host, enrollment, identity,
+discovery and the sidecar API (`/mcp`, `/v1/*`, `/sam/service/*`,
+`/sam/<peer>/…`) over TCP and its Unix socket.
 
 **`sam-box` — the sandbox dataplane.** One per sandbox. It holds **no libp2p
 host, no enrollment, no mesh identity**. It serves SOCKS5 on the sandbox-facing
@@ -264,7 +241,7 @@ What this buys:
 
 `sam-box` is a **multiplexer of agents**: it may serve one agent per socket, or
 many agents over one socket, and each flow it forwards carries that agent's own
-identity (Decision 5, §10). Losing the libp2p host costs it nothing here — the
+identity (Decision 5, §8). Losing the libp2p host costs it nothing here — the
 agent's authority never came from the host in the first place.
 
 `internal/sambox` keeps the ephemeral CA and secret injection and gains the
@@ -388,37 +365,7 @@ containers:
   is present. It exists to prove the vsock↔UDS mapping and nothing else; every
   behavioural assertion is already covered above.
 
-The draft `tests/e2e/agent_scenarios.bats` is superseded: its scenario 1 asserts
-`/v1/models` over the sidecar UDS (an integration-level fact) and its scenario 2
-depends on live `api.github.com` reachability (a flake).
-
-## 7. What gets deleted
-
-* `cmd/nano-init`'s DNS spoofer, `/etc/resolv.conf` rewrite, `HTTP_PROXY`
-  injection and interceptor bootstrap. What remains worth keeping is PID 1
-  hygiene — zombie reaping, signal propagation, exit-code passthrough — plus, if
-  we own the guest side in Go, `tun0` setup.
-* `internal/sambox`'s `/internal/bootstrap/libinterceptor.so` endpoint and the
-  `--interceptors-dir` flag.
-* `sam-box`'s entire mesh half: `join`, OIDC/device-code enrollment, the bbolt
-  store, `node.SamNode` construction, relay/bootstrap/router flags. It keeps
-  `run`, the sandbox socket, the egress policy and the ephemeral CA, and gains
-  `--sidecar-socket` + a token.
-* The contradictory URL/proxy wiring in `scripts/microvm-init.sh`.
-
-## 8. Migration order
-
-1. Land the SOCKS5 server and dispatch in `internal/sambox`, with unit +
-   integration coverage, behind the existing `sam-box run -u`. Nothing else
-   changes yet.
-2. Strip `sam-box`'s mesh half; it becomes a client of the `sam-node` sidecar
-   socket.
-3. Point `scripts/microvm-init.sh` and the container path at it; fix the
-   `<uds>_<port>` mapping. Add the two bats CUJs.
-4. Strip `nano-init` to PID 1 duties + `tun0`.
-5. *Then* resume scale testing, on a datapath whose failure modes are known.
-
-## 9. Dependencies
+## 7. Dependencies
 
 Nothing on the host requires a `go.mod` change:
 
@@ -429,39 +376,37 @@ Nothing on the host requires a `go.mod` change:
 * MITM CA and secret injection — `internal/sambox`, already ours.
 * Mesh name projection — `api/names.go`, stdlib only.
 
-### 9.1 The guest-side tun2socks — decided, with an exit
+### 7.1 The guest-side tun2socks
 
-**Decision: keep the external binary.** `scripts/build-rootfs.sh` downloads a
-release of the Rust `tun2proxy` into the guest rootfs. It is a guest-image
-artifact, not a Go dependency, so `go.mod` stays clean and the host binaries stay
-unaffected.
+The guest side is Go, in `cmd/nano-init`, which is **its own module**
+(`github.com/google/sam/cmd/nano-init`). It uses
+`github.com/xjasonlyu/tun2socks/v2` for the userspace TCP/IP stack and
+`github.com/vishvananda/netlink` to build `tun0`, so the root `go.mod` is
+untouched and the host binaries carry none of it.
 
-What we accept by doing so:
+Owning the guest datapath is what makes the rest of this design possible:
 
-* a third-party release URL is pinned into the image build. It **must** be pinned
-  by SHA-256 and verified after download — today the script does neither, which
-  is a supply-chain hole in an artifact that sees every byte the agent sends;
-* a second language toolchain in the sandbox image;
-* the guest datapath is not covered by `make test`, only by the bats CUJ.
+* the destination stays a **name** all the way to the SOCKS5 request. A stack
+  that proxies by address has already thrown away the thing policy reasons
+  about, so `nano-init` runs its own resolver, hands out placeholder addresses
+  from `169.254.64.0/18`, and restores the name when it opens the flow;
+* policy and telemetry decisions can be made *inside* the guest — per-process
+  attribution, for instance — which an external binary cannot be extended to do;
+* it builds for whatever architectures the project builds for, with no
+  third-party release URL pinned into the image;
+* it is covered by `go test`, not only by the bats CUJ.
 
-What would trigger the switch to an in-guest Go implementation:
+The module boundary is the point. A userspace network stack is a large
+dependency, and keeping it in a separate module means it is a guest-image
+concern rather than something every `sam-node` and `sam-box` build has to carry.
 
-* needing to make policy or telemetry decisions *inside* the guest (per-process
-  attribution, for instance) — `tun2proxy` cannot be extended from here;
-* needing architectures the project does not publish binaries for;
-* the release URL becoming unavailable or unverifiable.
+The host is unaffected either way: the sandbox boundary is SOCKS5 over a byte
+stream, so the guest implementation could be replaced without changing anything
+on the host or rewriting any test above.
 
-That switch means a userspace TCP/IP stack — `gvisor.dev/gvisor/pkg/tcpip` is
-the realistic option — which is a **new dependency requiring explicit
-approval**, and a large one. It is not blocked by anything in this design: the
-sandbox boundary is SOCKS5 over a byte stream either way, so replacing the guest
-implementation changes nothing on the host and no test above needs rewriting.
-The guest-side code carries this note inline so the trade-off is visible where
-the decision would be made.
+## 8. Agent identity
 
-## 10. Agent identity
-
-### 10.1 Requirements
+### 8.1 Requirements
 
 1. **Portable.** An agent paused on node A and resumed on node B is the same
    principal. Identity moves with the agent's state, never with the host.
@@ -471,7 +416,7 @@ the decision would be made.
    per-agent mint on the hot path, no enumeration in any policy document, no
    revocation list proportional to the agent population.
 
-### 10.2 The library constraint that decides the shape
+### 8.2 The library constraint that decides the shape
 
 `biscuit-go/v2 v2.2.0` has **no third-party blocks**: the library's own sample
 suite explicitly skips `test024_third_party.bc`, and the API exposes no
@@ -529,7 +474,7 @@ and non-repudiation arrives without a wire break.
 >
 > **Decided: option 1**, implemented in `internal/node/agent.go`.
 
-### 10.2.1 What the agent claim covers, and what it does not
+### 8.2.1 What the agent claim covers, and what it does not
 
 **Covers.** Attribution and policy on **both** datapaths. A peer can authorize
 and audit "agent `reviewer-7` called me" rather than only "some node did", using
@@ -562,13 +507,13 @@ models stop appearing in peers' `/v1/models` listings even though agents can
 still call them. This was found by the test, not by reasoning. Policy that means
 to gate agent traffic should say so rather than demanding an agent everywhere.
 
-### 10.3 Why it scales: delegation, not enumeration
+### 8.3 Why it scales: delegation, not enumeration
 
 Three rules, each of which removes a per-agent bottleneck:
 
 **Minting is offline and local.** The control plane never mints per agent. It
 grants a *namespace holder* — in practice the enrolled `sam-node`/`sam-box` in a
-cluster, scoped by its attestation (§10.6) — authority over an agent namespace,
+cluster, scoped by its attestation (§8.6) — authority over an agent namespace,
 once. That holder asserts a per-agent identity by appending a block to its own
 token with `Append`: no root key, no round trip, no central state. Admitting an
 agent is O(1) local work, which is the only way 10⁹ of them exist.
@@ -597,7 +542,7 @@ not a design, so nothing depends on one:
 | credential must stop being usable elsewhere | short-lived workload credential; the platform stops renewing it | bounded window, no list |
 | a namespace holder is compromised | `RevocationIds()` on its delegation block | one entry kills every agent under it |
 
-### 10.4 How the identity travels
+### 8.4 How the identity travels
 
 The agent's credential bundle lives **in the agent's own state**, next to
 whatever else the platform migrates — not in `sam-box`'s configuration and not in
@@ -606,7 +551,7 @@ bundle from the migrated state and starts asserting it. **No control-plane call
 on resume.** That is what makes migration cheap, and it is the same property
 that makes 10⁹ agents possible.
 
-### 10.5 Where the agent's identity comes from
+### 8.5 Where the agent's identity comes from
 
 Not from the agent. The harness stays unmodified (Goal 1), so it never asserts
 anything about itself — it could only lie. It comes from the credential the
@@ -620,7 +565,7 @@ platform **already** issues to the workload:
 
 `sam-box` verifies that credential against the platform's issuer at admission —
 in-cluster, cheap, no mesh round trip — and translates it into `agent:` facts by
-the rules in §10.8. **The scheduler needs no mesh enrollment and no mesh
+the rules in §8.8. **The scheduler needs no mesh enrollment and no mesh
 credential of its own.** It keeps doing exactly what it already does for every
 workload: project an identity document. This is the OIDC relationship, not a
 merger of the two domains.
@@ -645,10 +590,10 @@ in-band afterwards:
 2. **SOCKS5 username (multiplexing).** When one `sam-box` fronts many agents over
    one socket, the RFC 1929 username/password sub-negotiation carries the agent
    id and its admission token. It is standard, in-band, supported by every SOCKS
-   client and by `tun2proxy` (`socks5://user:pass@host`), and it makes identity
+   client (`socks5://user:pass@host`), and it makes identity
    **per-connection** — which is exactly what a multiplexer needs.
 
-### 10.6 The honest limit
+### 8.6 The honest limit
 
 An enrolled node asserts its own agents, so a compromised node can assert any
 agent identity **within the namespaces its own attestation permits**. That bound
@@ -661,21 +606,21 @@ key and signs a per-request binding. That needs either a mesh-aware harness
 (violates Goal 1) or a signer inside the sandbox, and it needs third-party
 blocks in `biscuit-go` to be attributable. It is a clean upgrade, not a rewrite.
 
-### 10.7 Consequences for the plan
+### 8.7 Consequences for the plan
 
-* `api/` — `FactAgent`, `ValidMemberPrefixes`, the §10.8 translation helpers, and
-  the §12 bundle schema.
+* `api/` — `FactAgent`, `ValidMemberPrefixes`, the §8.8 translation helpers, and
+  the §10 bundle schema.
 * `internal/node` — **nothing** for authorization: appended blocks are already
   verified and evaluated. Only the namespace-binding policy is new.
 * `internal/sambox` — holds the bundle, attaches it per flow, per socket or per
-  SOCKS5 connection; serves the §12 control socket and the §11 ingress endpoint.
-* `cmd/nano-init` — owns the guest side of the ingress channel (§11.2).
+  SOCKS5 connection; serves the §10 control socket and the §9 ingress endpoint.
+* `cmd/nano-init` — owns the guest side of the ingress channel (§9.2).
 * Sidecar — propagates the agent header on egress alongside `X-Sam-Biscuit`.
 * Tests — the CUJ that demonstrates the selling point belongs at integration
   level: two agents behind one `sam-box`, same node, same mesh; `foo` reaches
   `inference://X` and `bar` is refused, purely on their own credentials.
 
-### 10.8 The agent identifier
+### 8.8 The agent identifier
 
 **Decided: dot-separated, DNS-shaped, most-specific-first.**
 `agent:reviewer-7.prod.acme.example`, matched by `agent:*.prod.acme.example`.
@@ -721,7 +666,7 @@ Each segment must be a valid DNS label; a connector encodes anything else.
 Non-hierarchical attributes do **not** belong in the name — that is what the
 attested label machinery (`api/labels.go`) is for.
 
-## 11. Ingress: agents that serve
+## 9. Ingress: agents that serve
 
 An agent must be able to say "route traffic for this name to me". Two things
 make this smaller than it looks.
@@ -731,7 +676,7 @@ make this smaller than it looks.
 API already exists**: `RegisterServiceRequest{service{type,name,description},
 target_url}` on `/sam/service/register`.
 
-### 11.1 Declaring: autoregistration through the gateway
+### 9.1 Declaring: autoregistration through the gateway
 
 The agent does **not** call the node. `/sam/service/register` is part of the
 operator surface an agent never reaches (§5.2), for two independent reasons: the
@@ -755,7 +700,7 @@ the node on the agent's behalf. Two things make that safe:
   own per-agent ingress endpoint, so the field an agent could abuse is one it
   never supplies.
 * **The name must be one the agent already had.** The bundle enumerates what it
-  may serve (§12.1 `ingress`), and a name outside that list is not expressible
+  may serve (§10.1 `ingress`), and a name outside that list is not expressible
   rather than merely rejected.
 
 The bundle declares `{name, type}` only. The port is the agent's to choose at
@@ -769,7 +714,7 @@ that way and needs the reverse channel below, which is not built. The seam is
 `IngressManager.AgentAddr`, so that channel slots in without changing the
 registration path.
 
-### 11.1.1 Why this is also the better UX
+### 9.1.1 Why this is also the better UX
 
 This is not only the safe shape, it is the one that matches how agents actually
 start:
@@ -785,7 +730,7 @@ start:
   advertised without anyone reconciling anything.
 * **Resume is automatic.** On another host, the new `sam-box` re-registers the
   same name against a different peer, and discovery re-points. That is exactly
-  the property §10 exists to provide, and it would be lost if routes lived in
+  the property §8 exists to provide, and it would be lost if routes lived in
   static platform config.
 
 The bundle stays the authority (what may be served), and the agent supplies only
@@ -795,7 +740,7 @@ Still to fix before this is built: whether an agent may re-register under a
 changed port (flapping needs a rate limit), and whether `sam-box` should probe
 the port before advertising rather than trusting the agent's claim.
 
-### 11.2 The reverse channel
+### 9.2 The reverse channel
 
 Inbound is the one place the datapath is not egress-shaped:
 
@@ -823,7 +768,7 @@ listening on that vsock port. A container gets the symmetric arrangement with a
 second bind-mounted socket. This is also what finally justifies `nano-init`
 beyond PID 1 hygiene: it owns the guest side of the ingress channel.
 
-### 11.3 Authorization closes the loop
+### 9.3 Authorization closes the loop
 
 Nothing new is needed. `sam-node` authorizes the **caller** — their node token
 carrying their agent block (Decision 5) — before the stream ever reaches
@@ -831,19 +776,19 @@ carrying their agent block (Decision 5) — before the stream ever reaches
 evaluated at `bar`'s node, with the existing machinery, and both ends are named
 by portable identities rather than by hosts.
 
-### 11.4 Migration
+### 9.4 Migration
 
-The ingress declaration is part of what travels (§10.4). On resume, `sam-box` on
+The ingress declaration is part of what travels (§8.4). On resume, `sam-box` on
 node B registers the same name and discovery re-points to node B. The name is
 stable because it belongs to the agent, not to the node — which is the whole
-point of §10.
+point of §8.
 
-## 12. The platform integration interface
+## 10. The platform integration interface
 
 This is the seam a scheduler or harness connector builds against. It must be
 small, versioned, and the only place identity enters the system.
 
-### 12.1 The agent bundle
+### 10.1 The agent bundle
 
 What the platform provides per agent. It lives in the agent's state directory, so
 it migrates with the agent by construction:
@@ -851,11 +796,11 @@ it migrates with the agent by construction:
 ```yaml
 version: v1
 agent:
-  id: reviewer-7.prod.acme.example          # canonical mesh identifier (§10.8)
+  id: reviewer-7.prod.acme.example          # canonical mesh identifier (§8.8)
   external_id: spiffe://acme.example/prod/reviewer-7   # verbatim, for audit
   credential: /var/run/secrets/substrate/token  # the platform's own workload
                                                 # credential, verified at
-                                                # admission (§10.5)
+                                                # admission (§8.5)
 egress:
   allow: ["api.github.com", "*.pypi.org"]
   secrets:
@@ -864,7 +809,7 @@ ingress:
   - {name: code-reviewer, type: mcp}
 ```
 
-### 12.2 Operations
+### 10.2 Operations
 
 Exposed by `sam-box` on a control socket that is **not** reachable from inside
 the sandbox:
@@ -873,22 +818,22 @@ the sandbox:
 |---|---|
 | `Attach(bundle)` | admit an agent; returns the egress and ingress endpoints to wire into the sandbox |
 | `Detach(agent_id)` | stop it: unregister ingress, close channels, drop credentials |
-| `Refresh(agent_id, credential)` | hand in a rotated workload credential (§10.3) |
+| `Refresh(agent_id, credential)` | hand in a rotated workload credential (§8.3) |
 | `Status(agent_id)` | what is registered and connected, for the scheduler's reconcile loop |
 
-### 12.3 Guarantees the interface owes a connector
+### 10.3 Guarantees the interface owes a connector
 
 1. **`Attach` is idempotent, keyed by agent id.** Resume after a crash or a
    migration is just another `Attach` — no special-case path.
 2. **Identity never arrives in-band from the sandbox.** The platform is the sole
-   identity source (§10.5).
+   identity source (§8.5).
 3. **The agent id is stable across `Attach` on different hosts.** This is what
    makes migration invisible to the rest of the mesh.
 4. **`Detach` is complete.** No residual advertisement; discovery converges.
 5. **Versioned.** `version: v1`, and the schema lives in `api/`, so it is a real
    contract and not a convention.
 
-### 12.4 The first connector: Agent Substrate
+### 10.4 The first connector: Agent Substrate
 
 [Agent Substrate](https://github.com/agent-substrate/substrate) is the
 integration target, and it lines up unusually well:
@@ -897,14 +842,14 @@ integration target, and it lines up unusually well:
 |---|---|
 | **Actor** (the agent) | the principal: `agent:<actor>.<atespace>.<cluster domain>` |
 | **Atespace** (namespace) | the hierarchy label policy wildcards on |
-| routing by Host `my-counter-1.demo.actors.resources.substrate.ate.dev` | already dot-separated and most-specific-first — the same shape as §10.8 |
-| `podcertcontroller` (KEP-4317 pod certificates), projected SA tokens | the workload credential `sam-box` verifies at admission (§10.5) |
+| routing by Host `my-counter-1.demo.actors.resources.substrate.ate.dev` | already dot-separated and most-specific-first — the same shape as §8.8 |
+| `podcertcontroller` (KEP-4317 pod certificates), projected SA tokens | the workload credential `sam-box` verifies at admission (§8.5) |
 | `atelet` per-node DaemonSet; `ateom-gvisor` / `ateom-microvm` | where `sam-box` attaches: one sandbox, two channels |
-| suspend/resume with full-state snapshot (RAM + filesystem) | carries the agent bundle with no extra work (§10.4) |
+| suspend/resume with full-state snapshot (RAM + filesystem) | carries the agent bundle with no extra work (§8.4) |
 | `atenet` (DNS, Envoy routing, proxy sidecars, CONNECT) | the seam to negotiate: who owns egress |
 
 The name mapping is a pure string translation with no capability loss, which is
-the §10.8 test: the Host `my-counter-1.demo.actors.resources.substrate.ate.dev`
+the §8.8 test: the Host `my-counter-1.demo.actors.resources.substrate.ate.dev`
 becomes `agent:my-counter-1.demo.actors.resources.substrate.ate.dev`, and
 `agent:*.demo.actors.resources.substrate.ate.dev` means "every actor in atespace
 `demo`" — injective, hierarchy-preserving, reversible.
@@ -915,11 +860,11 @@ Two things to settle **with** the Substrate side rather than assume:
   and CONNECT. The SOCKS5 boundary has to slot in as the sandbox's egress rather
   than compete with it. `sam-box` behind atenet's sidecar seam is the likely
   fit, but that is a conversation, not a decision to take unilaterally.
-* **Ingress.** Substrate already routes inbound to actors by Host header. §11
+* **Ingress.** Substrate already routes inbound to actors by Host header. §9
   must reuse that path rather than build a parallel one: a SAM ingress
   declaration should end up as a Substrate route.
 
-### 12.5 Still to settle
+### 10.5 Still to settle
 
 * **Wire format — decided.** Proto in `api/sam.proto` for the operations
   (`AgentAttach`/`AgentDetach`/`AgentRefresh`/`AgentStatus` request and response
@@ -931,10 +876,10 @@ Two things to settle **with** the Substrate side rather than assume:
 * **Bulk pre-creation is deliberately not in v1** — premature until the semantics
   are proven. What v1 owes it is *room*: `Attach` takes a bundle and is
   idempotent per agent id, so `AttachBatch` is a purely additive operation
-  later, and the offline attenuation in §10.3 already makes it possible with no
+  later, and the offline attenuation in §8.3 already makes it possible with no
   protocol change.
 
-## 13. Remaining smaller open items
+## 11. Remaining smaller open items
 
 1. **UDP.** Denied in v1. If an agent ever needs QUIC or real DNS, it returns as
    `UDP ASSOCIATE` under the same name-based policy.

@@ -55,7 +55,7 @@ mkfs.ext4 rootfs.ext4
 mkdir -p /tmp/rootfs
 
 # Use a privileged docker container to mount and populate the ext4 image without requiring sudo on the host
-docker run --rm --privileged -v $(pwd):/work alpine sh -c '
+docker run --rm --privileged -v "$(pwd)":/work alpine sh -c '
     mkdir -p /mnt/rootfs
     mount /work/rootfs.ext4 /mnt/rootfs
     tar -xf /work/rootfs.tar -C /mnt/rootfs

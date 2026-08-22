@@ -56,11 +56,15 @@ authentication happens outside the sandbox, where the agent cannot reach it.
 The same name serves tools:
 
 ```python
-async with sse_client("http://mesh.sam.alt/mcp") as (read, write):
+async with streamable_http_client("http://mesh.sam.alt/mcp") as (read, write):
     async with ClientSession(read, write) as session:
         await session.initialize()
         tools = await session.list_tools()
 ```
+
+The transport is Streamable HTTP, which is what the mesh serves. The older SSE
+transport is answered with 400, and that arrives late enough to look like a
+network problem rather than a protocol one.
 
 Two agents on the same node can list different tools, because the mesh answers
 according to who is asking. Tools hosted by other peers appear alongside local
@@ -204,16 +208,15 @@ host and its traffic leaves through the tun because there is nowhere else for
 it to go.
 
 That distinction is worth dwelling on, because the obvious alternative is to set
-`HTTP_PROXY` and be done. SAM used to do exactly that, and it was the wrong
-layering: an agent that has to *cooperate* with its own confinement is not
-confined. The next library that ignores the convention, the next subprocess that
-clears its environment, the next protocol that is not HTTP — each one is outside
-the boundary. Routing does not have that failure mode, because nothing has to
-agree to it.
+`HTTP_PROXY` and be done. That is the wrong layering: an agent that has to
+*cooperate* with its own confinement is not confined. The next library that
+ignores the convention, the next subprocess that clears its environment, the
+next protocol that is not HTTP — each one is outside the boundary. Routing does
+not have that failure mode, because nothing has to agree to it.
 
-The sandbox image needs nothing else: no tun2proxy, no socat, no iproute2. That
-matters more than tidiness, since image size is what decides how many agents fit
-on a host.
+The sandbox image needs nothing else: no proxy helper, no `socat`, no
+`iproute2`. That matters more than tidiness, since image size is what decides
+how many agents fit on a host.
 
 ### 4. Watch what it did
 
