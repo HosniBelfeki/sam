@@ -15,6 +15,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -85,24 +86,47 @@ func withNamespaces(userNS bool) func(*exec.Cmd) {
 // needUserNamespace decides how to get permission to create a network
 // namespace, or explains why neither way is open.
 //
-// A user namespace is not the goal, it is the fallback: inside one this process
-// is root and holds CAP_SYS_ADMIN over the namespaces it then creates, which is
-// what makes the pod profile work without the pod being privileged. When
-// CAP_SYS_ADMIN is already held there is no reason to add the extra namespace
-// and the uid mapping that comes with it.
+// A user namespace is preferred rather than merely tolerated. Inside one this
+// process is root over the namespaces it then creates, which supplies
+// CAP_NET_ADMIN for building the tun as well as CAP_SYS_ADMIN for making the
+// namespace at all. Taking the capability route instead needs both to have been
+// granted: a container given CAP_SYS_ADMIN but not CAP_NET_ADMIN creates the
+// namespace and then cannot build the route out of it, which is a worse failure
+// than not starting.
+//
+// So the capability route is the fallback, for hosts where user namespaces are
+// turned off.
 func needUserNamespace() (bool, error) {
-	switch has, err := hasCapSysAdmin(); {
-	case err != nil:
+	userNSErr := userNamespacesAvailable()
+	if userNSErr == nil {
+		return true, nil
+	}
+	has, err := hasCapSysAdmin()
+	if err != nil {
 		return false, err
-	case has:
+	}
+	if has {
 		return false, nil
 	}
-	if err := userNamespacesAvailable(); err != nil {
-		return false, fmt.Errorf(
-			"cannot create a network namespace: this process has no CAP_SYS_ADMIN, and %w. "+
-				"Grant CAP_SYS_ADMIN, or allow unprivileged user namespaces", err)
+	return false, fmt.Errorf(
+		"cannot create a network namespace: %w, and this process has no CAP_SYS_ADMIN. "+
+			"Allow unprivileged user namespaces, or grant CAP_SYS_ADMIN and CAP_NET_ADMIN", userNSErr)
+}
+
+// namespaceHint explains a refusal to create the namespaces.
+//
+// The kernel says EPERM and stops there, but in a container the cause is
+// usually a sandboxing policy rather than a missing capability, and those are
+// not visible from in here.
+func namespaceHint(err error) string {
+	if !errors.Is(err, syscall.EPERM) && !errors.Is(err, syscall.EACCES) {
+		return ""
 	}
-	return true, nil
+	return "This is usually the runtime's own sandboxing rather than a missing capability. " +
+		"Docker's default seccomp profile blocks creating a user namespace, and its default " +
+		"AppArmor profile blocks the mount that follows; Kubernetes applies neither unless asked, " +
+		"so a pod normally needs no securityContext for this at all. Where a profile is enforced, " +
+		"it has to permit unshare(CLONE_NEWUSER|CLONE_NEWNS) and mount."
 }
 
 // hasCapSysAdmin reads the effective capability set of this process.

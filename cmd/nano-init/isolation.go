@@ -99,17 +99,21 @@ func tunHint(err error, statErr error) string {
 		return "there is no " + tunDevice + ". In a microVM that means a guest kernel built without CONFIG_TUN" +
 			" (the stock Firecracker CI kernels carry vsock but no tun driver; 6.18.41 has it)." +
 			" In a container it means the device was not passed in: `--device /dev/net/tun` for docker," +
-			" or a device plugin for a Kubernetes pod, since the device cgroup denies it by default"
+			" or a hostPath volume of type CharDevice for a Kubernetes pod"
 
 	case os.IsPermission(statErr):
-		return tunDevice + " exists but cannot be opened. Under Kubernetes the device cgroup denies it unless a" +
-			" device plugin grants it; a user namespace does not help, because opening the device is checked" +
-			" against the host and not against the namespace"
+		return tunDevice + " exists but cannot be opened. Check the device's own permissions, and any" +
+			" device cgroup or seccomp policy the runtime applies; note that a user namespace does not" +
+			" help here, because opening the device is checked against the host and not the namespace"
 
-	case errors.Is(err, syscall.EPERM), errors.Is(err, syscall.EACCES):
+	case errors.Is(err, syscall.EPERM), errors.Is(err, syscall.EACCES),
+		// netlink formats this one rather than wrapping the errno, so there is
+		// nothing for errors.Is to match on.
+		err != nil && strings.Contains(err.Error(), "TUNSETIFF"):
 		return "creating a tun was refused. It needs CAP_NET_ADMIN in the user namespace that owns this network" +
-			" namespace: `--cap-add NET_ADMIN` for docker, securityContext.capabilities.add: [NET_ADMIN] for a pod," +
-			" or a user namespace of your own, which grants it over the namespaces it owns"
+			" namespace: a user namespace of your own grants it over the namespaces it owns, which is what" +
+			" --create-namespaces relies on; otherwise `--cap-add NET_ADMIN` for docker, or" +
+			" securityContext.capabilities.add: [NET_ADMIN] for a pod"
 
 	case errors.Is(err, syscall.ENODEV):
 		return "the kernel has no tun driver. Rebuild the guest kernel with CONFIG_TUN=y"

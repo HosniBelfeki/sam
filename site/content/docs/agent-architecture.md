@@ -349,7 +349,7 @@ supported answers. Each must satisfy the same five preconditions:
 | netns with no way out | the container runtime | the guest kernel, given no network device | **nothing does** |
 | private `resolv.conf` | the container's mount namespace | the guest rootfs | **nothing does** |
 | boundary socket | bind-mounted UDS | vsock, surfacing on the host as `<uds>_<port>` | shared `emptyDir` |
-| TUN | `--device /dev/net/tun --cap-add NET_ADMIN` | `CONFIG_TUN` in the guest kernel | device plugin |
+| TUN | `--device /dev/net/tun --cap-add NET_ADMIN` | `CONFIG_TUN` in the guest kernel | `hostPath` of type `CharDevice` |
 | PID 1 | the container's entrypoint | `/sbin/init` | the container's entrypoint |
 | isolation strength | namespaces, shared kernel | own kernel | namespaces, shared kernel |
 
@@ -359,6 +359,17 @@ one network namespace**, so there is no per-container equivalent of
 `--network none`, and the `resolv.conf` the kubelet generates is shared by all
 of them. A pod profile therefore has to create those two namespaces for itself,
 inside the container, before `nano-init` starts.
+
+The pod column needs no capabilities, which is worth stating because the obvious
+guesses are both wrong. The device cgroup does not deny `/dev/net/tun`, so no
+device plugin is involved and a bind mount is enough; and granting
+`CAP_SYS_ADMIN` alone is actively worse than granting nothing, because the
+namespace then gets created without the `CAP_NET_ADMIN` the tun needs. Creating
+a user namespace first supplies both over the namespaces it owns, so that is the
+path taken whenever user namespaces are available. What a pod does need is a
+seccomp and AppArmor policy that permits `unshare(CLONE_NEWUSER|CLONE_NEWNS)`
+and `mount` — Kubernetes applies neither profile by default, and Docker's
+defaults block both.
 
 Because the failure is silent -- `tun0` alongside `eth0` is a working network,
 not an error -- `nano-init` refuses to start in a namespace that has any

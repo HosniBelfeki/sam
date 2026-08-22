@@ -134,7 +134,11 @@ func run(createNS bool, boundarySocket, cmdName string, cmdArgs []string) {
 			log.Fatalf("locate this binary to re-execute it: %v", err)
 		}
 		args := append([]string{"run", "--create-namespaces", boundarySocket, cmdName}, cmdArgs...)
-		os.Exit(runAgent(ctx, cancel, self, args, withNamespaces(userNS)))
+		code, err := runAgent(ctx, cancel, self, args, withNamespaces(userNS))
+		if err != nil {
+			log.Fatalf("create the sandbox namespaces: %v\n%s", err, namespaceHint(err))
+		}
+		os.Exit(code)
 	}
 
 	if createNS {
@@ -163,7 +167,11 @@ func run(createNS bool, boundarySocket, cmdName string, cmdArgs []string) {
 		log.Fatalf("set up sandbox network: %v", err)
 	}
 
-	os.Exit(runAgent(ctx, cancel, cmdName, cmdArgs))
+	code, err := runAgent(ctx, cancel, cmdName, cmdArgs)
+	if err != nil {
+		log.Fatalf("start agent: %v", err)
+	}
+	os.Exit(code)
 }
 
 // setupNetwork builds the only route out of the sandbox.
@@ -244,7 +252,7 @@ func setupNetwork(ctx context.Context, boundarySocket string, names *resolver) e
 // The same supervision serves the namespace trampoline, whose child is this
 // binary again: orphans still reparent here and still have to be reaped, and
 // the exit code still has to be the one the caller sees.
-func runAgent(ctx context.Context, cancel context.CancelFunc, cmdName string, cmdArgs []string, opts ...func(*exec.Cmd)) int {
+func runAgent(ctx context.Context, cancel context.CancelFunc, cmdName string, cmdArgs []string, opts ...func(*exec.Cmd)) (int, error) {
 	cmd := exec.CommandContext(ctx, cmdName, cmdArgs...)
 	cmd.Stdout, cmd.Stderr, cmd.Stdin = os.Stdout, os.Stderr, os.Stdin
 	cmd.Env = os.Environ() // Nothing injected: the agent is not configured, it is routed.
@@ -261,7 +269,9 @@ func runAgent(ctx context.Context, cancel context.CancelFunc, cmdName string, cm
 	cmd.WaitDelay = 5 * time.Second
 
 	if err := cmd.Start(); err != nil {
-		log.Fatalf("start agent: %v", err)
+		// Returned rather than fatal: the namespace trampoline starts this same
+		// binary, and a refusal there means something quite different.
+		return 0, err
 	}
 
 	// As PID 1 this process inherits every orphan in the sandbox, so it has to
@@ -276,18 +286,18 @@ func runAgent(ctx context.Context, cancel context.CancelFunc, cmdName string, cm
 	if waitErr != nil && errors.Is(waitErr, syscall.ECHILD) {
 		status := <-agentExit
 		if status.Signaled() {
-			return 128 + int(status.Signal())
+			return 128 + int(status.Signal()), nil
 		}
-		return status.ExitStatus()
+		return status.ExitStatus(), nil
 	}
 	if waitErr != nil {
 		var exitErr *exec.ExitError
 		if errors.As(waitErr, &exitErr) {
-			return exitErr.ExitCode()
+			return exitErr.ExitCode(), nil
 		}
-		return 1
+		return 1, nil
 	}
-	return 0
+	return 0, nil
 }
 
 // reapChildren collects orphans and remembers the agent's own status.

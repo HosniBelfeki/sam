@@ -285,6 +285,110 @@ before it can explain why. Of the published CI kernels, 6.18 has it and 5.10 and
 6.1 do not; the `.config` is published next to each image, so this is worth
 checking before building a rootfs around one.
 
+## In a Kubernetes pod
+
+The two profiles above are handed a network namespace with nowhere to go: one by
+`--network none`, one by having its own kernel. **A pod gives you neither.**
+Every container in a pod shares a single network namespace, so there is no
+per-container `--network none`, and the `/etc/resolv.conf` the kubelet writes is
+shared by all of them. Left alone, an agent container would sit on the pod's
+network with the pod's DNS, and `nano-init` would add a `tun0` beside `eth0`
+that the agent could simply route around.
+
+So for this profile `nano-init` builds the namespaces itself, with
+`--create-namespaces`:
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: agent
+spec:
+  volumes:
+    - name: sam-uds        # the only thing the three containers share
+      emptyDir: {}
+    - name: scratch        # somewhere to put a private resolv.conf
+      emptyDir: {}
+    - name: tun
+      hostPath:
+        path: /dev/net/tun
+        type: CharDevice
+  containers:
+    # The mesh member. It owns the identity; the agent never sees it.
+    - name: sam-node
+      image: ghcr.io/google/sam-node:latest
+      args:
+        - run
+        - --jwt-path=/var/run/secrets/tokens/sam-token
+        - --bind-addr=            # no TCP listener, so there is no token to leak
+        - --socket-path=/var/run/sam/node.sock
+      volumeMounts:
+        - { name: sam-uds, mountPath: /var/run/sam }
+
+    # The boundary. Reaches the mesh only by dialling the node's socket.
+    - name: sam-box
+      image: ghcr.io/google/sam-box:latest
+      args:
+        - run
+        - --socket=/var/run/sam/agent.sock
+        - --sidecar-socket=/var/run/sam/node.sock
+        - --egress-allow=api.github.com
+      volumeMounts:
+        - { name: sam-uds, mountPath: /var/run/sam }
+
+    # The sandbox. No capabilities, no credential, and after nano-init
+    # starts, no network.
+    - name: agent
+      image: your-agent-image
+      command: ["/usr/local/bin/nano-init", "run", "--create-namespaces",
+                "/var/run/sam/agent.sock", "python3", "/app/agent.py"]
+      volumeMounts:
+        - { name: sam-uds, mountPath: /var/run/sam }
+        - { name: scratch, mountPath: /tmp }
+        - { name: tun,     mountPath: /dev/net/tun }
+```
+
+Note what is **not** there: no `securityContext`, no added capabilities, no
+privileged flag, and no device plugin. Three things are needed instead, and each
+is easy to get wrong in a way that does not name itself.
+
+**The TUN device, bind-mounted.** That is all — the `hostPath` above. It is
+worth saying plainly because the obvious worry turns out not to apply: the
+device cgroup does *not* deny `/dev/net/tun`, so `open()` succeeds without a
+device plugin and without `--device`. What is actually gated is the `TUNSETIFF`
+that follows, and that is a capability question rather than a device one.
+
+**No capabilities, deliberately.** Creating a network namespace normally needs
+`CAP_SYS_ADMIN`, and creating a tun needs `CAP_NET_ADMIN`. Rather than asking
+for either, `nano-init` creates a **user namespace** first, where it is root and
+holds both over the namespaces it then makes. Granting `CAP_SYS_ADMIN` alone is
+in fact worse than granting nothing: the namespace gets created, and then the
+tun fails for want of `CAP_NET_ADMIN`.
+
+**A seccomp and AppArmor policy that permits it.** This is the one that bites.
+Creating a user namespace and remounting `/` as private are exactly the
+operations container sandboxing profiles restrict. Kubernetes applies neither
+profile unless you ask it to, so a default pod works — but a cluster with
+`seccompDefault=RuntimeDefault`, or a `runtime/default` AppArmor profile, must
+permit `unshare(CLONE_NEWUSER|CLONE_NEWNS)` and `mount`. Docker's defaults block
+both, which is why the same image needs `--security-opt seccomp=unconfined
+--security-opt apparmor=unconfined` to be tried locally.
+
+**Somewhere writable.** A new mount namespace copies the mount table, not the
+files behind it, so a private `resolv.conf` is a bind mount over a real file,
+which has to be created somewhere. The `scratch` volume is that somewhere. With
+a read-only root filesystem and no writable path, `nano-init` says so and stops.
+
+What the agent sees once this is running is what it would see in a microVM:
+
+```console
+$ kubectl exec -c agent agent -- ip -o link show | cut -d: -f2
+ lo
+ tun0
+```
+
+No `eth0`, on a pod that has one.
+
 ## Why this shape
 
 The tempting alternative is to give the agent a token and a proxy and trust it

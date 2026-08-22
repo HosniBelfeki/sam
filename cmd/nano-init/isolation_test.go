@@ -47,16 +47,16 @@ func TestTunHint(t *testing.T) {
 			want:    "--device /dev/net/tun",
 		},
 		{
-			name:    "a pod missing the device is pointed at a device plugin",
+			name:    "a pod missing the device is pointed at a hostPath",
 			err:     syscall.ENOENT,
 			statErr: notExist,
-			want:    "device plugin",
+			want:    "hostPath",
 		},
 		{
 			name:    "a device that cannot be opened is not blamed on capabilities",
 			statErr: denied,
 			err:     syscall.EPERM,
-			want:    "device cgroup",
+			want:    "cannot be opened",
 		},
 		{
 			name: "a refused create names the capability",
