@@ -63,9 +63,7 @@ four ways:
 | **Denied** | Enforcement, which never appears as a latency at all and so must be counted separately. |
 
 The baseline reaches the node over its own Unix socket rather than through a
-relay. An earlier version put `socat` in front of it, which charged the
-comparison for a hop the mesh path does not make and flattered every figure
-derived from it.
+relay, so the comparison is not charged for a hop the mesh path does not make.
 
 ### What is recorded
 
@@ -342,16 +340,61 @@ The node agreed, and answered **200 to all 41,000**:
 That last row is the interesting one, and it is not jitter. Those 400 requests
 took almost exactly 5.04 seconds each, which is
 [`dhtLookupTimeout`](https://github.com/google/sam/blob/main/internal/node/node.go)
-to the millisecond. `/v1/models` resolves providers through the DHT, this mesh
-has **no inference provider registered**, and a lookup that finds nothing cannot
-return early — it runs to its timeout, then caches the empty answer for 30
-seconds. So the cost is not per agent and not per request: it is one negative
-lookup per cache expiry, paid by whoever happens to arrive first. Everything
-behind the cache is the sub-millisecond mass above.
+to the millisecond. `/v1/models` resolves providers through the DHT, and the
+node's own log shows that walk returning four peers — so it was not waiting on
+an empty mesh. It was waiting because the walk has no reason to stop early: it
+asks for up to twenty providers, four is not twenty, and nothing tells it that
+four is all there are. So it runs out the clock, then caches the answer for
+thirty seconds.
 
-It is a fair thing to dislike. A miss costs the full timeout because there is no
-negative caching, and 200 concurrent first-arrivals all paid it rather than
-sharing one lookup.
+The cost is therefore not per agent and not per request. It is one slow lookup
+per cache expiry, paid by whichever caller happens to arrive on a cold cache;
+everything behind the cache is the sub-millisecond mass above.
+
+It is still a fair thing to dislike. A lookup that already has its answers
+should not wait five seconds to admit it, and the two hundred callers who
+arrived together each paid it instead of sharing one lookup.
+
+### What an agent actually gets
+
+Everything above is a cost. None of it says what the agent receives in return,
+and a boundary that is cheap but useless is not a result worth publishing. So,
+separately from the thousand-agent run: a sandbox was booted and asked what the
+mesh would give it.
+
+It is a Firecracker microVM with **no network device** — no NIC, no bridge, no
+route to anywhere. Its only path out is a vsock to its own `sam-box`. Inside it
+there is no API key, no model endpoint, no tool server address and no
+configuration naming any of them. The agent asks for `mesh.sam.alt`, which is
+not in DNS and has no route to it, and the boundary decides what that means for
+this particular agent.
+
+What came back:
+
+| | |
+| --- | --- |
+| Tools | **15**, discovered over MCP, with their real JSON schemas |
+| Models | `google/gemma-2-2b-it` and `openrouter/auto` |
+| Credentials in the sandbox | **none** |
+| Network devices in the sandbox | **none** |
+
+Both models answer. `google/gemma-2-2b-it` is served by a vLLM instance on a
+TPU elsewhere in the mesh and replied `mesh ok`, reporting its own
+`vllm-0.26.1rc1` fingerprint. `openrouter/auto` resolved outward and was routed
+to `deepseek/deepseek-v4-flash-0731`. The agent asked for neither by address; it
+asked for a model, and the mesh chose the provider.
+
+The LangChain agent then ran inside that sandbox and produced model output from
+the TPU-hosted vLLM, having taken its model name from the catalog rather than
+being told one. Two ordinary SDKs, the OpenAI client and the MCP client, used
+exactly as they are used anywhere — nothing in the sandbox is SAM-specific,
+which is the point: an agent that needed a special client would be an agent
+nobody could port onto this.
+
+The honest limit of this demonstration: it establishes that tools and both
+providers are reachable and answering from inside a network-less sandbox. It is
+not a claim about how well a 2B model drives a fifteen-tool loop, which is a
+question about the model and not about the mesh.
 
 ### What this run says
 
@@ -371,12 +414,12 @@ bootstrap enrolment.
 requests in under half a second with nothing failing, and the node answered
 most of them in under half a millisecond while holding a thousand principals.
 
-**Inference was not exercised.** The agents' model calls returned **404** —
-`sam_node_request_duration_seconds_count{code="404",route="completions"}` was
-998 — because no inference provider is registered on this mesh. The run
-demonstrates reach, admission and MCP at a thousand agents. It does not
-demonstrate serving a thousand agents' inference, and the two should not be
-confused.
+**Inference was not exercised in this run.** The agents' model calls returned
+**404**, 998 of them: they asked for a model named `default`, and a name no
+catalog contains resolves to no provider. The run demonstrates reach, admission
+and MCP at a thousand agents; the inference path is
+[demonstrated separately](#what-an-agent-actually-gets), and the two should not
+be confused.
 
 ### Threats to validity
 
