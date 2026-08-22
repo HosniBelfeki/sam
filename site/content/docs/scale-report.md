@@ -138,9 +138,9 @@ Readiness here means the socket is accepting connections, not that the process
 exists — a boundary that has not bound its socket yet is of no use to the agent
 waiting on it.
 
-The striking part is the spread. The 64th boundary started as quickly as the
-first, so attaching an agent is a constant-cost operation over this range, not
-one that degrades as the host fills up.
+The spread is the notable feature: the 64th boundary started as quickly as the
+first, so attaching an agent is a constant-cost operation over this range rather
+than one that degrades as the host fills up.
 
 ### Overhead
 
@@ -179,12 +179,12 @@ name and never dialled.
 
 ## Conclusions
 
-**A per-agent boundary is affordable.** At ~18 MB and ~59 ms to attach, the
-constraint on how many agents a host carries is the agents themselves, not the
-thing that contains them. Extrapolating the floor, the boundaries for a
-thousand agents would be roughly 18 GB — a large but ordinary number for a host
-of this class, and the extrapolation is exactly the thing the next experiment
-should check rather than assume.
+**The per-agent boundary cost is small relative to the agent it contains.** At
+~18 MB and ~59 ms to attach, the constraint on how many agents a host carries is
+the agents themselves rather than the thing that contains them. Extrapolating
+the floor, the boundaries for a thousand agents would be roughly 18 GB. That
+extrapolation is precisely what the next experiment should test rather than
+assume.
 
 **Enforcement is not a latency problem.** 18–20 µs to classify and open a flow,
 and an end-to-end cost too small for this method to separate from noise. The
@@ -286,9 +286,9 @@ _Recorded 2026-08-21. Raw samples in
 | Node (one, for all of them) | 386 MiB | 0.4 MiB |
 | **Together** | **187 GiB of 251 GiB** | **192 MiB** |
 
-The node is the number worth pausing on. One `sam-node` served a thousand
-distinct agent principals in 386 MB, because an agent is not a peer: it has no
-enrolment, no key and no place in the DHT. The mesh gained a thousand
+The node figure is the one that bears on the design. One `sam-node` served a
+thousand distinct agent principals in 386 MB, because an agent is not a peer: it
+has no enrolment, no key and no place in the DHT. The mesh gained a thousand
 principals and no members.
 
 ### How fast they came up
@@ -315,19 +315,28 @@ so the thousand is a thousand and not a ceiling.
 
 ### What they can push
 
-Density is not throughput, so with the thousand still resident we drove real
-traffic through 200 of them at once — each through its own boundary, so the
-node saw 200 distinct principals rather than 200 connections from one client.
-200 requests per agent, two in flight each.
+Density is not throughput, so with the thousand still resident, traffic was
+driven through 200 of them at once — each through its own boundary, so the node
+saw 200 distinct principals rather than 200 connections from one client. 200
+requests per agent, two in flight each.
 
-**40,000 requests, none failed, in 0.43 seconds — about 92,000 requests per
-second**, while the other 800 sandboxes sat resident. Per agent that is a median
-of 534 req/s; the slowest agent got 490 and the fastest 652, so no principal was
-starved. Client-observed time to first byte was a median of 2.0 ms across
-agents, 13 ms at p95, 21 ms at p99, and 98 ms for the single worst request in
-the whole run.
+**What the following number is, and is not.** It is the aggregate rate at which
+a locally-served endpoint was reached through 200 concurrent policy boundaries,
+with the load generated on the host. It is not an end-to-end figure for an agent
+workload. The request is answered by the node itself, so no upstream provider is
+in the path; and the generator enters at the boundary's SOCKS5 socket rather
+than from inside a guest, so the in-guest network stack and the vsock hop are
+not either. It should be read as an upper bound on what the enforcement path
+permits, not as a throughput claim for the system as deployed.
 
-The node agreed, and answered **200 to all 41,000**:
+Under those conditions: 40,000 requests, none failed, in 0.43 s — an aggregate
+of roughly 92,000 requests per second, while the other 800 sandboxes sat
+resident. Per agent that is a median of 534 req/s, with a minimum of 490 and a
+maximum of 652, so no principal was starved. Client-observed time to first byte
+was a median of 2.0 ms across agents, 13 ms at p95, 21 ms at p99, and 98 ms for
+the single worst request in the run.
+
+The node's own counters record **200 for all 41,000**:
 
 | server-side duration | requests | share |
 | --- | --- | --- |
@@ -403,16 +412,18 @@ boundary is 25 MB of that and the node's share is under half a megabyte. A
 host's agent count is decided by how much memory the agents themselves want.
 
 **The mesh does not grow when the agent population does.** A thousand agents
-arrived as one member with one enrolment. That is the whole reason for
-separating the principal from the peer, and it is the difference between a
-mesh that can hold this population and one that cannot.
+arrived as one member with one enrolment. That is the reason for separating the
+principal from the peer, and it is the difference between a mesh that can hold
+this population and one that cannot.
 
 **It ran against a real, shared control plane** — not a fixture — with one
 bootstrap enrolment.
 
-**The datapath is not the bottleneck at this size.** 200 agents moved 40,000
-requests in under half a second with nothing failing, and the node answered
-most of them in under half a millisecond while holding a thousand principals.
+**The enforcement path did not limit throughput under these conditions.** 200
+agents issued 40,000 requests in under half a second with no failures, and the
+node served most of them in under half a millisecond while holding a thousand
+principals. Since the endpoint was local and the load host-generated, this
+bounds the enforcement path rather than characterising a deployed workload.
 
 **Inference was not exercised in this run.** The agents' model calls returned
 **404**, 998 of them: they asked for a model named `default`, and a name no
