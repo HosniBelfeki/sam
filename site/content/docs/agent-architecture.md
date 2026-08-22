@@ -326,6 +326,46 @@ sandbox:
 Filtering by name without MITM is honest here: the gateway dials the name it
 authorized and, for TLS, requires the client's SNI to match it.
 
+### 5.4 What a sandbox must provide
+
+`nano-init` builds the route out of a sandbox. It does not build the sandbox,
+so a profile is the answer to "who provides the isolation", and there are three
+supported answers. Each must satisfy the same five preconditions:
+
+1. **A network namespace with no way out.** No interface but loopback. This is
+   the one that cannot be compromised: an agent with a second route does not
+   have a boundary, it has a suggestion.
+2. **A private `/etc/resolv.conf`.** `nano-init` points it at the resolver on
+   `tun0`, so anything sharing that file would have its DNS repointed too.
+3. **A Unix socket to the boundary.** Sockets are filesystem objects and are
+   unaffected by the network namespace, which is what lets the sandbox have no
+   network and still be reachable.
+4. **A way to create a TUN device.** A kernel with `CONFIG_TUN` in a microVM;
+   `/dev/net/tun` plus `CAP_NET_ADMIN` elsewhere.
+5. **PID 1**, so children are reaped and signals and exit codes travel.
+
+| | `docker run --network none` | Firecracker microVM | Kubernetes pod |
+| --- | --- | --- | --- |
+| netns with no way out | the container runtime | the guest kernel, given no network device | **nothing does** |
+| private `resolv.conf` | the container's mount namespace | the guest rootfs | **nothing does** |
+| boundary socket | bind-mounted UDS | vsock, surfacing on the host as `<uds>_<port>` | shared `emptyDir` |
+| TUN | `--device /dev/net/tun --cap-add NET_ADMIN` | `CONFIG_TUN` in the guest kernel | device plugin |
+| PID 1 | the container's entrypoint | `/sbin/init` | the container's entrypoint |
+| isolation strength | namespaces, shared kernel | own kernel | namespaces, shared kernel |
+
+The first two columns are satisfied by the runtime. The third is not, and the
+reason is structural rather than an oversight: **every container in a pod shares
+one network namespace**, so there is no per-container equivalent of
+`--network none`, and the `resolv.conf` the kubelet generates is shared by all
+of them. A pod profile therefore has to create those two namespaces for itself,
+inside the container, before `nano-init` starts.
+
+Because the failure is silent -- `tun0` alongside `eth0` is a working network,
+not an error -- `nano-init` refuses to start in a namespace that has any
+interface other than loopback and its own tun, whichever profile is in use.
+That check is what makes a third profile safe to add rather than a way to
+quietly lose the boundary.
+
 ## 6. Test plan
 
 Coverage is pushed as far down the pyramid as it will go. Firecracker appears
