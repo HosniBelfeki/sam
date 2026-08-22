@@ -15,8 +15,11 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"os"
 	"strings"
+	"syscall"
 
 	"github.com/vishvananda/netlink"
 )
@@ -70,4 +73,46 @@ func isolationError(links []string) error {
 			"Give it a namespace of its own -- `docker run --network none`, or a microVM with no network device",
 		strings.Join(foreign, ", "),
 	)
+}
+
+// tunDevice is the clone device every tun is created through. Its absence and
+// its permissions are two different problems with two different fixes, which
+// is the whole reason for the diagnosis below.
+const tunDevice = "/dev/net/tun"
+
+// describeTunFailure turns a netlink error into the thing to change.
+func describeTunFailure(err error) string {
+	_, statErr := os.Stat(tunDevice)
+	return tunHint(err, statErr)
+}
+
+// tunHint explains a failed tun creation.
+//
+// The old message asked whether the kernel had CONFIG_TUN, which is the right
+// question in a microVM and useless in a container, where the same failure
+// means the device was not passed in or the capability was not granted. The
+// profiles fail differently, so they are told apart here rather than left to
+// whoever is reading a log at the time.
+func tunHint(err error, statErr error) string {
+	switch {
+	case os.IsNotExist(statErr):
+		return "there is no " + tunDevice + ". In a microVM that means a guest kernel built without CONFIG_TUN" +
+			" (the stock Firecracker CI kernels carry vsock but no tun driver; 6.18.41 has it)." +
+			" In a container it means the device was not passed in: `--device /dev/net/tun` for docker," +
+			" or a device plugin for a Kubernetes pod, since the device cgroup denies it by default"
+
+	case os.IsPermission(statErr):
+		return tunDevice + " exists but cannot be opened. Under Kubernetes the device cgroup denies it unless a" +
+			" device plugin grants it; a user namespace does not help, because opening the device is checked" +
+			" against the host and not against the namespace"
+
+	case errors.Is(err, syscall.EPERM), errors.Is(err, syscall.EACCES):
+		return "creating a tun was refused. It needs CAP_NET_ADMIN in the user namespace that owns this network" +
+			" namespace: `--cap-add NET_ADMIN` for docker, securityContext.capabilities.add: [NET_ADMIN] for a pod," +
+			" or a user namespace of your own, which grants it over the namespaces it owns"
+
+	case errors.Is(err, syscall.ENODEV):
+		return "the kernel has no tun driver. Rebuild the guest kernel with CONFIG_TUN=y"
+	}
+	return "the tun device could not be created, and the cause is not one this knows how to explain"
 }
