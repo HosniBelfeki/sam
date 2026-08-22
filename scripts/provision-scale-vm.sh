@@ -26,9 +26,14 @@ while [[ "$#" -gt 0 ]]; do
 done
 
 if [ "${SPOT:-1}" -eq 1 ]; then
-    SCHEDULING="--provisioning-model=SPOT --preemption-notice-duration=0s --instance-termination-action=STOP"
+    # Spot cannot migrate and must not be restarted for us; it goes away and the
+    # run goes with it, which is the trade being made when spot is chosen.
+    SCHEDULING="--provisioning-model=SPOT --preemption-notice-duration=0s --instance-termination-action=STOP --no-restart-on-failure --maintenance-policy=TERMINATE"
 else
-    SCHEDULING="--provisioning-model=STANDARD"
+    # A standard instance can live-migrate, and must, or a routine host
+    # maintenance window ends the experiment: that is what terminated a soak
+    # here two hours in, on an instance that was deliberately not spot.
+    SCHEDULING="--provisioning-model=STANDARD --restart-on-failure --maintenance-policy=MIGRATE"
 fi
 
 METADATA="enable-osconfig=TRUE"
@@ -69,8 +74,6 @@ if [ "$COUNT" -eq 1 ]; then
         --network-interface=network-tier=PREMIUM,stack-type=IPV4_ONLY,subnet=default \
         --metadata="${METADATA}" \
         --metadata-from-file=startup-script=scripts/startup-script.sh \
-        --no-restart-on-failure \
-        --maintenance-policy=TERMINATE \
         ${SCHEDULING} \
         --service-account=628944397724-compute@developer.gserviceaccount.com \
         --scopes=https://www.googleapis.com/auth/devstorage.read_only,https://www.googleapis.com/auth/logging.write,https://www.googleapis.com/auth/monitoring.write,https://www.googleapis.com/auth/service.management.readonly,https://www.googleapis.com/auth/servicecontrol,https://www.googleapis.com/auth/trace.append \
@@ -94,8 +97,6 @@ else
         --network-interface=network-tier=PREMIUM,stack-type=IPV4_ONLY,subnet=default \
         --metadata="${METADATA}" \
         --metadata-from-file=startup-script=scripts/startup-script.sh \
-        --no-restart-on-failure \
-        --maintenance-policy=TERMINATE \
         ${SCHEDULING} \
         --service-account=628944397724-compute@developer.gserviceaccount.com \
         --scopes=https://www.googleapis.com/auth/devstorage.read_only,https://www.googleapis.com/auth/logging.write,https://www.googleapis.com/auth/monitoring.write,https://www.googleapis.com/auth/service.management.readonly,https://www.googleapis.com/auth/servicecontrol,https://www.googleapis.com/auth/trace.append \
