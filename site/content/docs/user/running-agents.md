@@ -433,9 +433,12 @@ args:
   - --bundle=/etc/sam/bundle.yaml
 ```
 
-Without `--agent-ingress-socket`, `sam-box` falls back to dialling the agent
-directly and warns that this only reaches an agent sharing its network
-namespace — which is to say, one that is not sandboxed.
+`--agent-ingress-socket` is required whenever the bundle grants ingress, and
+`sam-box` refuses to start without it. There is no fallback on purpose: the only
+other address available is one in the gateway's own network namespace, which in
+a pod is the pod's — where `sam-node`'s API and every sidecar are listening —
+and the port would be the agent's to choose. An agent could otherwise announce
+a service whose backend was the node that vouches for it.
 
 What the agent may serve is still the bundle's decision, not the agent's. The
 agent chooses the port, because that is the part only it knows.

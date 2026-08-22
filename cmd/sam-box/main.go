@@ -234,11 +234,14 @@ func resolveIngress(bundlePath, sidecarSocket, agentIngressSocket string) (*samb
 		return nil, nil
 	}
 	if agentIngressSocket == "" {
-		// Not fatal: an agent sharing this process's network namespace is
-		// reachable without one. That is no sandbox, so it is worth saying.
-		logger.Warnf("Agent %s may serve the mesh, but no --agent-ingress-socket was given: "+
-			"delivery will dial the agent directly, which only reaches an agent sharing this "+
-			"network namespace and therefore not a sandboxed one", bundle.Agent.ID)
+		// Refused rather than degraded. Without a channel into the sandbox the
+		// only address left is one in this process's network namespace, which
+		// is the pod's: the node's API and every sidecar are on that loopback,
+		// and the port would be the agent's to choose.
+		return nil, fmt.Errorf("agent %s may serve %d mesh service(s), but --agent-ingress-socket is not set. "+
+			"Point it at the path nano-init --ingress-socket serves; without it there is no way into the "+
+			"sandbox, and delivering to this process's own network namespace would reach the gateway's "+
+			"neighbours instead of the agent", bundle.Agent.ID, len(bundle.Ingress))
 	}
 	logger.Infof("Agent %s may serve %d mesh service(s) once it announces them", bundle.Agent.ID, len(bundle.Ingress))
 	return &sambox.IngressManager{

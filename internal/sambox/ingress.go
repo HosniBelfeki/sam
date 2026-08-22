@@ -127,6 +127,9 @@ func (m *IngressManager) Announce(ctx context.Context, decl ingressDeclaration) 
 	if !m.permits(decl) {
 		return fmt.Errorf("this agent was not granted %s://%s", decl.Type, decl.Name)
 	}
+	if err := m.reachable(); err != nil {
+		return err
+	}
 
 	addr, err := m.ensureListening()
 	if err != nil {
@@ -212,11 +215,35 @@ func (m *IngressManager) forwarder() http.Handler {
 	return proxy
 }
 
+// agentAddr names where the agent is, for a transport that knows how to get
+// there. The port is the agent's own choice, so this must never become an
+// address in this process's network namespace: see reachable.
 func (m *IngressManager) agentAddr(port int) string {
 	if m.AgentAddr != nil {
 		return m.AgentAddr(port)
 	}
 	return net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+}
+
+// reachable reports whether this manager can deliver into the sandbox at all.
+//
+// There used to be a fallback here: with no reverse channel, dial
+// 127.0.0.1:<port> and hope the agent shares this network namespace. That is a
+// hole rather than a degraded mode. The port is chosen by the agent, and this
+// process's loopback is the pod's -- where sam-node's API, other sidecars and
+// every other boundary are listening. An agent could therefore announce a
+// service whose backend is the node that vouches for it, and the mesh would
+// route to it.
+//
+// So an agent that may serve needs a channel into its sandbox, and without one
+// nothing is registered.
+func (m *IngressManager) reachable() error {
+	if m.AgentSocket != "" || m.AgentAddr != nil {
+		return nil
+	}
+	return fmt.Errorf("no way into the sandbox: set --agent-ingress-socket to the path " +
+		"nano-init --ingress-socket serves, because delivering to an address in this " +
+		"process's network namespace would reach the gateway's neighbours rather than the agent")
 }
 
 // AgentTransport reaches the sandbox over its reverse channel when there is

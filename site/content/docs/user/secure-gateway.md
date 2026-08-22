@@ -142,9 +142,9 @@ Reaching back into the sandbox cannot mean dialling the agent: a sandbox has a
 network namespace of its own, so the gateway's `127.0.0.1` is its own loopback
 and not the agent's. Delivery therefore goes over a second Unix socket, served
 from inside the sandbox by `nano-init --ingress-socket` and dialled by
-`sam-box --agent-ingress-socket`. Without that flag the gateway falls back to
-dialling the agent directly and warns, because that only reaches an agent
-sharing its network namespace — one that is not sandboxed.
+`sam-box --agent-ingress-socket`. That flag is required whenever a bundle grants
+ingress: the gateway refuses to start without it, because the only other address
+available is one in its own network namespace, on a port the agent chooses.
 
 ---
 

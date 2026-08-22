@@ -17,9 +17,13 @@ package sambox
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -73,6 +77,9 @@ func TestIngressRegistersWhatTheAgentAnnounces(t *testing.T) {
 	manager := &IngressManager{
 		SidecarSocket: socket,
 		Allowed:       []BundleIngress{{Name: "code-reviewer", Type: "mcp"}},
+		// Registration never dials it, but a manager with no way into the
+		// sandbox now refuses to register at all.
+		AgentSocket: filepath.Join(t.TempDir(), "ingress.sock"),
 	}
 	t.Cleanup(func() { manager.Close(context.Background()) })
 
@@ -104,6 +111,9 @@ func TestIngressRefusesNamesTheAgentWasNotGranted(t *testing.T) {
 	manager := &IngressManager{
 		SidecarSocket: socket,
 		Allowed:       []BundleIngress{{Name: "code-reviewer", Type: "mcp"}},
+		// Registration never dials it, but a manager with no way into the
+		// sandbox now refuses to register at all.
+		AgentSocket: filepath.Join(t.TempDir(), "ingress.sock"),
 	}
 	t.Cleanup(func() { manager.Close(context.Background()) })
 
@@ -132,6 +142,57 @@ func TestIngressRefusesNamesTheAgentWasNotGranted(t *testing.T) {
 			default:
 			}
 		})
+	}
+}
+
+// TestIngressWithNoWayInRefusesRatherThanDiallingItsOwnNamespace is a
+// vulnerability regression.
+//
+// There used to be a fallback: with no reverse channel, deliver to
+// 127.0.0.1:<port>. That address is in the gateway's network namespace, which
+// in a pod is the pod's -- sam-node's API, the other sidecars, every other
+// boundary. The port comes from the agent. So an agent could announce a
+// service whose backend was the node that vouches for it, and the mesh would
+// route to it.
+//
+// Nothing is registered without a way into the sandbox, so there is no address
+// for the mesh to reach and nothing for the agent to aim.
+func TestIngressWithNoWayInRefusesRatherThanDiallingItsOwnNamespace(t *testing.T) {
+	// Stands in for whatever else shares the gateway's namespace: the node's
+	// API, a metrics endpoint, another agent's boundary.
+	neighbour := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("the gateway dialled a neighbour in its own network namespace")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer neighbour.Close()
+
+	_, portStr, err := net.SplitHostPort(strings.TrimPrefix(neighbour.URL, "http://"))
+	if err != nil {
+		t.Fatalf("SplitHostPort: %v", err)
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		t.Fatalf("Atoi: %v", err)
+	}
+
+	registrations := make(chan *api.RegisterServiceRequest, 1)
+	manager := &IngressManager{
+		SidecarSocket: registrationRecorder(t, registrations),
+		// Granted the name, so only the missing channel can refuse it.
+		Allowed: []BundleIngress{{Name: "code-reviewer", Type: "mcp"}},
+	}
+	t.Cleanup(func() { manager.Close(context.Background()) })
+
+	body := fmt.Sprintf(`{"name":"code-reviewer","type":"mcp","port":%d}`, port)
+	rec := announce(t, manager.Handler(), body)
+	if rec.Code == http.StatusNoContent {
+		t.Fatalf("the agent announced a service aimed at the gateway's own namespace and was accepted")
+	}
+
+	select {
+	case got := <-registrations:
+		t.Fatalf("registered %q despite having no way into the sandbox", got.GetService().GetName())
+	default:
 	}
 }
 
@@ -242,6 +303,9 @@ func TestIngressWithdrawsOnClose(t *testing.T) {
 	manager := &IngressManager{
 		SidecarSocket: socket,
 		Allowed:       []BundleIngress{{Name: "code-reviewer", Type: "mcp"}},
+		// Registration never dials it, but a manager with no way into the
+		// sandbox now refuses to register at all.
+		AgentSocket: filepath.Join(t.TempDir(), "ingress.sock"),
 	}
 	if rec := announce(t, manager.Handler(), `{"name":"code-reviewer","type":"mcp","port":8080}`); rec.Code != http.StatusNoContent {
 		t.Fatalf("announce: %d", rec.Code)
