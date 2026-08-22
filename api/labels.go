@@ -17,6 +17,7 @@ package api
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -63,13 +64,23 @@ func ValidateLabelValue(value string) error {
 	return nil
 }
 
-// ValidateLabels checks every key and value in a label set.
+// ValidateLabels checks every key and value in a label set. Keys are visited
+// in lexicographic order, so the error returned for a given input is
+// deterministic and stable across runs (Go's map iteration is randomized).
 func ValidateLabels(labels map[string]string) error {
-	for k, v := range labels {
+	if len(labels) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(labels))
+	for k := range labels {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
 		if err := ValidateLabelKey(k); err != nil {
 			return err
 		}
-		if err := ValidateLabelValue(v); err != nil {
+		if err := ValidateLabelValue(labels[k]); err != nil {
 			return err
 		}
 	}
