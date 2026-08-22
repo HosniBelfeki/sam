@@ -115,6 +115,14 @@ func run(boundarySocket, cmdName string, cmdArgs []string) {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
 	defer cancel()
 
+	// First, and before anything is built: if this namespace is not a sandbox
+	// then the boundary is beside the point, and saying so in that order is
+	// the difference between "you forgot --network none" and a puzzling
+	// complaint about a socket.
+	if err := assertIsolated(); err != nil {
+		log.Fatalf("refusing to start: %v", err)
+	}
+
 	if err := checkBoundary(boundarySocket); err != nil {
 		log.Fatalf("this sandbox has no way out: %v", err)
 	}
