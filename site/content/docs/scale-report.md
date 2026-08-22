@@ -315,6 +315,44 @@ as quickly as the first.
 `sam_node_agents_untracked_total` was **0**: every agent that ran was counted,
 so the thousand is a thousand and not a ceiling.
 
+### What they can push
+
+Density is not throughput, so with the thousand still resident we drove real
+traffic through 200 of them at once — each through its own boundary, so the
+node saw 200 distinct principals rather than 200 connections from one client.
+200 requests per agent, two in flight each.
+
+**40,000 requests, none failed, in 0.43 seconds — about 92,000 requests per
+second**, while the other 800 sandboxes sat resident. Per agent that is a median
+of 534 req/s; the slowest agent got 490 and the fastest 652, so no principal was
+starved. Client-observed time to first byte was a median of 2.0 ms across
+agents, 13 ms at p95, 21 ms at p99, and 98 ms for the single worst request in
+the whole run.
+
+The node agreed, and answered **200 to all 41,000**:
+
+| server-side duration | requests | share |
+| --- | --- | --- |
+| under 0.5 ms | 35,580 | 86.8% |
+| under 5 ms | 39,412 | 96.1% |
+| under 10 ms | 40,207 | 98.1% |
+| under 25 ms | 40,586 | 99.0% |
+| 5–10 s | 400 | 1.0% |
+
+That last row is the interesting one, and it is not jitter. Those 400 requests
+took almost exactly 5.04 seconds each, which is
+[`dhtLookupTimeout`](https://github.com/google/sam/blob/main/internal/node/node.go)
+to the millisecond. `/v1/models` resolves providers through the DHT, this mesh
+has **no inference provider registered**, and a lookup that finds nothing cannot
+return early — it runs to its timeout, then caches the empty answer for 30
+seconds. So the cost is not per agent and not per request: it is one negative
+lookup per cache expiry, paid by whoever happens to arrive first. Everything
+behind the cache is the sub-millisecond mass above.
+
+It is a fair thing to dislike. A miss costs the full timeout because there is no
+negative caching, and 200 concurrent first-arrivals all paid it rather than
+sharing one lookup.
+
 ### What this run says
 
 **An agent costs about 192 MiB and 150 ms**, nearly all of it the microVM. The
@@ -329,15 +367,36 @@ mesh that can hold this population and one that cannot.
 **It ran against a real, shared control plane** — not a fixture — with one
 bootstrap enrolment.
 
+**The datapath is not the bottleneck at this size.** 200 agents moved 40,000
+requests in under half a second with nothing failing, and the node answered
+most of them in under half a millisecond while holding a thousand principals.
+
+**Inference was not exercised.** The agents' model calls returned **404** —
+`sam_node_request_duration_seconds_count{code="404",route="completions"}` was
+998 — because no inference provider is registered on this mesh. The run
+demonstrates reach, admission and MCP at a thousand agents. It does not
+demonstrate serving a thousand agents' inference, and the two should not be
+confused.
+
 ### Threats to validity
 
 - **One host, one run.** No repetitions, no confidence intervals.
-- **The agents are the example harness**, which discovers tools, calls a model
-  and stops. A heavier agent needs more guest memory, and 167 MiB is a
-  statement about this workload rather than about agents in general.
-- **The population is idle at peak.** Every agent reached the mesh and was
-  counted; they were not all issuing requests when memory was measured, so this
-  is a density result and not a throughput one.
+- **The agents are the example harness**, which connects, discovers tools,
+  attempts a model call and stops. A heavier agent needs more guest memory, and
+  167 MiB is a statement about this workload rather than about agents in
+  general.
+- **Memory was measured with the population idle.** The throughput numbers came
+  from a separate pass over the same resident fleet, so the 192 MiB/agent figure
+  and the 92k req/s figure are not from the same instant.
+- **The load was driven from the host**, into each boundary's SOCKS5 socket —
+  the same entry point the guest uses, but skipping the in-guest netstack and
+  the vsock hop. It measures the mesh datapath, not the sandbox's own overhead,
+  and the real per-agent ceiling will be lower.
+- **The load target is served by the local node.** `/v1/models` answers from the
+  node itself, so no upstream provider is in the path. That is deliberate — it
+  isolates SAM's cost from a backend's — but it is not an end-to-end figure.
+- **Only 200 of the thousand pushed traffic.** The rest were resident and idle.
+  Nothing here says what all thousand at full rate would do.
 - **A thousand is not a limit.** It is what fits comfortably in 251 GiB with
   this agent. Nothing here found a ceiling, which also means nothing here
   located one.
