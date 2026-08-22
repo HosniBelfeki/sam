@@ -115,9 +115,18 @@ spec:
         # user namespace maps exactly one uid, so the sandbox has to be that
         # uid: as root it would map 0 and hold no privilege over a file owned
         # by 65532, and the connection would be refused.
+        #
+        # Unconfined AppArmor is the one relaxation the sandbox needs. The
+        # profile containerd applies by default permits the mount namespace and
+        # then denies the bind mount inside it, so the sandbox would get a
+        # namespace it cannot give a private resolv.conf. Everything else stays
+        # off: no capabilities, no privileged, and a user namespace that holds
+        # the process to what it owns.
         securityContext:
           runAsUser: 65532
           runAsGroup: 65532
+          appArmorProfile:
+            type: Unconfined
         command:
           - "/sandbox/nano-init"
           - "run"

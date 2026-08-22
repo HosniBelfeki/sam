@@ -130,9 +130,15 @@ func TestSandboxServesThroughTheReverseChannel(t *testing.T) {
 
 	var resp *http.Response
 	for time.Now().Before(deadline) {
-		req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet,
+		// Each attempt is bounded on its own. Sharing the outer deadline meant
+		// one attempt that hung -- against a listener the sandbox had not
+		// restarted yet -- spent the whole budget and failed the test under
+		// load, while passing whenever it was run alone.
+		attemptCtx, cancelAttempt := context.WithTimeout(ctx, 5*time.Second)
+		req, reqErr := http.NewRequestWithContext(attemptCtx, http.MethodGet,
 			fmt.Sprintf("http://127.0.0.1:%d/", agentPort), nil)
 		if reqErr != nil {
+			cancelAttempt()
 			t.Fatalf("build the request: %v", reqErr)
 		}
 		// The agent inside serves one connection at a time, so reusing one
@@ -140,8 +146,10 @@ func TestSandboxServesThroughTheReverseChannel(t *testing.T) {
 		req.Close = true
 		resp, err = client.Do(req)
 		if err == nil {
+			defer cancelAttempt()
 			break
 		}
+		cancelAttempt()
 		time.Sleep(200 * time.Millisecond)
 	}
 	if err != nil {

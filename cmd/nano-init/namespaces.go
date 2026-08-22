@@ -172,8 +172,23 @@ func userNamespacesAvailable() error {
 	return nil
 }
 
-// privateResolvConf gives the sandbox a resolv.conf of its own.
+// mountHint explains a refused mount, which in a container is usually a
+// sandboxing profile rather than a missing capability.
 //
+// Kubernetes is the case worth naming. containerd applies an AppArmor profile
+// by default -- cri-containerd.apparmor.d on GKE -- and it denies bind mounts
+// while allowing the namespace itself, so the sandbox gets as far as having a
+// mount namespace and then cannot put anything in it.
+func mountHint(err error) string {
+	if !errors.Is(err, syscall.EPERM) && !errors.Is(err, syscall.EACCES) {
+		return ""
+	}
+	return " This is usually AppArmor rather than a missing capability: containerd applies a" +
+		" profile that denies bind mounts. In a pod, set the agent container's" +
+		" securityContext.appArmorProfile.type to Unconfined, or load a profile that permits" +
+		" mount. Docker's equivalent is --security-opt apparmor=unconfined."
+}
+
 // A new mount namespace copies the mount table; it does not copy files. The
 // resolv.conf a pod hands each container is one file shared by all of them, so
 // without this, pointing DNS at the sandbox's own resolver would point every
@@ -194,7 +209,7 @@ func privateResolvConf() error {
 	}
 	if err := unix.Mount(name, "/etc/resolv.conf", "", unix.MS_BIND, ""); err != nil {
 		_ = os.Remove(name)
-		return fmt.Errorf("bind a private resolv.conf over /etc/resolv.conf: %w", err)
+		return fmt.Errorf("bind a private resolv.conf over /etc/resolv.conf: %w.%s", err, mountHint(err))
 	}
 	// The mount holds the inode, so the path it was reached by is litter.
 	_ = os.Remove(name)

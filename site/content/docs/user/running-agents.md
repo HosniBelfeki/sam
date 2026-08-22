@@ -340,6 +340,10 @@ spec:
     # starts, no network.
     - name: agent
       image: your-agent-image
+      securityContext:
+        # The one relaxation the sandbox needs; see below.
+        appArmorProfile:
+          type: Unconfined
       command: ["/usr/local/bin/nano-init", "run", "--create-namespaces",
                 "/var/run/sam/agent.sock", "python3", "/app/agent.py"]
       volumeMounts:
@@ -365,14 +369,35 @@ holds both over the namespaces it then makes. Granting `CAP_SYS_ADMIN` alone is
 in fact worse than granting nothing: the namespace gets created, and then the
 tun fails for want of `CAP_NET_ADMIN`.
 
-**A seccomp and AppArmor policy that permits it.** This is the one that bites.
-Creating a user namespace and remounting `/` as private are exactly the
-operations container sandboxing profiles restrict. Kubernetes applies neither
-profile unless you ask it to, so a default pod works — but a cluster with
-`seccompDefault=RuntimeDefault`, or a `runtime/default` AppArmor profile, must
-permit `unshare(CLONE_NEWUSER|CLONE_NEWNS)` and `mount`. Docker's defaults block
-both, which is why the same image needs `--security-opt seccomp=unconfined
---security-opt apparmor=unconfined` to be tried locally.
+**A seccomp and AppArmor policy that permits it.** This is the one that bites,
+and it is the reason for the `appArmorProfile` above. containerd applies an
+AppArmor profile by default — `cri-containerd.apparmor.d` on GKE — which permits
+creating the mount namespace and then **denies the bind mount inside it**. The
+sandbox gets a namespace it cannot put a private `resolv.conf` into. Measured on
+a GKE 1.35 node:
+
+```console
+user+net                          : ok
+user+mount (unchanged propagation): ok
+bind mount inside                 : FAILED
+```
+
+With `appArmorProfile: {type: Unconfined}` on that container, all three pass.
+Seccomp is not involved: GKE reports `Seccomp: 0` for pods that do not ask for a
+profile, and creating the namespaces is allowed. Docker is the other way round —
+its default seccomp blocks the user namespace and its default AppArmor blocks the
+mount — which is why running the same image locally needs
+`--security-opt seccomp=unconfined --security-opt apparmor=unconfined`.
+
+It is worth being clear about what that costs, because the container it applies
+to is the least trusted one. The agent keeps every other constraint: no
+capabilities, not privileged, its own user namespace, and no network but the
+tun. What it gains is the ability to mount inside its own mount namespace, which
+a user namespace already confines to filesystems it owns. The tighter option is
+a custom profile — the default plus `mount` — loaded on the nodes and selected
+with `appArmorProfile: {type: Localhost, localhostProfile: ...}`; that is
+strictly better and costs an operational step, so it is the right thing to move
+to rather than the right thing to start with.
 
 **Somewhere writable.** A new mount namespace copies the mount table, not the
 files behind it, so a private `resolv.conf` is a bind mount over a real file,
