@@ -15,6 +15,7 @@
 package sambox
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -26,6 +27,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -63,10 +65,20 @@ type IngressManager struct {
 	// agent may serve nothing.
 	Allowed []BundleIngress
 
-	// AgentAddr resolves where the agent listens inside its sandbox. It exists
-	// because reaching in is topology-dependent: a sandbox sharing a network
-	// namespace with the gateway is reachable on loopback, while an isolated
-	// one needs a reverse channel that does not exist yet.
+	// AgentSocket is the sandbox's reverse channel: a Unix socket nano-init
+	// listens on from inside the sandbox. It is how an isolated agent is
+	// reached at all, because every sandbox has a network namespace of its own
+	// and the gateway's 127.0.0.1 is therefore not the agent's. A pathname
+	// socket crosses that boundary for the same reason the egress one does: it
+	// is a filesystem object, and network namespaces do not apply to it.
+	//
+	// Empty means the agent shares this process's network namespace and can be
+	// dialled directly, which is true of no sandboxed profile.
+	AgentSocket string
+
+	// AgentAddr resolves where the agent listens inside its sandbox. Setting it
+	// overrides both of the above, which is how tests point the forwarder at a
+	// server of their own.
 	AgentAddr func(port int) string
 
 	mu       sync.Mutex
@@ -176,6 +188,7 @@ func (m *IngressManager) ensureListening() (string, error) {
 // service name the gateway added so the agent sees the path it published.
 func (m *IngressManager) forwarder() http.Handler {
 	proxy := &httputil.ReverseProxy{
+		Transport: m.AgentTransport(),
 		Rewrite: func(r *httputil.ProxyRequest) {
 			name, rest := splitServicePath(r.In.URL.Path)
 
@@ -204,6 +217,60 @@ func (m *IngressManager) agentAddr(port int) string {
 		return m.AgentAddr(port)
 	}
 	return net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+}
+
+// AgentTransport reaches the sandbox over its reverse channel when there is
+// one, and returns nil when the agent can be dialled directly.
+//
+// The address the forwarder writes is still 127.0.0.1:<port>, because that is
+// what the port means where it is going. Only the dialling changes: the port is
+// carried in the handshake and the connection is made by the process inside the
+// sandbox, which is the one that can.
+func (m *IngressManager) AgentTransport() http.RoundTripper {
+	if m.AgentSocket == "" {
+		return nil // the default transport dials the address directly
+	}
+	socket := m.AgentSocket
+	return &http.Transport{
+		DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
+			_, port, err := net.SplitHostPort(addr)
+			if err != nil {
+				return nil, fmt.Errorf("ingress target %q: %w", addr, err)
+			}
+			return dialSandbox(ctx, socket, port)
+		},
+	}
+}
+
+// dialSandbox opens one connection through the sandbox's reverse channel.
+//
+// The handshake is Firecracker's -- "CONNECT <port>", then "OK" -- so a microVM
+// can offer the same protocol over vsock and nothing here has to know which
+// kind of sandbox it is talking to.
+func dialSandbox(ctx context.Context, socket, port string) (net.Conn, error) {
+	var d net.Dialer
+	conn, err := d.DialContext(ctx, "unix", socket)
+	if err != nil {
+		return nil, fmt.Errorf("reach the sandbox's ingress socket %s: %w", socket, err)
+	}
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = conn.SetDeadline(deadline)
+	}
+	if _, err := fmt.Fprintf(conn, "CONNECT %s\n", port); err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("ask the sandbox for port %s: %w", port, err)
+	}
+	reply, err := bufio.NewReader(io.LimitReader(conn, 128)).ReadString('\n')
+	if err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("read the sandbox's answer for port %s: %w", port, err)
+	}
+	if strings.TrimSpace(reply) != "OK" {
+		_ = conn.Close()
+		return nil, fmt.Errorf("the sandbox refused port %s: %s", port, strings.TrimSpace(reply))
+	}
+	_ = conn.SetDeadline(time.Time{})
+	return conn, nil
 }
 
 // register tells the node to advertise the service, with a target only the

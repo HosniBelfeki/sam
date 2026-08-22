@@ -49,6 +49,8 @@ func main() {
 		insecure      bool
 		metricsAddr   string
 		logLevel      string
+
+		agentIngressSocket string
 	)
 
 	rootCmd := &cobra.Command{
@@ -76,7 +78,7 @@ func main() {
 			if err := verifyBundleCredential(cmd.Context(), bundlePath, issuer, audience, insecure); err != nil {
 				return err
 			}
-			ingress, err := resolveIngress(bundlePath, sidecarSocket)
+			ingress, err := resolveIngress(bundlePath, sidecarSocket, agentIngressSocket)
 			if err != nil {
 				return err
 			}
@@ -133,6 +135,7 @@ func main() {
 	runCmd.Flags().StringVar(&audience, "credential-audience", "", "Audience an agent's credential must be scoped to; required with --bundle")
 	runCmd.Flags().BoolVar(&insecure, "insecure-unverified-bundle", false, "Trust the bundle's declared identity without a credential to back it, letting whoever can write the file decide which agent this sandbox is")
 	runCmd.Flags().StringVar(&metricsAddr, "metrics-addr", "", "Serve unauthenticated Prometheus metrics on this address, e.g. 127.0.0.1:9600; off by default")
+	runCmd.Flags().StringVar(&agentIngressSocket, "agent-ingress-socket", "", "Path to the sandbox's reverse channel, served by nano-init --ingress-socket; required to reach an agent that serves the mesh, because an isolated sandbox cannot be dialled")
 	runCmd.Flags().StringVar(&logLevel, "log-level", "info", "Log level (debug, info, warn, error)")
 	for _, required := range []string{"socket", "sidecar-socket"} {
 		if err := runCmd.MarkFlagRequired(required); err != nil {
@@ -219,7 +222,7 @@ func verifyBundleCredential(ctx context.Context, bundlePath, issuer, audience st
 
 // resolveIngress prepares what the agent is permitted to serve. Nil means
 // nothing, which is the case for a sandbox that only calls out.
-func resolveIngress(bundlePath, sidecarSocket string) (*sambox.IngressManager, error) {
+func resolveIngress(bundlePath, sidecarSocket, agentIngressSocket string) (*sambox.IngressManager, error) {
 	if bundlePath == "" {
 		return nil, nil
 	}
@@ -230,9 +233,17 @@ func resolveIngress(bundlePath, sidecarSocket string) (*sambox.IngressManager, e
 	if len(bundle.Ingress) == 0 {
 		return nil, nil
 	}
+	if agentIngressSocket == "" {
+		// Not fatal: an agent sharing this process's network namespace is
+		// reachable without one. That is no sandbox, so it is worth saying.
+		logger.Warnf("Agent %s may serve the mesh, but no --agent-ingress-socket was given: "+
+			"delivery will dial the agent directly, which only reaches an agent sharing this "+
+			"network namespace and therefore not a sandboxed one", bundle.Agent.ID)
+	}
 	logger.Infof("Agent %s may serve %d mesh service(s) once it announces them", bundle.Agent.ID, len(bundle.Ingress))
 	return &sambox.IngressManager{
 		SidecarSocket: sidecarSocket,
 		Allowed:       bundle.Ingress,
+		AgentSocket:   agentIngressSocket,
 	}, nil
 }

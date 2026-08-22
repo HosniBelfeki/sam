@@ -48,6 +48,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -95,28 +96,57 @@ func main() {
 		}
 
 	case "run":
-		args := os.Args[2:]
-		createNS := false
-		if len(args) > 0 && args[0] == "--create-namespaces" {
-			createNS, args = true, args[1:]
-		}
+		createNS, ingressSocket, args := parseRunFlags(os.Args[2:])
 		if len(args) < 2 {
-			log.Fatalf("usage: %s run [--create-namespaces] <boundary-socket> <cmd> [args...]", os.Args[0])
+			usage()
 		}
-		run(createNS, args[0], args[1], args[2:])
+		run(createNS, ingressSocket, args[0], args[1], args[2:])
 
 	default:
 		usage()
 	}
 }
 
+// parseRunFlags reads our own flags and stops at the first argument that is not
+// one, because everything after that belongs to the agent and must reach it
+// untouched.
+func parseRunFlags(args []string) (createNS bool, ingressSocket string, rest []string) {
+	for len(args) > 0 {
+		switch {
+		case args[0] == "--create-namespaces":
+			createNS, args = true, args[1:]
+		case args[0] == "--ingress-socket":
+			if len(args) < 2 {
+				log.Fatalf("--ingress-socket needs a path")
+			}
+			ingressSocket, args = args[1], args[2:]
+		case strings.HasPrefix(args[0], "--ingress-socket="):
+			ingressSocket, args = strings.TrimPrefix(args[0], "--ingress-socket="), args[1:]
+		default:
+			return createNS, ingressSocket, args
+		}
+	}
+	return createNS, ingressSocket, nil
+}
+
+// runFlags rebuilds the arguments for the re-executed half, so it is given
+// what this one was given.
+func runFlags(ingressSocket, boundarySocket, cmdName string, cmdArgs []string) []string {
+	args := []string{"run", "--create-namespaces"}
+	if ingressSocket != "" {
+		args = append(args, "--ingress-socket", ingressSocket)
+	}
+	args = append(args, boundarySocket, cmdName)
+	return append(args, cmdArgs...)
+}
+
 func usage() {
-	log.Fatalf("usage:\n  %s copy <dest>\n  %s run [--create-namespaces] <boundary-socket> <cmd> [args...]",
+	log.Fatalf("usage:\n  %s copy <dest>\n  %s run [--create-namespaces] [--ingress-socket <path>] <boundary-socket> <cmd> [args...]",
 		os.Args[0], os.Args[0])
 }
 
 // run wires the sandbox up and hands it to the agent.
-func run(createNS bool, boundarySocket, cmdName string, cmdArgs []string) {
+func run(createNS bool, ingressSocket, boundarySocket, cmdName string, cmdArgs []string) {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
 	defer cancel()
 
@@ -133,7 +163,7 @@ func run(createNS bool, boundarySocket, cmdName string, cmdArgs []string) {
 		if err != nil {
 			log.Fatalf("locate this binary to re-execute it: %v", err)
 		}
-		args := append([]string{"run", "--create-namespaces", boundarySocket, cmdName}, cmdArgs...)
+		args := runFlags(ingressSocket, boundarySocket, cmdName, cmdArgs)
 		code, err := runAgent(ctx, cancel, self, args, withNamespaces(userNS))
 		if err != nil {
 			log.Fatalf("create the sandbox namespaces: %v\n%s", err, namespaceHint(err))
@@ -165,6 +195,17 @@ func run(createNS bool, boundarySocket, cmdName string, cmdArgs []string) {
 	}
 	if err := setupNetwork(ctx, boundarySocket, names); err != nil {
 		log.Fatalf("set up sandbox network: %v", err)
+	}
+
+	// Started here rather than earlier because it only makes sense once the
+	// sandbox exists: this is the one process that can reach the agent at the
+	// address the gateway will name.
+	if ingressSocket != "" {
+		go func() {
+			if err := serveIngress(ctx, ingressSocket); err != nil {
+				log.Printf("ingress: %v", err)
+			}
+		}()
 	}
 
 	code, err := runAgent(ctx, cancel, cmdName, cmdArgs)
