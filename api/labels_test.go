@@ -65,3 +65,45 @@ func TestValidateLabels(t *testing.T) {
 		t.Error("ValidateLabels(bad key): expected error, got nil")
 	}
 }
+
+// TestValidateLabels_ReportsFirstErrorDeterministically guards against
+// non-deterministic map iteration: the first reported error must always come
+// from the lexicographically smallest invalid key, regardless of iteration
+// order. Regression test for the prior bug where ValidateLabels iterated
+// the input map directly and returned whatever bad key Go visited first.
+func TestValidateLabels_ReportsFirstErrorDeterministically(t *testing.T) {
+	bad := map[string]string{
+		"region": "v",
+		"team":   "v",
+		"zulu":   "v",
+		"b_ bad": "v",
+		"c,key":  "v",
+		"a!key":  "v",
+	}
+	// Repeat the call many times. With deterministic ordering the reported
+	// key is always the same (the lexicographically smallest invalid one,
+	// here "a!key"; whitespace, comma, and bang are all disallowed by
+	// labelKeySyntax, but "a!key" < "b_ bad" < "c,key" lexicographically).
+	// With the previous nondeterministic ordering the reported key varied
+	// between runs and could be any of "a!key", "b_ bad", or "c,key".
+	const iterations = 200
+	for i := 0; i < iterations; i++ {
+		err := ValidateLabels(bad)
+		if err == nil {
+			t.Fatalf("iteration %d: expected error, got nil", i)
+		}
+		if !strings.Contains(err.Error(), `"a!key"`) {
+			t.Fatalf("iteration %d: expected error to mention the lexicographically smallest invalid key \"a!key\", got: %v", i, err)
+		}
+	}
+}
+
+// TestValidateLabels_AllKeysValidStaysSorted asserts the happy path still
+// accepts sets whose keys happen to be in any order — sorting must not
+// introduce a false positive on otherwise valid input.
+func TestValidateLabels_AllKeysValidStaysSorted(t *testing.T) {
+	labels := map[string]string{"zeta": "1", "alpha": "2", "mike": "3"}
+	if err := ValidateLabels(labels); err != nil {
+		t.Errorf("ValidateLabels(sorted happy path): unexpected error: %v", err)
+	}
+}
