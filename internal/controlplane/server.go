@@ -368,6 +368,13 @@ func (s *Server) HandleInfo(w http.ResponseWriter, r *http.Request) {
 		aud = s.config.AllowedAudiences[0]
 	}
 
+	// aud == client_id only holds for id_token-model IdPs (dex, Google); an
+	// explicit client id supports providers where the two differ.
+	clientID := s.config.OIDCClientID
+	if clientID == "" {
+		clientID = aud
+	}
+
 	// Fetch active routers
 	activeRouters, err := s.store.GetActiveRouters(r.Context())
 	if err != nil {
@@ -383,7 +390,7 @@ func (s *Server) HandleInfo(w http.ResponseWriter, r *http.Request) {
 
 	resp := &api.ControlPlaneInfoResponse{
 		OidcIssuer:      issuer,
-		ClientId:        aud,
+		ClientId:        clientID,
 		Audience:        aud,
 		RouterAddresses: routerAddrs, // Reused this field for back-compatibility with bootstrap routers list
 	}

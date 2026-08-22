@@ -36,6 +36,7 @@ var (
 	dbDSN                 string
 	dbDSNPath             string
 	oidcIssuer            string
+	oidcClientID          string
 	allowedAudiencesFlag  string
 	keyRotationInterval   time.Duration
 	keyGracePeriod        time.Duration
@@ -112,6 +113,7 @@ func main() {
 				DriverName:            dbDriver,
 				DataSourceName:        dbDSN,
 				OIDCIssuer:            oidcIssuer,
+				OIDCClientID:          oidcClientID,
 				AllowedAudiences:      auds,
 				LeaseDuration:         leaseDuration,
 				KeyRotationInterval:   keyRotationInterval,
@@ -146,6 +148,7 @@ func main() {
 	rootCmd.PersistentFlags().StringVar(&dbDSN, "db-dsn", "control-plane.db", "Database DSN/Connection URL (avoid for postgres: embeds a password; prefer --db-dsn-path or SAM_DB_DSN)")
 	rootCmd.PersistentFlags().StringVar(&dbDSNPath, "db-dsn-path", "", "Path to file containing the database DSN/Connection URL (overrides --db-dsn; or env SAM_DB_DSN)")
 	rootCmd.Flags().StringVar(&oidcIssuer, "issuer", "", "OIDC Issuer URL (comma-separated)")
+	rootCmd.Flags().StringVar(&oidcClientID, "oidc-client-id", "", "OAuth client ID advertised to joining nodes via /info (defaults to the first allowed audience)")
 	rootCmd.Flags().StringVar(&allowedAudiencesFlag, "allowed-audiences", api.DefaultAudience, "Comma-separated list of allowed OIDC audiences")
 	rootCmd.Flags().DurationVar(&keyRotationInterval, "key-rotation-interval", 24*time.Hour, "Key rotation interval (e.g. 24h). 0 disables rotation.")
 	rootCmd.Flags().DurationVar(&keyGracePeriod, "key-grace-period", 1*time.Hour, "Key grace period for rotated keys.")

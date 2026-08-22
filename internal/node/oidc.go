@@ -383,6 +383,19 @@ func stdinIsInteractive() bool {
 	return isatty.IsTerminal(fd) || isatty.IsCygwinTerminal(fd)
 }
 
+// bodySnippet renders a response body for error messages, bounded so a
+// misbehaving server can't flood logs.
+func bodySnippet(body []byte) string {
+	if len(body) > 256 {
+		return strings.TrimSpace(string(body[:256])) + "..."
+	}
+	s := strings.TrimSpace(string(body))
+	if s == "" {
+		return "(empty response body)"
+	}
+	return s
+}
+
 // DeviceLogin performs OAuth 2.0 Device Authorization Grant (RFC 8628).
 func (n *SamNode) DeviceLogin(ctx context.Context, deviceAuthURL, tokenURL, clientID, audience string, requestRefresh bool) (string, error) {
 	if deviceAuthURL == "" {
@@ -514,7 +527,9 @@ func (n *SamNode) DeviceLogin(ctx context.Context, deviceAuthURL, tokenURL, clie
 			continue
 		}
 
-		body, readErr := io.ReadAll(tokenResp.Body)
+		// Cap the read: the poll target comes from discovery and a misbehaving
+		// server must not be able to exhaust memory.
+		body, readErr := io.ReadAll(io.LimitReader(tokenResp.Body, 1<<20))
 		if closeErr := tokenResp.Body.Close(); closeErr != nil {
 			logger.Errorf("Failed to close response body: %v", closeErr)
 		}
@@ -546,16 +561,29 @@ func (n *SamNode) DeviceLogin(ctx context.Context, deviceAuthURL, tokenURL, clie
 			return jwt, nil
 		}
 
-		if tokenResp.StatusCode != http.StatusBadRequest {
-			return "", fmt.Errorf("token request failed with status: %s", tokenResp.Status)
-		}
-
 		var errResp struct {
 			Error            string `json:"error"`
 			ErrorDescription string `json:"error_description"`
 		}
-		if err := json.Unmarshal(body, &errResp); err != nil {
-			return "", fmt.Errorf("failed to decode token polling error response: %w", err)
+		// Best-effort: non-JSON bodies (proxy HTML, empty) leave Error empty
+		// and are reported raw via bodySnippet below.
+		_ = json.Unmarshal(body, &errResp)
+		pending := errResp.Error == "authorization_pending" || errResp.Error == "slow_down"
+
+		// RFC 8628 §3.5 delivers polling errors as HTTP 400 with an OAuth error
+		// body. Known exception: dex returns the pending/slow_down signals with
+		// HTTP 401. Anything else is a real failure and is surfaced verbatim.
+		rfcError := tokenResp.StatusCode == http.StatusBadRequest && errResp.Error != ""
+		dexPending := tokenResp.StatusCode == http.StatusUnauthorized && pending
+		if !rfcError && !dexPending {
+			if errResp.Error != "" {
+				msg := errResp.Error
+				if errResp.ErrorDescription != "" {
+					msg += " - " + errResp.ErrorDescription
+				}
+				return "", fmt.Errorf("token request failed with status %s: %s", tokenResp.Status, msg)
+			}
+			return "", fmt.Errorf("token request failed with status %s: %s", tokenResp.Status, bodySnippet(body))
 		}
 
 		switch errResp.Error {

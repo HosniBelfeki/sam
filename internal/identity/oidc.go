@@ -44,31 +44,39 @@ func VerifyJWT(ctx context.Context, jwtStr string, allowedAudiences []string, pr
 	}
 	iss, _ := claims["iss"].(string)
 
-	// 2. Extract the audience
-	var aud string
+	// 2. Extract all audiences; the aud claim may be a string or an array.
+	var auds []string
 	switch a := claims["aud"].(type) {
 	case string:
-		aud = a
+		auds = []string{a}
 	case []any:
-		if len(a) > 0 {
-			aud, _ = a[0].(string)
+		for _, v := range a {
+			if s, ok := v.(string); ok {
+				auds = append(auds, s)
+			}
 		}
 	}
 
-	if aud == "" {
+	if len(auds) == 0 {
 		return nil, nil, fmt.Errorf("missing aud claim")
 	}
 
-	// 3. Verify the audience matches one of your expected tenants/platforms
+	// 3. Accept if any audience matches an allowed one: a multi-audience token
+	// only needs to be intended for us, whatever else it names.
 	validAudience := false
-	for _, allowed := range allowedAudiences {
-		if aud == allowed {
-			validAudience = true
+	for _, aud := range auds {
+		for _, allowed := range allowedAudiences {
+			if aud == allowed {
+				validAudience = true
+				break
+			}
+		}
+		if validAudience {
 			break
 		}
 	}
 	if !validAudience {
-		return nil, nil, fmt.Errorf("untrusted audience: %s", aud)
+		return nil, nil, fmt.Errorf("untrusted audience(s): %s", strings.Join(auds, ", "))
 	}
 
 	// 4. Route to the correct provider

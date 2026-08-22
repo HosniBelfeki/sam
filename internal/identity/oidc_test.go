@@ -157,6 +157,39 @@ func TestVerifyJWT(t *testing.T) {
 		}
 	})
 
+	t.Run("allowed audience in any array position succeeds", func(t *testing.T) {
+		claims := validClaims()
+		claims["aud"] = []string{"some-other-audience", "sam-mesh-audience"}
+		tokenStr := signToken(t, key, testKID, claims)
+
+		_, _, err := VerifyJWT(ctx, tokenStr, allowedAudiences, providers)
+		if err != nil {
+			t.Fatalf("expected success for multi-audience token, got: %v", err)
+		}
+	})
+
+	t.Run("audience array with no allowed entry is rejected", func(t *testing.T) {
+		claims := validClaims()
+		claims["aud"] = []string{"some-other-audience", "yet-another-audience"}
+		tokenStr := signToken(t, key, testKID, claims)
+
+		_, _, err := VerifyJWT(ctx, tokenStr, allowedAudiences, providers)
+		if err == nil {
+			t.Fatal("expected error for audience array with no allowed entry")
+		}
+	})
+
+	t.Run("empty audience array is rejected", func(t *testing.T) {
+		claims := validClaims()
+		claims["aud"] = []string{}
+		tokenStr := signToken(t, key, testKID, claims)
+
+		_, _, err := VerifyJWT(ctx, tokenStr, allowedAudiences, providers)
+		if err == nil {
+			t.Fatal("expected error for empty audience array")
+		}
+	})
+
 	t.Run("unknown issuer is rejected", func(t *testing.T) {
 		claims := validClaims()
 		claims["iss"] = "https://unknown-issuer.example"

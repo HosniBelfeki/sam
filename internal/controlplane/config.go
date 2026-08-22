@@ -25,6 +25,7 @@ type Options struct {
 	DriverName            string
 	DataSourceName        string
 	OIDCIssuer            string
+	OIDCClientID          string // OAuth client id advertised via /info; defaults to the first allowed audience
 	AllowedAudiences      []string
 	LeaseDuration         time.Duration
 	KeyRotationInterval   time.Duration
