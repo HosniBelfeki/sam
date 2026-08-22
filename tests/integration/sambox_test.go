@@ -30,6 +30,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/sam/api"
 	"github.com/google/sam/internal/sambox"
 )
 
@@ -54,6 +55,7 @@ func TestSandboxReachesOnlyWhatPolicyAllows(t *testing.T) {
 		allowedHost = "allowed.example"
 		blockedHost = "blocked.example"
 		serverBody  = "reached the far side"
+		sidecarBody = "reached the sidecar"
 	)
 
 	if os.Getenv("SAM_TEST_IS_ISOLATED") != "1" {
@@ -119,6 +121,31 @@ func TestSandboxReachesOnlyWhatPolicyAllows(t *testing.T) {
 	defer func() { _ = os.RemoveAll(sockDir) }()
 	agentSocket := filepath.Join(sockDir, "agent.sock")
 
+	// The node's sidecar API. The agent never reaches this socket: the
+	// entrypoint terminates HTTP and forwards only the agent-facing surface,
+	// because arriving on this socket is itself proof of authorization and
+	// piping a sandbox's bytes to it would hand over the node's local
+	// authority wholesale.
+	sidecarSocket := filepath.Join(sockDir, "node.sock")
+	var sidecar struct {
+		sync.Mutex
+		paths []string
+	}
+	sidecarListener, err := net.Listen("unix", sidecarSocket)
+	if err != nil {
+		t.Fatalf("listening on the sidecar socket: %v", err)
+	}
+	sidecarSrv := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			sidecar.Lock()
+			sidecar.paths = append(sidecar.paths, r.URL.Path)
+			sidecar.Unlock()
+			_, _ = io.WriteString(w, sidecarBody)
+		}),
+	}
+	go func() { _ = sidecarSrv.Serve(sidecarListener) }()
+	defer func() { _ = sidecarSrv.Close() }()
+
 	var dialed struct {
 		sync.Mutex
 		names []string
@@ -135,7 +162,8 @@ func TestSandboxReachesOnlyWhatPolicyAllows(t *testing.T) {
 
 	boundary := &sambox.SOCKS5Server{
 		Dialer: &sambox.AgentDialer{
-			Router: &sambox.Router{Egress: egress},
+			Router:        &sambox.Router{Egress: egress},
+			SidecarSocket: sidecarSocket,
 			// Stands in for the resolution the boundary would do itself. What
 			// is being recorded is that a name arrived here at all.
 			DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
@@ -164,12 +192,19 @@ func TestSandboxReachesOnlyWhatPolicyAllows(t *testing.T) {
 		<-served
 	}()
 
-	// One nano-init run covers both cases: the tun it creates outlives the
+	// One nano-init run covers every case: the tun it creates outlives the
 	// process, so a second run in this namespace would find it already there.
+	//
+	// The mesh cases matter as much as the egress ones. mesh.sam.alt is in no
+	// DNS and has no route, so reaching it at all proves the name survived the
+	// tun; and the node's own admin surface must not be reachable even though
+	// the boundary is holding an authenticated socket to it.
 	agent := fmt.Sprintf(
 		`curl -sS --max-time 20 http://%s/; echo "allowed-exit=$?"; `+
-			`curl -sS --max-time 20 http://%s/; echo "blocked-exit=$?"`,
-		allowedHost, blockedHost,
+			`curl -sS --max-time 20 http://%s/; echo "blocked-exit=$?"; `+
+			`curl -sS --max-time 20 http://%s/v1/models; echo "mesh-exit=$?"; `+
+			`curl -sS --max-time 20 -o /dev/null -w 'admin-status=%%{http_code}' http://%s/sam/service/register; echo`,
+		allowedHost, blockedHost, api.MeshEntrypointHost, api.MeshEntrypointHost,
 	)
 
 	runCtx, runCancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -188,6 +223,20 @@ func TestSandboxReachesOnlyWhatPolicyAllows(t *testing.T) {
 	}
 	if strings.Contains(string(out), "blocked-exit=0") {
 		t.Errorf("reaching %s succeeded, want the boundary to refuse it", blockedHost)
+	}
+
+	if !strings.Contains(string(out), sidecarBody) || !strings.Contains(string(out), "mesh-exit=0") {
+		t.Errorf("the sandbox did not reach %s/v1/models through the entrypoint", api.MeshEntrypointHost)
+	}
+	if !strings.Contains(string(out), "admin-status=403") {
+		t.Errorf("the sandbox reached the node's admin surface: an agent must not be able to register services under the node's identity")
+	}
+
+	sidecar.Lock()
+	defer sidecar.Unlock()
+	if len(sidecar.paths) != 1 || sidecar.paths[0] != "/v1/models" {
+		t.Errorf("the sidecar saw %q, want exactly [\"/v1/models\"]: the entrypoint must forward the agent surface and nothing else",
+			sidecar.paths)
 	}
 
 	dialed.Lock()
