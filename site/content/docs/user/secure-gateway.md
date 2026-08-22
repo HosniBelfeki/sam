@@ -138,10 +138,13 @@ cannot name the URL the mesh routes to, and it cannot claim a name its bundle
 does not list. When the gateway stops, the service is withdrawn, so a suspended
 agent stops being advertised without anyone reconciling anything.
 
-Reaching back into the sandbox currently means dialling the port the agent
-announced, which works when the gateway shares a network namespace with it —
-the Kubernetes sidecar arrangement. An isolated sandbox needs the reverse
-channel described in the architecture document, which is not built yet.
+Reaching back into the sandbox cannot mean dialling the agent: a sandbox has a
+network namespace of its own, so the gateway's `127.0.0.1` is its own loopback
+and not the agent's. Delivery therefore goes over a second Unix socket, served
+from inside the sandbox by `nano-init --ingress-socket` and dialled by
+`sam-box --agent-ingress-socket`. Without that flag the gateway falls back to
+dialling the agent directly and warns, because that only reaches an agent
+sharing its network namespace — one that is not sandboxed.
 
 ---
 

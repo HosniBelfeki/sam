@@ -757,13 +757,25 @@ the node on the agent's behalf. Two things make that safe:
 The bundle declares `{name, type}` only. The port is the agent's to choose at
 runtime, because that is what it actually knows.
 
-**Implemented**, with one gap: reaching back into the sandbox currently means
-dialling an address, which works when the gateway shares a network namespace
-with the agent — the Kubernetes sidecar case, and what `TestAgentIngressCUJ`
-covers end to end. A microVM or a `network=none` container cannot be reached
-that way and needs the reverse channel below, which is not built. The seam is
-`IngressManager.AgentAddr`, so that channel slots in without changing the
-registration path.
+**Implemented, including delivery into an isolated sandbox.** Reaching back in
+cannot be done by dialling the agent: every sandbox has a network namespace of
+its own, so the gateway's `127.0.0.1` is its own loopback and not the agent's.
+That is true of all three profiles, because it follows from the isolation
+rather than from any one runtime.
+
+The way in is the way out. Egress crosses the boundary over a pathname Unix
+socket, which network namespaces do not apply to because it is a filesystem
+object. Ingress uses a second one: `nano-init --ingress-socket` serves it from
+inside the sandbox, where it can reach the agent at the address the gateway
+meant, and `sam-box --agent-ingress-socket` dials it. The handshake is
+Firecracker's — `CONNECT <port>`, then `OK` — so a microVM can offer the same
+protocol over vsock without the gateway learning the difference.
+
+`TestSandboxServesThroughTheReverseChannel` drives a real sandbox and asserts
+both halves: that dialling the agent directly from outside fails, and that the
+same agent answers through the channel. The older ingress tests supply their
+own `AgentAddr` and so cover the declaration, the policy check and the
+forwarding logic, but not the hop that depends on where the agent is.
 
 ### 9.1.1 Why this is also the better UX
 

@@ -379,7 +379,26 @@ files behind it, so a private `resolv.conf` is a bind mount over a real file,
 which has to be created somewhere. The `scratch` volume is that somewhere. With
 a read-only root filesystem and no writable path, `nano-init` says so and stops.
 
-What the agent sees once this is running is what it would see in a microVM:
+### The harness must be nano-init's child
+
+This is the part to get right, and it is easy to get wrong precisely because the
+wrong version appears to work.
+
+`nano-init` creates the namespaces and then **starts the agent as its own child
+process**, which is how the agent inherits them. So the container's `command`
+has to be `nano-init`, with the harness as its arguments:
+
+```yaml
+command: ["/usr/local/bin/nano-init", "run", "--create-namespaces",
+          "/var/run/sam/agent.sock", "python3", "/app/agent.py"]
+```
+
+A container that starts the harness directly — or that starts `nano-init`
+alongside it rather than in front of it — leaves the harness in the pod's
+network namespace, with `eth0` and the cluster's routes. It will run, it will
+reach the boundary if you point it there, and it will not be sandboxed at all.
+
+Check it rather than assume it:
 
 ```console
 $ kubectl exec -c agent agent -- ip -o link show | cut -d: -f2
@@ -387,7 +406,39 @@ $ kubectl exec -c agent agent -- ip -o link show | cut -d: -f2
  tun0
 ```
 
-No `eth0`, on a pod that has one.
+### If the agent serves the mesh
+
+An agent can publish an MCP service of its own, and delivering a request to it
+means reaching *into* the sandbox — which is the direction all of this exists to
+prevent. The gateway cannot dial the agent, because the agent's `127.0.0.1` is
+inside a namespace the gateway is not in.
+
+The answer is a second Unix socket, for the same reason the first one works: a
+pathname socket is a filesystem object, so network namespaces do not apply to
+it. `nano-init` serves it from inside the sandbox and connects each arriving
+request to the agent's port.
+
+```yaml
+# in the agent container
+command: ["/usr/local/bin/nano-init", "run", "--create-namespaces",
+          "--ingress-socket", "/var/run/sam/agent-ingress.sock",
+          "/var/run/sam/agent.sock", "python3", "/app/agent.py"]
+
+# in the sam-box container
+args:
+  - run
+  - --socket=/var/run/sam/agent.sock
+  - --sidecar-socket=/var/run/sam/node.sock
+  - --agent-ingress-socket=/var/run/sam/agent-ingress.sock
+  - --bundle=/etc/sam/bundle.yaml
+```
+
+Without `--agent-ingress-socket`, `sam-box` falls back to dialling the agent
+directly and warns that this only reaches an agent sharing its network
+namespace — which is to say, one that is not sandboxed.
+
+What the agent may serve is still the bundle's decision, not the agent's. The
+agent chooses the port, because that is the part only it knows.
 
 ## Why this shape
 
