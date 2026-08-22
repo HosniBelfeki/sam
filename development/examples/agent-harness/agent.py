@@ -91,10 +91,32 @@ async def call_tool(session, name, arguments):
         return f"tool call failed: {exc}"
 
 
+async def pick_model(client, requested):
+    """Resolve the model to ask for, preferring whatever the mesh actually offers.
+
+    An agent that hardcodes a model name is an agent that needs configuration,
+    which is the thing this harness is trying not to need. The catalog is
+    already per-agent -- it lists what this agent's policy allows -- so asking
+    it is both the simplest option and the correct one.
+    """
+    if requested:
+        return requested
+    models = await client.models.list()
+    if not models.data:
+        raise SystemExit(
+            "the mesh offered this agent no models; check that an inference "
+            "provider is registered and that policy grants access to it"
+        )
+    return models.data[0].id
+
+
 async def run(task, model, max_steps):
     # No api_key that means anything: the gateway authenticates this agent to
     # the mesh. The SDK requires the argument, so it gets a placeholder.
     client = AsyncOpenAI(base_url=f"{MESH}/v1", api_key="unused")
+
+    model = await pick_model(client, model)
+    print(f"mesh offered model: {model}", file=sys.stderr)
 
     # Streamable HTTP, which is what the mesh serves. The older SSE transport
     # is answered with 400, and that arrives late enough to look like a network
@@ -143,11 +165,16 @@ async def run(task, model, max_steps):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("task", help="What the agent should do")
+    parser.add_argument(
+        "task",
+        nargs="?",
+        default="Describe the tools you have and what each is for.",
+        help="What the agent should do",
+    )
     parser.add_argument(
         "--model",
-        default=os.environ.get("SAM_MODEL", "default"),
-        help="Model to ask the mesh for; the mesh chooses the provider",
+        default=os.environ.get("SAM_MODEL", ""),
+        help="Model to ask the mesh for; default is whatever the mesh offers first",
     )
     parser.add_argument("--max-steps", type=int, default=10)
     args = parser.parse_args()

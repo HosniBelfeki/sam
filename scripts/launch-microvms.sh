@@ -40,6 +40,20 @@ VM_VCPUS="${VM_VCPUS:-1}"
 # never a thousand at once. Zero is the right default for real work.
 SANDBOX_LINGER="${SANDBOX_LINGER:-0}"
 
+# Anything the agent needs to know reaches it as a kernel cmdline pair, so it
+# must not contain spaces: the kernel splits on them and init would see two
+# variables. Model names and durations are safe; prompts are not, which is why
+# the task stays in the init script.
+AGENT_ENV=""
+for v in SAM_MODEL CHAOS_SLEEP CHAOS_ROUNDS; do
+    eval "val=\${$v:-}"
+    [ -z "$val" ] && continue
+    case "$val" in
+        *" "*) echo "Error: $v must not contain spaces (kernel cmdline)" >&2; exit 1 ;;
+    esac
+    AGENT_ENV="$AGENT_ENV $v=$val"
+done
+
 if [ ! -d "$WORKDIR" ]; then
     echo "Error: $WORKDIR does not exist. Did cloud-init finish?" >&2
     exit 1
@@ -207,7 +221,7 @@ EOF
     # it is started with an empty environment.
     fc_put "$API_SOCKET" /boot-source "{
         \"kernel_image_path\": \"$WORKDIR/vmlinux.bin\",
-        \"boot_args\": \"console=ttyS0 reboot=k panic=1 pci=off ro SANDBOX_LINGER=${SANDBOX_LINGER}\"
+        \"boot_args\": \"console=ttyS0 reboot=k panic=1 pci=off ro SANDBOX_LINGER=${SANDBOX_LINGER}${AGENT_ENV}\"
     }"
 
     fc_put "$API_SOCKET" /machine-config "{

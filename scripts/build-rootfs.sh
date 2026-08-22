@@ -45,8 +45,12 @@ CONTAINER_ID=$(docker create agent-rootfs)
 docker export $CONTAINER_ID > rootfs.tar
 docker rm $CONTAINER_ID
 
-# Create the ext4 image
-dd if=/dev/zero of=rootfs.ext4 bs=1M count=500
+# Create the ext4 image. The size is the agent's, not the base system's: the
+# harness needs a couple of hundred megabytes and a LangChain agent needs well
+# over a gigabyte, and an image that is too small fails during the copy rather
+# than at boot, which is a confusing place to find out.
+ROOTFS_MB="${ROOTFS_MB:-500}"
+dd if=/dev/zero of=rootfs.ext4 bs=1M count="${ROOTFS_MB}"
 mkfs.ext4 rootfs.ext4
 mkdir -p /tmp/rootfs
 

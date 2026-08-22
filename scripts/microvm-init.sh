@@ -30,7 +30,16 @@ if ! touch /etc/.writable 2>/dev/null; then
 fi
 rm -f /etc/.writable 2>/dev/null || true
 
-TASK="${AGENT_TASK:-Describe the tools you have and what each is for.}"
+# The task is only forced when the operator sets one. Left unset, each agent
+# image uses its own default, which is what lets the same init boot the polite
+# harness and the adversarial agent without knowing which one it is holding.
+# Note AGENT_TASK arrives on the kernel cmdline, so it cannot contain spaces;
+# a real prompt belongs in the agent image, not here.
+if [ -n "${AGENT_TASK:-}" ]; then
+    set -- "${AGENT_TASK}"
+else
+    set --
+fi
 
 # The kernel hands PID 1 an empty environment, so there is no PATH to inherit
 # and anything looked up by name is not found.
@@ -40,7 +49,7 @@ export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 # reaches the console before whatever init was trying to say about why it
 # failed. Holding the process open long enough for the console to drain is the
 # difference between a diagnosis and a stack trace.
-if ! /usr/local/bin/nano-init run vsock://2:1080 python3 /app/agent/agent.py "${TASK}" > /dev/console 2>&1; then
+if ! /usr/local/bin/nano-init run vsock://2:1080 python3 /app/agent/agent.py "$@" > /dev/console 2>&1; then
   echo "sandbox init failed; see above" > /dev/console
 fi
 
