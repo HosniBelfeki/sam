@@ -95,10 +95,15 @@ func main() {
 		}
 
 	case "run":
-		if len(os.Args) < 4 {
-			log.Fatalf("usage: %s run <boundary-socket> <cmd> [args...]", os.Args[0])
+		args := os.Args[2:]
+		createNS := false
+		if len(args) > 0 && args[0] == "--create-namespaces" {
+			createNS, args = true, args[1:]
 		}
-		run(os.Args[2], os.Args[3], os.Args[4:])
+		if len(args) < 2 {
+			log.Fatalf("usage: %s run [--create-namespaces] <boundary-socket> <cmd> [args...]", os.Args[0])
+		}
+		run(createNS, args[0], args[1], args[2:])
 
 	default:
 		usage()
@@ -106,14 +111,37 @@ func main() {
 }
 
 func usage() {
-	log.Fatalf("usage:\n  %s copy <dest>\n  %s run <boundary-socket> <cmd> [args...]",
+	log.Fatalf("usage:\n  %s copy <dest>\n  %s run [--create-namespaces] <boundary-socket> <cmd> [args...]",
 		os.Args[0], os.Args[0])
 }
 
 // run wires the sandbox up and hands it to the agent.
-func run(boundarySocket, cmdName string, cmdArgs []string) {
+func run(createNS bool, boundarySocket, cmdName string, cmdArgs []string) {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
 	defer cancel()
+
+	// The namespaces have to exist before anything is checked in them, and a
+	// whole Go program can only enter a new network namespace by being started
+	// in one. So this half makes them and becomes a supervisor; the half that
+	// comes back through here does the work.
+	if createNS && !insideCreatedNamespaces() {
+		userNS, err := needUserNamespace()
+		if err != nil {
+			log.Fatalf("refusing to start: %v", err)
+		}
+		self, err := os.Executable()
+		if err != nil {
+			log.Fatalf("locate this binary to re-execute it: %v", err)
+		}
+		args := append([]string{"run", "--create-namespaces", boundarySocket, cmdName}, cmdArgs...)
+		os.Exit(runAgent(ctx, cancel, self, args, withNamespaces(userNS)))
+	}
+
+	if createNS {
+		if err := privateResolvConf(); err != nil {
+			log.Fatalf("refusing to start: %v", err)
+		}
+	}
 
 	// First, and before anything is built: if this namespace is not a sandbox
 	// then the boundary is beside the point, and saying so in that order is
@@ -156,11 +184,7 @@ func setupNetwork(ctx context.Context, boundarySocket string, names *resolver) e
 		Mode:      netlink.TUNTAP_MODE_TUN,
 	}
 	if err := netlink.LinkAdd(tun); err != nil {
-		// The usual cause is a guest kernel built without CONFIG_TUN, which is
-		// the case for the stock Firecracker CI kernels: they carry vsock but
-		// no tun driver. Without it there is no way to give the sandbox a
-		// route, so this is fatal rather than something to work around.
-		return fmt.Errorf("create %s (does this kernel have CONFIG_TUN?): %w", tunName, err)
+		return fmt.Errorf("create %s: %w\n%s", tunName, err, describeTunFailure(err))
 	}
 	if err := netlink.LinkSetUp(tun); err != nil {
 		return fmt.Errorf("bring up %s: %w", tunName, err)
@@ -216,11 +240,18 @@ func setupNetwork(ctx context.Context, boundarySocket string, names *resolver) e
 }
 
 // runAgent starts the agent and reports the exit status it should be judged by.
-func runAgent(ctx context.Context, cancel context.CancelFunc, cmdName string, cmdArgs []string) int {
+//
+// The same supervision serves the namespace trampoline, whose child is this
+// binary again: orphans still reparent here and still have to be reaped, and
+// the exit code still has to be the one the caller sees.
+func runAgent(ctx context.Context, cancel context.CancelFunc, cmdName string, cmdArgs []string, opts ...func(*exec.Cmd)) int {
 	cmd := exec.CommandContext(ctx, cmdName, cmdArgs...)
 	cmd.Stdout, cmd.Stderr, cmd.Stdin = os.Stdout, os.Stderr, os.Stdin
 	cmd.Env = os.Environ() // Nothing injected: the agent is not configured, it is routed.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	for _, opt := range opts {
+		opt(cmd)
+	}
 	cmd.Cancel = func() error {
 		if cmd.Process == nil {
 			return nil
