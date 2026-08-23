@@ -20,6 +20,7 @@ start_calc_mcp() {
     --network-alias calc-mcp \
     "${CALC_MCP_IMAGE}" >/dev/null
   MESH_CONTAINERS+=("${name}")
+  mesh_wait_for_log "${name}" "Uvicorn running on" 20
 }
 
 setup() {

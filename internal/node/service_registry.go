@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/sam/api"
@@ -30,11 +31,44 @@ type dhtProvider interface {
 	Provide(ctx context.Context, c cid.Cid, broadcast bool) error
 }
 
+// backendProber is implemented by services that can be asked whether their
+// backend is really serving. Services that cannot be asked are advertised
+// unconditionally.
+type backendProber interface {
+	Probe(ctx context.Context) error
+}
+
+// dhtProbeTimeout bounds one backend probe before advertising.
+const dhtProbeTimeout = 2 * time.Second
+
+// advertisable reports whether a service is fit to be published to the DHT.
+//
+// Gossip already withholds announcements for a backend that does not answer,
+// but the DHT is the other half of discovery and had no such check, so a
+// backend that is not an MCP server at all stayed discoverable as one: it was
+// listed by discover_remote_services and only failed later, at initialize, in
+// the caller's face. Advertising is a claim the node makes on the backend's
+// behalf, so it is the node that should verify it.
+func advertisable(ctx context.Context, svc Service) error {
+	prober, ok := svc.(backendProber)
+	if !ok {
+		return nil
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, dhtProbeTimeout)
+	defer cancel()
+	return prober.Probe(probeCtx)
+}
+
 // ServiceRegistry is the type-agnostic owner of registered services.
 type ServiceRegistry struct {
 	mu       sync.RWMutex
 	services map[string]Service
 	dht      dhtProvider
+
+	// reprovideNow asks the node to run a reprovide cycle now, so a service
+	// registered after the loop last ran does not wait a whole interval to be
+	// advertised. Optional; nil outside a running node.
+	reprovideNow func()
 }
 
 func NewServiceRegistry(d dhtProvider) *ServiceRegistry {
@@ -47,6 +81,10 @@ func NewServiceRegistry(d dhtProvider) *ServiceRegistry {
 // Register initialises a service, advertises it on the DHT, and inserts it
 // into the map. Init runs before Provide so a failed handler-build never
 // briefly advertises an unservable name.
+//
+// A backend that does not answer is registered but not advertised, rather than
+// rejected: backends routinely start after the node does, and the reprovide
+// loop picks them up once they answer.
 func (r *ServiceRegistry) Register(ctx context.Context, svc Service) error {
 	info := svc.Info()
 	if info.Type == api.ServiceType_SERVICE_TYPE_UNSPECIFIED {
@@ -66,23 +104,32 @@ func (r *ServiceRegistry) Register(ctx context.Context, svc Service) error {
 		return err
 	}
 
-	nameCtx, nameCancel := context.WithTimeout(ctx, 5*time.Second)
-	defer nameCancel()
-	if err := r.dht.Provide(nameCtx, srvNameCID, true); err != nil {
-		logger.Warnf("[ServiceRegistry] DHT Provide (name) for %s: %v", info.Name, err)
-	}
+	probeErr := advertisable(ctx, svc)
+	if probeErr != nil {
+		logger.Warnf("[ServiceRegistry] Registered %s/%s but not advertising it: backend did not answer: %v", info.Type, info.Name, probeErr)
+	} else {
+		nameCtx, nameCancel := context.WithTimeout(ctx, 5*time.Second)
+		defer nameCancel()
+		if err := r.dht.Provide(nameCtx, srvNameCID, true); err != nil {
+			logger.Warnf("[ServiceRegistry] DHT Provide (name) for %s: %v", info.Name, err)
+		}
 
-	typeCtx, typeCancel := context.WithTimeout(ctx, 5*time.Second)
-	defer typeCancel()
-	if err := r.dht.Provide(typeCtx, srvTypeCID, true); err != nil {
-		logger.Warnf("[ServiceRegistry] DHT Provide (type) for %s: %v", info.Name, err)
+		typeCtx, typeCancel := context.WithTimeout(ctx, 5*time.Second)
+		defer typeCancel()
+		if err := r.dht.Provide(typeCtx, srvTypeCID, true); err != nil {
+			logger.Warnf("[ServiceRegistry] DHT Provide (type) for %s: %v", info.Name, err)
+		}
 	}
 
 	r.mu.Lock()
 	r.services[info.Name] = svc
 	r.mu.Unlock()
 
-	logger.Infof("[ServiceRegistry] Registered %s/%s (name CID: %s, type CID: %s)", info.Type, info.Name, srvNameCID, srvTypeCID)
+	if probeErr == nil {
+		logger.Infof("[ServiceRegistry] Registered %s/%s (name CID: %s, type CID: %s)", info.Type, info.Name, srvNameCID, srvTypeCID)
+	} else if r.reprovideNow != nil {
+		r.reprovideNow()
+	}
 	return nil
 }
 
@@ -149,21 +196,25 @@ func (r *ServiceRegistry) TeardownAll() {
 	}
 }
 
-// ReprovideAll re-provides all registered services to the DHT concurrently.
-func (r *ServiceRegistry) ReprovideAll(ctx context.Context) {
+// ReprovideAll re-provides all registered services to the DHT concurrently and
+// reports how many were withheld because their backend did not answer.
+// A service whose backend has stopped answering falls out of the DHT by not
+// being reprovided, and returns on a later tick once it answers again.
+func (r *ServiceRegistry) ReprovideAll(ctx context.Context) int {
 	r.mu.Lock()
-	var toProvide []*api.ServiceInfo
+	toProvide := make([]Service, 0, len(r.services))
 	for _, svc := range r.services {
-		toProvide = append(toProvide, svc.Info())
+		toProvide = append(toProvide, svc)
 	}
 	r.mu.Unlock()
 
+	var withheld atomic.Int32
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, 5)
 
 Loop:
-	for _, info := range toProvide {
-		info := info
+	for _, svc := range toProvide {
+		svc := svc
 		select {
 		case <-ctx.Done():
 			break Loop
@@ -176,6 +227,17 @@ Loop:
 				<-sem
 				wg.Done()
 			}()
+
+			info := svc.Info()
+			if err := advertisable(ctx, svc); err != nil {
+				withheld.Add(1)
+				// On shutdown every service fails this way, and saying so
+				// would blame backends for the node stopping.
+				if ctx.Err() == nil {
+					logger.Warnf("[ServiceRegistry] Withholding %s/%s from the DHT: backend did not answer: %v", info.Type, info.Name, err)
+				}
+				return
+			}
 
 			if srvNameCID, err := serviceNameToCID(info.Type, info.Name); err == nil {
 				nameCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -190,4 +252,5 @@ Loop:
 		}()
 	}
 	wg.Wait()
+	return int(withheld.Load())
 }

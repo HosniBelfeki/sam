@@ -36,6 +36,34 @@ type MCPService struct {
 	toolsExpires time.Time
 }
 
+// Probe reports whether the backend actually speaks MCP, by completing an
+// initialize against it.
+//
+// Deliberately weaker than Tools: a backend serving only resources or prompts
+// has no tools and is still a working MCP server, so an empty tool list is no
+// reason to withhold it. Failing to initialize is — that is a backend which is
+// down, or was never an MCP server to begin with.
+//
+// The result is deliberately not cached. Callers are the registry's advertise
+// path, which asks once per service per reprovide, so the cost is negligible;
+// caching would make a backend that has just come up wait out the TTL, which
+// is the delay this gating exists to avoid.
+func (m *MCPService) Probe(ctx context.Context) error {
+	transport, err := m.backendTransport()
+	if err != nil {
+		return err
+	}
+	client := mcp.NewClient(&mcp.Implementation{Name: "sam-node-probe", Version: "0.1.0"}, nil)
+	session, err := client.Connect(ctx, transport, nil)
+	if err != nil {
+		return fmt.Errorf("connect to backend of %q: %w", m.info.GetName(), err)
+	}
+	// Connect completed the initialize, which is the whole question here; a
+	// failure to hang up afterwards does not unmake that.
+	_ = session.Close()
+	return nil
+}
+
 // Init initializes the base service.
 func (m *MCPService) Init(ctx context.Context) error {
 	return m.baseService.Init(ctx)

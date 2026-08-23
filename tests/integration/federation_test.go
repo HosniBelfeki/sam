@@ -239,17 +239,25 @@ roles:
 	waitForDHTReady(t, clientBin, apiPortA, "tokenA")
 	waitForDHTReady(t, clientBin, apiPortB, "tokenB")
 
-	// Start Mock Backend on Node A
-	mcpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// A real MCP backend: the node probes it before advertising, so a stub
+	// returning a canned JSON-RPC body is deliberately never discoverable.
+	mcpServer := httptest.NewServer(newBoundaryMCPHandler(t))
+	t.Cleanup(func() { mcpServer.Close() })
+
+	// A backend that is not an MCP server. It is never advertised, but stays
+	// reachable when addressed explicitly, which is what the datapath below
+	// exercises: the proxy is a pipe and does not interpret what it carries.
+	rawServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"jsonrpc": "2.0", "id": 1, "result": {"success": true}}`))
 	}))
-	t.Cleanup(func() { mcpServer.Close() })
+	t.Cleanup(func() { rawServer.Close() })
 
 	// Publish a service on Node A
 	t.Log("Publishing tool on Node A...")
 	registerService(t, fmt.Sprintf("127.0.0.1:%d", apiPortA), "tokenA", "federated-tool", mcpServer.URL)
+	registerService(t, fmt.Sprintf("127.0.0.1:%d", apiPortA), "tokenA", "raw-pipe", rawServer.URL)
 	time.Sleep(2 * time.Second)
 
 	// Search for the service from Node B
@@ -301,8 +309,8 @@ roles:
 	}
 	peerIDA_node := matches[1]
 
-	// The proxy path on Node B is /sam/<peerID>/mcp/federated-tool
-	proxyURL := fmt.Sprintf("http://127.0.0.1:%d/sam/%s/mcp/federated-tool", apiPortB, peerIDA_node)
+	// The proxy path on Node B is /sam/<peerID>/mcp/raw-pipe
+	proxyURL := fmt.Sprintf("http://127.0.0.1:%d/sam/%s/mcp/raw-pipe", apiPortB, peerIDA_node)
 	req, _ := http.NewRequest("POST", proxyURL, bytes.NewBuffer([]byte(`{"jsonrpc": "2.0", "id": 1, "method": "test"}`)))
 	req.Header.Set(api.HeaderSamAuthentication, "Bearer tokenB")
 

@@ -95,9 +95,9 @@ func TestServiceDiscovery(t *testing.T) {
 		t.Fatalf("DHT not ready on Node A (size 0)")
 	}
 
-	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "Not found", http.StatusNotFound)
-	}))
+	// A real MCP backend: the node probes it before advertising, so a stub that
+	// cannot complete an initialize is deliberately never discoverable.
+	mockServer := httptest.NewServer(newBoundaryMCPHandler(t))
 	defer mockServer.Close()
 
 	// Agent A registers a service
@@ -198,9 +198,9 @@ func TestServiceDiscoveryStreaming(t *testing.T) {
 		t.Fatalf("DHT not ready on Node A")
 	}
 
-	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "Not found", http.StatusNotFound)
-	}))
+	// A real MCP backend: the node probes it before advertising, so a stub that
+	// cannot complete an initialize is deliberately never discoverable.
+	mockServer := httptest.NewServer(newBoundaryMCPHandler(t))
 	defer mockServer.Close()
 
 	// Agent A registers a service

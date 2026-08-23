@@ -209,11 +209,33 @@ class S(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(json.dumps(res_data).encode("utf-8"))
+        elif req_id is not None:
+            # A request carrying an id must get a response; 202 with no body is
+            # only valid for notifications. Clients send unknown methods here
+            # (go-sdk probes "server/discover" before "initialize") and abort
+            # the connection if the reply is not JSON-RPC.
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "error": {"code": -32601, "message": "Method not found"}
+            }).encode("utf-8"))
         else:
             self.send_response(202)
             self.end_headers()
 HTTPServer(("0.0.0.0", 9091), S).serve_forever()
 '
+
+# The node probes a backend before advertising it, so the mock has to be
+# listening before the service below is registered.
+for _ in $(seq 1 30); do
+  curl -sf -o /dev/null -X POST -H "Content-Type: application/json" \
+    -d '{"jsonrpc":"2.0","id":1,"method":"initialize"}' \
+    http://127.0.0.1:9091 && break
+  sleep 1
+done
 
 # Register a dummy MCP service on the host node pointing to the local mock server container (using container name)
 curl -s -X POST \

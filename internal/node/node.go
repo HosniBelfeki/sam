@@ -90,6 +90,11 @@ const (
 
 	// Reprovide interval
 	ReprovideInterval = 5 * time.Minute
+
+	// reprovideRetryInterval is the first retry after a backend was withheld,
+	// doubling up to ReprovideInterval. Backends commonly start after the node
+	// does, and the full interval is far too long to wait for one of those.
+	reprovideRetryInterval = 5 * time.Second
 )
 
 var (
@@ -425,6 +430,7 @@ func (n *SamNode) Start(ctx context.Context) error {
 	n.DHT = kdht
 
 	n.services = NewServiceRegistry(n.DHT)
+	n.services.reprovideNow = n.triggerReprovide
 
 	var authenticated bool
 	var fatalAuthErr error
@@ -493,10 +499,7 @@ func (n *SamNode) Start(ctx context.Context) error {
 					// Debounce and trigger unified reprovide loop
 					go func() {
 						time.Sleep(2 * time.Second) // Small debounce
-						select {
-						case n.reprovideTrigger <- struct{}{}:
-						default:
-						}
+						n.triggerReprovide()
 					}()
 				}
 			}
@@ -541,28 +544,47 @@ func (n *SamNode) Start(ctx context.Context) error {
 	return nil
 }
 
+// triggerReprovide asks the reprovide loop to run a cycle now, dropping the
+// request when one is already pending.
+func (n *SamNode) triggerReprovide() {
+	select {
+	case n.reprovideTrigger <- struct{}{}:
+	default:
+	}
+}
+
 func (n *SamNode) startReprovideLoop(ctx context.Context, interval time.Duration) {
 	go func() {
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
+		// Initial delay lets DHT bootstrap stabilize.
+		timer := time.NewTimer(5 * time.Second)
+		defer timer.Stop()
 
-		// Run an initial reprovide after a short delay to let DHT bootstrap stabilize
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(5 * time.Second):
-			n.services.ReprovideAll(ctx)
-		}
-
+		retry := reprovideRetryInterval
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case <-ticker.C:
-				n.services.ReprovideAll(ctx)
+			case <-timer.C:
 			case <-n.reprovideTrigger:
-				n.services.ReprovideAll(ctx)
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
 			}
+
+			next := interval
+			if n.services.ReprovideAll(ctx) > 0 {
+				// A backend that is not answering yet is usually one that is
+				// still starting. Waiting the full interval would leave it
+				// undiscoverable for minutes after it came up.
+				next = retry
+				retry = min(retry*2, interval)
+			} else {
+				retry = reprovideRetryInterval
+			}
+			timer.Reset(next)
 		}
 	}()
 }
