@@ -1,0 +1,19 @@
+{
+  "inputs": [
+    {
+      "type": "promptString",
+      "id": "sam-api-token",
+      "description": "SAM node API token (the SAM_API_TOKEN the node was started with)",
+      "password": true
+    }
+  ],
+  "servers": {
+    "sam-mesh": {
+      "type": "http",
+      "url": "http://localhost:8080/mcp",
+      "headers": {
+        "X-Sam-Authentication": "Bearer ${input:sam-api-token}"
+      }
+    }
+  }
+}

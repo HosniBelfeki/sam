@@ -19,6 +19,7 @@ Explore the step-by-step guides to integrate SAM with your favorite AI Agent sys
 - [Google Antigravity](antigravity/): Connect your local node as a remote MCP server to Google Antigravity.
 - [Claude Code](claude-code/): Connect your local node as a remote MCP server to Claude Code.
 - [Claude Desktop](claude-desktop/): Use SAM to expose the P2P tool mesh to Claude Desktop.
+- [VS Code and GitHub Copilot](vscode-copilot/): Register your node in `.vscode/mcp.json` and reach the mesh from Copilot's agent mode.
 - [OpenClaw](openclaw/): Integrate your node as a remote tool bridge for OpenClaw.
 
 ## Connecting via MCP

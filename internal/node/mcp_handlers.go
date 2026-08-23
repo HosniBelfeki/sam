@@ -316,9 +316,8 @@ type remoteToolRow struct {
 //   - Otherwise the candidate list is obtained via DiscoverRemoteServices.
 //
 // Filtering:
-//   - Tools without a "." in their name (infra tools) are excluded.
-//   - If params.ServiceName is set, only tools whose name starts with
-//     "<service_name>." are returned.
+//   - If params.ServiceName is set, only tools from that service are returned.
+//     Bare ("everything") and namespaced ("mcp://everything") forms are equivalent.
 //   - params.Intent is accepted and logged at debug level, but does not
 //     filter or rank results in this implementation (placeholder for
 //     future semantic search).
@@ -332,6 +331,11 @@ func (n *SamNode) handleFindRemoteTools(ctx context.Context, req *mcp.CallToolRe
 		return nil, nil, fmt.Errorf("peer_id %q is this node; cross-mesh discovery cannot target self", params.PeerID)
 	}
 
+	serviceFilter, err := normalizeServiceFilter(params.ServiceName)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	var rows []remoteToolRow
 
 	// Exact-name lookup: gossip fast path, avoiding the catalog fan-out
@@ -339,7 +343,7 @@ func (n *SamNode) handleFindRemoteTools(ctx context.Context, req *mcp.CallToolRe
 	if params.ToolName != "" && params.PeerID == "" && n.Discovery != nil {
 		n.Discovery.Ensure(api.ServiceType_SERVICE_TYPE_MCP, params.ToolName)
 		if provs := n.Discovery.Providers(api.ServiceType_SERVICE_TYPE_MCP, params.ToolName); len(provs) > 0 {
-			candidates := gossipToolRows(provs, params.ToolName, params.ServiceName)
+			candidates := gossipToolRows(provs, params.ToolName, serviceFilter)
 			rows = n.verifyGossipToolRows(ctx, candidates)
 			if len(rows) > 0 {
 				return marshalToolRows(rows)
@@ -352,7 +356,7 @@ func (n *SamNode) handleFindRemoteTools(ctx context.Context, req *mcp.CallToolRe
 		if err != nil {
 			return nil, nil, fmt.Errorf("invalid peer_id %q: %w", params.PeerID, err)
 		}
-		peerRows, err := n.fetchRemoteToolCatalogue(ctx, pid, params.ServiceName)
+		peerRows, err := n.fetchRemoteToolCatalogue(ctx, pid, serviceFilter)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -376,7 +380,7 @@ func (n *SamNode) handleFindRemoteTools(ctx context.Context, req *mcp.CallToolRe
 			peerIDs = append(peerIDs, pid)
 		}
 
-		rows = n.fanOutFetch(ctx, peerIDs, params.ServiceName)
+		rows = n.fanOutFetch(ctx, peerIDs, serviceFilter)
 	}
 
 	if params.ToolName != "" {
@@ -400,16 +404,37 @@ func marshalToolRows(rows []remoteToolRow) (*mcp.CallToolResult, any, error) {
 	}, nil, nil
 }
 
+// normalizeServiceFilter canonicalises the service_name filter.
+//
+// This tool only ever searches MCP services, so the scheme is redundant and a
+// bare "everything" is accepted alongside "mcp://everything". Any other scheme
+// is an error rather than a filter that matches nothing: an empty result is
+// already the honest answer for a service the mesh does not have, so it cannot
+// also mean the caller misspelled one.
+func normalizeServiceFilter(name string) (string, error) {
+	switch {
+	case name == "":
+		return "", nil
+	case !strings.Contains(name, "://"):
+		return api.MCPServicePrefix + name, nil
+	case strings.HasPrefix(name, api.MCPServicePrefix):
+		return name, nil
+	default:
+		return "", fmt.Errorf("service_name %q: find_remote_tools searches MCP services only; pass a bare name such as \"everything\" or an %s name", name, api.MCPServicePrefix)
+	}
+}
+
 // gossipToolRows builds result rows from gossip-observed providers of a tool.
+// serviceNameFilter must already be canonical; see normalizeServiceFilter.
 func gossipToolRows(provs []samdiscovery.Provider, toolName, serviceNameFilter string) []remoteToolRow {
 	var rows []remoteToolRow
 	for _, p := range provs {
-		if serviceNameFilter != "" && p.Service != serviceNameFilter {
-			continue
-		}
 		name := p.Service
 		if !strings.Contains(name, "://") {
 			name = api.MCPServicePrefix + name
+		}
+		if serviceNameFilter != "" && name != serviceNameFilter {
+			continue
 		}
 		rows = append(rows, remoteToolRow{
 			PeerID:   p.PeerID,
@@ -546,6 +571,7 @@ func (n *SamNode) annotateToolLabels(rows []remoteToolRow) {
 
 // fetchRemoteToolCatalogue gets the remote node's service catalogue,
 // then opens a separate libp2p stream to each MCP service to fetch its tools.
+// serviceNameFilter must already be canonical; see normalizeServiceFilter.
 func (n *SamNode) fetchRemoteToolCatalogue(ctx context.Context, targetPeer peer.ID, serviceNameFilter string) ([]remoteToolRow, error) {
 	services, err := n.fetchRemoteServiceCatalog(ctx, targetPeer, "MCP")
 	if err != nil {
@@ -575,7 +601,7 @@ func (n *SamNode) fetchRemoteToolCatalogue(ctx context.Context, targetPeer peer.
 				continue
 			}
 			logger.Debugf("Failed to connect MCP session for service %s: %v", targetService, err)
-			if serviceNameFilter == "" || connectService == serviceNameFilter || strings.HasPrefix(connectService, serviceNameFilter+".") {
+			if serviceNameFilter == "" || connectService == serviceNameFilter {
 				rows = append(rows, remoteToolRow{
 					PeerID:   targetPeer.String(),
 					ToolName: connectService,
@@ -602,7 +628,7 @@ func (n *SamNode) fetchRemoteToolCatalogue(ctx context.Context, targetPeer peer.
 				})
 			}
 		} else {
-			if serviceNameFilter == "" || targetService == serviceNameFilter || strings.HasPrefix(targetService, serviceNameFilter+".") {
+			if serviceNameFilter == "" || connectService == serviceNameFilter {
 				rows = append(rows, remoteToolRow{
 					PeerID:   targetPeer.String(),
 					ToolName: targetService,

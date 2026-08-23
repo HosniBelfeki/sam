@@ -142,9 +142,62 @@ func TestGossipToolRows(t *testing.T) {
 		t.Errorf("row 1 should have no labels: %+v", rows[1])
 	}
 
-	filtered := gossipToolRows(provs, "review_pr", "reviewer")
+	filtered := gossipToolRows(provs, "review_pr", "mcp://reviewer")
 	if len(filtered) != 1 || filtered[0].PeerID != "peerA" {
 		t.Errorf("service filter: got %+v", filtered)
+	}
+}
+
+// The tool schema documents service_name as a bare name ("code-reviewer") while
+// tool names carry the mcp:// prefix. Matching the two literally made the
+// documented spelling return nothing, which is indistinguishable from a mesh
+// that has no such service.
+func TestNormalizeServiceFilter(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		in      string
+		want    string
+		wantErr bool
+	}{
+		{name: "empty is no filter", in: "", want: ""},
+		{name: "bare name gains the scheme", in: "everything", want: "mcp://everything"},
+		{name: "namespaced name is already canonical", in: "mcp://everything", want: "mcp://everything"},
+		{name: "a non-MCP scheme is an error, not an empty result", in: "inference://vllm-tpu", wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := normalizeServiceFilter(tc.in)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("normalizeServiceFilter(%q): want error, got %q", tc.in, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("normalizeServiceFilter(%q): %v", tc.in, err)
+			}
+			if got != tc.want {
+				t.Errorf("normalizeServiceFilter(%q): got %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// Providers announce a service either bare or namespaced; both denote the same
+// service and must match one canonical filter.
+func TestGossipToolRows_MatchesEitherAnnouncedForm(t *testing.T) {
+	provs := []samdiscovery.Provider{
+		{PeerID: "peerA", Service: "everything"},
+		{PeerID: "peerB", Service: "mcp://everything"},
+		{PeerID: "peerC", Service: "other"},
+	}
+	rows := gossipToolRows(provs, "get-sum", "mcp://everything")
+	if len(rows) != 2 {
+		t.Fatalf("got %d rows, want 2: %+v", len(rows), rows)
+	}
+	for _, row := range rows {
+		if row.ToolName != "mcp://everything/get-sum" {
+			t.Errorf("got %q", row.ToolName)
+		}
 	}
 }
 
