@@ -172,13 +172,17 @@ test('leaving the policy view warns about unsaved edits', async ({ page }) => {
   await page.fill('#policy-yaml', '# unsaved edit\n');
 
   let message = '';
-  page.once('dialog', async (d) => {
-    message = d.message();
-    await d.dismiss();
+  const dismissed = new Promise((resolve) => {
+    page.once('dialog', async (d) => {
+      message = d.message();
+      await d.dismiss();
+      resolve();
+    });
   });
   await page.click('.nav-item[data-target="overview"]');
-  await expect(page.locator('#view-policy')).toBeVisible();
+  await dismissed;
   expect(message).toContain('unsaved policy changes');
+  await expect(page.locator('#view-policy')).toBeVisible();
 
   page.once('dialog', (d) => d.accept());
   await page.click('.nav-item[data-target="overview"]');
@@ -197,4 +201,17 @@ test('an unedited policy view navigates away without prompting', async ({ page }
   await page.click('.nav-item[data-target="overview"]');
   await expect(page.locator('#view-overview')).toBeVisible();
   expect(prompted).toBe(false);
+});
+
+test('navigation is keyboard operable and refreshes are announced', async ({ page }) => {
+  await login(page);
+
+  // Real hrefs, so keyboard activation and open-in-new-tab work without JS.
+  await expect(page.locator('.nav-item[data-target="nodes"]')).toHaveAttribute('href', '#nodes');
+
+  await page.locator('.nav-item[data-target="routers"]').press('Enter');
+  await expect(page.locator('#view-routers')).toBeVisible();
+  await expect(page).toHaveURL(/#routers$/);
+
+  await expect(page.locator('#live-status')).toHaveText(/nodes, .* routers/);
 });

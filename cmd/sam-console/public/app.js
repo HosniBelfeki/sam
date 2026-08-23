@@ -8,17 +8,11 @@ let refreshInFlight = false;
 let policyBaseline = '';
 
 document.addEventListener('DOMContentLoaded', () => {
-    // Navigation handling
-    const navItems = document.querySelectorAll('.nav-item');
-
-    navItems.forEach(item => {
-        item.addEventListener('click', (e) => {
-            e.preventDefault();
-            switchTab(e.currentTarget.getAttribute('data-target'));
-
-            // On mobile the sidebar is an overlay drawer; close it after navigating.
-            closeSidebar();
-        });
+    // Each nav item is a real link to its view's hash, so the browser handles the
+    // routing and hashchange drives switchTab. This only dismisses the drawer,
+    // which is an overlay on mobile.
+    document.querySelectorAll('.nav-item').forEach(item => {
+        item.addEventListener('click', () => closeSidebar());
     });
 
     window.addEventListener('hashchange', () => switchTab(tabFromHash()));
@@ -256,6 +250,7 @@ async function loadData() {
         }
 
         applySearchFilter();
+        announce(`${nodesCount} nodes, ${routersCount} routers, ${reqsCount} enrollment requests.`);
 
     } catch (error) {
         console.error('Failed to load dashboard data:', error);
@@ -265,7 +260,17 @@ async function loadData() {
         setTableMessage('table-enrollments', 4, errMsg, true);
         setTableMessage('table-routers', 3, errMsg, true);
         setTableMessage('table-bootstrap', 5, errMsg, true);
+        announce(errMsg);
         throw error;
+    }
+}
+
+// Table renders replace rows wholesale, which a screen reader would otherwise
+// never hear about.
+function announce(message) {
+    const region = document.getElementById('live-status');
+    if (region) {
+        region.textContent = message;
     }
 }
 
