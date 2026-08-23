@@ -223,7 +223,9 @@ func TestServiceRegistry_ReprovideWithholdsUnreachableBackend(t *testing.T) {
 	}
 
 	svc.setProbeErr(errors.New("backend went away"))
-	r.ReprovideAll(context.Background())
+	if withheld := r.ReprovideAll(context.Background()); withheld != 1 {
+		t.Errorf("ReprovideAll reported %d withheld, want 1: the retry cadence depends on it", withheld)
+	}
 	if len(dht.calls) != 2 {
 		t.Errorf("Provide called %d times total, want 2: a backend that stopped answering must fall out of the DHT", len(dht.calls))
 	}
@@ -242,7 +244,9 @@ func TestServiceRegistry_ReprovideResumesWhenBackendRecovers(t *testing.T) {
 	}
 
 	svc.setProbeErr(nil)
-	r.ReprovideAll(context.Background())
+	if withheld := r.ReprovideAll(context.Background()); withheld != 0 {
+		t.Errorf("ReprovideAll reported %d withheld after recovery, want 0", withheld)
+	}
 	if len(dht.calls) != 2 {
 		t.Errorf("Provide called %d times after recovery, want 2 (name + type CID)", len(dht.calls))
 	}

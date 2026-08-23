@@ -48,12 +48,22 @@ type MCPService struct {
 // reason to withhold it. Failing to initialize is — that is a backend which is
 // down, or was never an MCP server to begin with.
 func (m *MCPService) Probe(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	m.probeMu.Lock()
 	defer m.probeMu.Unlock()
 	if time.Now().Before(m.probeExpires) {
 		return m.probeErr
 	}
-	m.probeErr = m.dialBackend(ctx)
+	err := m.dialBackend(ctx)
+	// A cancelled or expired context is a fact about the caller, not the
+	// backend. Caching it would withhold a merely slow service for the whole
+	// TTL -- the failure this gating is meant to avoid.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	m.probeErr = err
 	m.probeExpires = time.Now().Add(backendProbeTTL)
 	return m.probeErr
 }
@@ -68,7 +78,10 @@ func (m *MCPService) dialBackend(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("connect to backend of %q: %w", m.info.GetName(), err)
 	}
-	return session.Close()
+	// Connect completed the initialize, which is the whole question here; a
+	// failure to hang up afterwards does not unmake that.
+	_ = session.Close()
+	return nil
 }
 
 // Init initializes the base service.

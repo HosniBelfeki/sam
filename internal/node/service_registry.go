@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/sam/api"
@@ -188,10 +189,11 @@ func (r *ServiceRegistry) TeardownAll() {
 	}
 }
 
-// ReprovideAll re-provides all registered services to the DHT concurrently.
+// ReprovideAll re-provides all registered services to the DHT concurrently and
+// reports how many were withheld because their backend did not answer.
 // A service whose backend has stopped answering falls out of the DHT by not
 // being reprovided, and returns on a later tick once it answers again.
-func (r *ServiceRegistry) ReprovideAll(ctx context.Context) {
+func (r *ServiceRegistry) ReprovideAll(ctx context.Context) int {
 	r.mu.Lock()
 	toProvide := make([]Service, 0, len(r.services))
 	for _, svc := range r.services {
@@ -199,6 +201,7 @@ func (r *ServiceRegistry) ReprovideAll(ctx context.Context) {
 	}
 	r.mu.Unlock()
 
+	var withheld atomic.Int32
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, 5)
 
@@ -220,7 +223,12 @@ Loop:
 
 			info := svc.Info()
 			if err := advertisable(ctx, svc); err != nil {
-				logger.Warnf("[ServiceRegistry] Withholding %s/%s from the DHT: backend did not answer: %v", info.Type, info.Name, err)
+				withheld.Add(1)
+				// On shutdown every service fails this way, and saying so
+				// would blame backends for the node stopping.
+				if ctx.Err() == nil {
+					logger.Warnf("[ServiceRegistry] Withholding %s/%s from the DHT: backend did not answer: %v", info.Type, info.Name, err)
+				}
 				return
 			}
 
@@ -237,4 +245,5 @@ Loop:
 		}()
 	}
 	wg.Wait()
+	return int(withheld.Load())
 }
