@@ -209,6 +209,19 @@ class S(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(json.dumps(res_data).encode("utf-8"))
+        elif req_id is not None:
+            # A request carrying an id must get a response; 202 with no body is
+            # only valid for notifications. Clients send unknown methods here
+            # (go-sdk probes "server/discover" before "initialize") and abort
+            # the connection if the reply is not JSON-RPC.
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "error": {"code": -32601, "message": "Method not found"}
+            }).encode("utf-8"))
         else:
             self.send_response(202)
             self.end_headers()
