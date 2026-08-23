@@ -164,7 +164,8 @@ explicitly authorized.
 Use `call_remote_tool` with:
 
 - `peer_id`: the peer hosting the tool
-- `tool_name`: the discovered namespaced tool name, such as `service.tool`
+- `tool_name`: the discovered namespaced tool name, such as
+  `mcp://everything/get-sum`
 - `arguments`: a JSON object whose keys match the described input schema
 
 `arguments` must be a JSON object, not a string containing JSON.
