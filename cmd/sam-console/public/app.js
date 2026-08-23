@@ -3,6 +3,9 @@ const REFRESH_INTERVAL_MS = 15000;
 
 let refreshTimer = null;
 let refreshInFlight = false;
+// Last policy the server confirmed, so an edit is never silently overwritten by
+// a background refresh or thrown away by a stray click.
+let policyBaseline = '';
 
 document.addEventListener('DOMContentLoaded', () => {
     // Navigation handling
@@ -21,9 +24,54 @@ document.addEventListener('DOMContentLoaded', () => {
     window.addEventListener('hashchange', () => switchTab(tabFromHash()));
     switchTab(tabFromHash());
 
+    document.getElementById('resource-search').addEventListener('input', applySearchFilter);
+
+    // Warn before a reload or a close discards an in-progress policy edit.
+    window.addEventListener('beforeunload', (e) => {
+        if (policyIsDirty()) {
+            e.preventDefault();
+            e.returnValue = '';
+        }
+    });
+
     // Check auth status on load
     checkAuthAndLoad();
 });
+
+// Filters every rendered table and router card, so the result stays consistent
+// when the operator switches views or a background refresh re-renders a table.
+function applySearchFilter() {
+    const input = document.getElementById('resource-search');
+    const raw = input.value.trim();
+    const query = raw.toLowerCase();
+
+    document.querySelectorAll('.data-table tbody').forEach(tbody => {
+        tbody.querySelectorAll('tr[data-filter-empty]').forEach(tr => tr.remove());
+
+        const rows = Array.from(tbody.querySelectorAll('tr'));
+        const matches = rows.filter(tr => {
+            const match = !query || tr.textContent.toLowerCase().includes(query);
+            tr.hidden = !match;
+            return match;
+        });
+
+        if (query && rows.length > 0 && matches.length === 0) {
+            const table = tbody.closest('table');
+            const tr = document.createElement('tr');
+            tr.dataset.filterEmpty = 'true';
+            const td = document.createElement('td');
+            td.colSpan = table.querySelectorAll('thead th').length || 1;
+            td.className = 'text-center';
+            td.textContent = `No rows match "${raw}"`;
+            tr.appendChild(td);
+            tbody.appendChild(tr);
+        }
+    });
+
+    document.querySelectorAll('.router-item-card').forEach(card => {
+        card.hidden = query !== '' && !card.textContent.toLowerCase().includes(query);
+    });
+}
 
 function tabFromHash() {
     const raw = window.location.hash.replace(/^#/, '');
@@ -200,12 +248,14 @@ async function loadData() {
         renderRoutersTable(data.active_routers || []);
         renderRouterTopography(data.active_routers || []);
         renderBootstrapTokensTable(data.bootstrap_tokens || []);
-        
-        // Populate policy yaml if empty
+
         const policyArea = document.getElementById('policy-yaml');
-        if (policyArea && !policyArea.value && data.policy_yaml) {
-            policyArea.value = data.policy_yaml;
+        if (policyArea && data.policy_yaml !== undefined && !policyIsDirty()) {
+            policyArea.value = data.policy_yaml || '';
+            policyBaseline = policyArea.value;
         }
+
+        applySearchFilter();
 
     } catch (error) {
         console.error('Failed to load dashboard data:', error);
@@ -433,6 +483,11 @@ function updateUIForRole(role, userId) {
     }
 }
 
+function policyIsDirty() {
+    const area = document.getElementById('policy-yaml');
+    return area !== null && area.value !== policyBaseline;
+}
+
 function switchTab(target) {
     const navItems = document.querySelectorAll('.nav-item');
     const viewSections = document.querySelectorAll('.view-section');
@@ -442,6 +497,17 @@ function switchTab(target) {
     if (!activeNav || activeNav.style.display === 'none') {
         target = DEFAULT_TAB;
         activeNav = Array.from(navItems).find(n => n.getAttribute('data-target') === target);
+    }
+
+    const onPolicy = document.getElementById('view-policy').classList.contains('active');
+    if (onPolicy && target !== 'policy' && policyIsDirty()) {
+        if (!confirm('You have unsaved policy changes. Leave without saving?')) {
+            // The hash may already have moved, e.g. via the back button.
+            if (tabFromHash() !== 'policy') {
+                window.location.hash = 'policy';
+            }
+            return;
+        }
     }
 
     navItems.forEach(n => n.classList.remove('active'));
@@ -619,6 +685,7 @@ window.savePolicy = async function() {
             headers: headers,
             body: pbBytes
         });        if (response.ok) {
+            policyBaseline = yamlContent;
             alert('Mesh policy updated and applied successfully!');
             loadData();
         } else {

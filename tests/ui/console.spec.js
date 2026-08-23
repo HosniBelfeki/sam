@@ -143,3 +143,58 @@ test('an unknown hash falls back to the overview', async ({ page }) => {
   await page.goto('/#not-a-view');
   await expect(page.locator('#view-overview')).toBeVisible();
 });
+
+test('the search box filters rendered rows', async ({ page }) => {
+  await login(page);
+  await page.click('.nav-item[data-target="bootstrap"]');
+
+  // Guarantee at least one row to filter, independent of test ordering.
+  await page.click('#form-generate-token button[type="submit"]');
+  await expect(page.locator('#table-bootstrap')).toContainText('root-admin');
+
+  await page.fill('#resource-search', 'root-admin');
+  await expect(page.locator('#table-bootstrap tr:visible')).not.toHaveCount(0);
+  await expect(page.locator('#table-bootstrap tr[data-filter-empty]')).toHaveCount(0);
+
+  await page.fill('#resource-search', 'zzz-no-such-resource');
+  await expect(page.locator('#table-bootstrap tr[data-filter-empty]')).toContainText('No rows match');
+
+  await page.fill('#resource-search', '');
+  await expect(page.locator('#table-bootstrap tr[data-filter-empty]')).toHaveCount(0);
+  await expect(page.locator('#table-bootstrap')).toContainText('root-admin');
+});
+
+// The policy textarea is the one place in the console where a stray click can
+// destroy work that exists nowhere else.
+test('leaving the policy view warns about unsaved edits', async ({ page }) => {
+  await login(page);
+  await page.click('.nav-item[data-target="policy"]');
+  await page.fill('#policy-yaml', '# unsaved edit\n');
+
+  let message = '';
+  page.once('dialog', async (d) => {
+    message = d.message();
+    await d.dismiss();
+  });
+  await page.click('.nav-item[data-target="overview"]');
+  await expect(page.locator('#view-policy')).toBeVisible();
+  expect(message).toContain('unsaved policy changes');
+
+  page.once('dialog', (d) => d.accept());
+  await page.click('.nav-item[data-target="overview"]');
+  await expect(page.locator('#view-overview')).toBeVisible();
+});
+
+test('an unedited policy view navigates away without prompting', async ({ page }) => {
+  await login(page);
+  await page.click('.nav-item[data-target="policy"]');
+
+  let prompted = false;
+  page.once('dialog', async (d) => {
+    prompted = true;
+    await d.dismiss();
+  });
+  await page.click('.nav-item[data-target="overview"]');
+  await expect(page.locator('#view-overview')).toBeVisible();
+  expect(prompted).toBe(false);
+});
