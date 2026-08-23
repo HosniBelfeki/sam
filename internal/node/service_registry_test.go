@@ -210,6 +210,28 @@ func TestServiceRegistry_UnreachableBackendIsRegisteredButNotAdvertised(t *testi
 	}
 }
 
+// A service registered after the reprovide loop's last cycle would otherwise
+// wait a whole interval to be advertised, which is minutes.
+func TestServiceRegistry_WithheldRegistrationAsksForAReprovide(t *testing.T) {
+	r := newServiceRegistryForTest(&fakeDHT{})
+	var asked int
+	r.reprovideNow = func() { asked++ }
+
+	if err := r.Register(context.Background(), newProbingSvc("late", errors.New("not up yet"))); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if asked != 1 {
+		t.Errorf("reprovide requested %d times for a withheld service, want 1", asked)
+	}
+
+	if err := r.Register(context.Background(), newProbingSvc("healthy", nil)); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if asked != 1 {
+		t.Errorf("reprovide requested %d times, want 1: an advertised service needs no retry", asked)
+	}
+}
+
 func TestServiceRegistry_ReprovideWithholdsUnreachableBackend(t *testing.T) {
 	dht := &fakeDHT{}
 	r := newServiceRegistryForTest(dht)

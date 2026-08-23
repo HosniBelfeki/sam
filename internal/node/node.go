@@ -430,6 +430,7 @@ func (n *SamNode) Start(ctx context.Context) error {
 	n.DHT = kdht
 
 	n.services = NewServiceRegistry(n.DHT)
+	n.services.reprovideNow = n.triggerReprovide
 
 	var authenticated bool
 	var fatalAuthErr error
@@ -498,10 +499,7 @@ func (n *SamNode) Start(ctx context.Context) error {
 					// Debounce and trigger unified reprovide loop
 					go func() {
 						time.Sleep(2 * time.Second) // Small debounce
-						select {
-						case n.reprovideTrigger <- struct{}{}:
-						default:
-						}
+						n.triggerReprovide()
 					}()
 				}
 			}
@@ -544,6 +542,15 @@ func (n *SamNode) Start(ctx context.Context) error {
 	n.startPolicySyncLoop(ctx, n.config.PolicySyncInterval)
 
 	return nil
+}
+
+// triggerReprovide asks the reprovide loop to run a cycle now, dropping the
+// request when one is already pending.
+func (n *SamNode) triggerReprovide() {
+	select {
+	case n.reprovideTrigger <- struct{}{}:
+	default:
+	}
 }
 
 func (n *SamNode) startReprovideLoop(ctx context.Context, interval time.Duration) {

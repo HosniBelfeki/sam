@@ -228,6 +228,15 @@ class S(BaseHTTPRequestHandler):
 HTTPServer(("0.0.0.0", 9091), S).serve_forever()
 '
 
+# The node probes a backend before advertising it, so the mock has to be
+# listening before the service below is registered.
+for _ in $(seq 1 30); do
+  curl -sf -o /dev/null -X POST -H "Content-Type: application/json" \
+    -d '{"jsonrpc":"2.0","id":1,"method":"initialize"}' \
+    http://127.0.0.1:9091 && break
+  sleep 1
+done
+
 # Register a dummy MCP service on the host node pointing to the local mock server container (using container name)
 curl -s -X POST \
   -H "Content-Type: application/json" \

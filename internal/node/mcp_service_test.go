@@ -18,8 +18,8 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/google/sam/api"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -61,14 +61,37 @@ func TestMCPService_ProbeRejectsNonMCPBackend(t *testing.T) {
 	if err := svc.Probe(context.Background()); err == nil {
 		t.Fatal("Probe accepted a backend that is not an MCP server")
 	}
-	if svc.probeExpires.IsZero() {
-		t.Error("a real negative result should be cached")
+}
+
+// Backends routinely start after the node does, so a failed probe must not be
+// sticky: the next one has to see the backend as it is now, not as it was.
+func TestMCPService_ProbeRecoversWhenBackendComesUp(t *testing.T) {
+	var up atomic.Bool
+	real := mcp.NewServer(&mcp.Implementation{Name: "late", Version: "0.0.1"}, nil)
+	handler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return real }, nil)
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !up.Load() {
+			http.Error(w, "still starting", http.StatusServiceUnavailable)
+			return
+		}
+		handler.ServeHTTP(w, r)
+	}))
+	t.Cleanup(ts.Close)
+
+	svc := newProbeService(ts.URL)
+	if err := svc.Probe(context.Background()); err == nil {
+		t.Fatal("Probe accepted a backend that was not serving yet")
+	}
+
+	up.Store(true)
+	if err := svc.Probe(context.Background()); err != nil {
+		t.Errorf("Probe still failing after the backend came up: %v", err)
 	}
 }
 
-// A cancelled context is a fact about the caller, not the backend. Caching it
-// would withhold a healthy service for the whole TTL.
-func TestMCPService_ProbeDoesNotCacheContextErrors(t *testing.T) {
+// A cancelled context is a fact about the caller, not the backend.
+func TestMCPService_ProbeFailsOnCancelledContext(t *testing.T) {
 	svc := newProbeService(newProbeBackend(t).URL)
 
 	cancelled, cancel := context.WithCancel(context.Background())
@@ -76,33 +99,8 @@ func TestMCPService_ProbeDoesNotCacheContextErrors(t *testing.T) {
 	if err := svc.Probe(cancelled); err == nil {
 		t.Fatal("Probe returned nil for a cancelled context")
 	}
-	if !svc.probeExpires.IsZero() {
-		t.Fatal("a context error was cached")
-	}
 
 	if err := svc.Probe(context.Background()); err != nil {
 		t.Errorf("Probe after a cancelled one: %v", err)
-	}
-}
-
-// The same, for a context that is alive on entry and expires mid-dial: this is
-// the slow backend the gating is explicitly meant not to punish.
-func TestMCPService_ProbeDoesNotCacheTimeouts(t *testing.T) {
-	// Answers, but never within the probe's deadline.
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		time.Sleep(150 * time.Millisecond)
-		http.Error(w, "too slow", http.StatusServiceUnavailable)
-	}))
-	t.Cleanup(ts.Close)
-
-	svc := newProbeService(ts.URL)
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
-	defer cancel()
-
-	if err := svc.Probe(ctx); err == nil {
-		t.Fatal("Probe returned nil against a backend slower than the deadline")
-	}
-	if !svc.probeExpires.IsZero() {
-		t.Error("a timeout was cached: a slow backend would stay withheld for the whole TTL")
 	}
 }

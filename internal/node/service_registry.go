@@ -64,6 +64,11 @@ type ServiceRegistry struct {
 	mu       sync.RWMutex
 	services map[string]Service
 	dht      dhtProvider
+
+	// reprovideNow asks the node to run a reprovide cycle now, so a service
+	// registered after the loop last ran does not wait a whole interval to be
+	// advertised. Optional; nil outside a running node.
+	reprovideNow func()
 }
 
 func NewServiceRegistry(d dhtProvider) *ServiceRegistry {
@@ -122,6 +127,8 @@ func (r *ServiceRegistry) Register(ctx context.Context, svc Service) error {
 
 	if probeErr == nil {
 		logger.Infof("[ServiceRegistry] Registered %s/%s (name CID: %s, type CID: %s)", info.Type, info.Name, srvNameCID, srvTypeCID)
+	} else if r.reprovideNow != nil {
+		r.reprovideNow()
 	}
 	return nil
 }
