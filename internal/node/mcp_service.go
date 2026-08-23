@@ -34,6 +34,41 @@ type MCPService struct {
 	toolsMu      sync.Mutex
 	cachedTools  []string
 	toolsExpires time.Time
+
+	probeMu      sync.Mutex
+	probeErr     error
+	probeExpires time.Time
+}
+
+// Probe reports whether the backend actually speaks MCP, by completing an
+// initialize against it.
+//
+// Deliberately weaker than Tools: a backend serving only resources or prompts
+// has no tools and is still a working MCP server, so an empty tool list is no
+// reason to withhold it. Failing to initialize is — that is a backend which is
+// down, or was never an MCP server to begin with.
+func (m *MCPService) Probe(ctx context.Context) error {
+	m.probeMu.Lock()
+	defer m.probeMu.Unlock()
+	if time.Now().Before(m.probeExpires) {
+		return m.probeErr
+	}
+	m.probeErr = m.dialBackend(ctx)
+	m.probeExpires = time.Now().Add(backendProbeTTL)
+	return m.probeErr
+}
+
+func (m *MCPService) dialBackend(ctx context.Context) error {
+	transport, err := m.backendTransport()
+	if err != nil {
+		return err
+	}
+	client := mcp.NewClient(&mcp.Implementation{Name: "sam-node-probe", Version: "0.1.0"}, nil)
+	session, err := client.Connect(ctx, transport, nil)
+	if err != nil {
+		return fmt.Errorf("connect to backend of %q: %w", m.info.GetName(), err)
+	}
+	return session.Close()
 }
 
 // Init initializes the base service.

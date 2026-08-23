@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -159,5 +160,90 @@ func TestServiceRegistry_TeardownAllContinuesOnError(t *testing.T) {
 	}
 	if len(r.List(api.ServiceType_SERVICE_TYPE_UNSPECIFIED)) != 0 {
 		t.Error("registry not empty after TeardownAll")
+	}
+}
+
+// probingService is a service whose backend can be asked whether it answers.
+type probingService struct {
+	*fakeService
+	mu         sync.Mutex
+	probeErr   error
+	probeCalls int
+}
+
+func (p *probingService) Probe(context.Context) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.probeCalls++
+	return p.probeErr
+}
+
+func (p *probingService) setProbeErr(err error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.probeErr = err
+}
+
+func newProbingSvc(name string, probeErr error) *probingService {
+	return &probingService{
+		fakeService: newFakeSvc(name, api.ServiceType_SERVICE_TYPE_MCP),
+		probeErr:    probeErr,
+	}
+}
+
+// A backend that is not an MCP server at all -- the canary that answers HTTP
+// but fails MCP initialize -- must not be advertised as one. It stays
+// registered so the reprovide loop can pick it up if it starts answering.
+func TestServiceRegistry_UnreachableBackendIsRegisteredButNotAdvertised(t *testing.T) {
+	dht := &fakeDHT{}
+	r := newServiceRegistryForTest(dht)
+
+	svc := newProbingSvc("dummy-http", errors.New(`calling "initialize": EOF`))
+	if err := r.Register(context.Background(), svc); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if len(dht.calls) != 0 {
+		t.Errorf("Provide called %d times for an unreachable backend, want 0", len(dht.calls))
+	}
+	if _, ok := r.Get("dummy-http"); !ok {
+		t.Error("service should stay registered so it can recover")
+	}
+}
+
+func TestServiceRegistry_ReprovideWithholdsUnreachableBackend(t *testing.T) {
+	dht := &fakeDHT{}
+	r := newServiceRegistryForTest(dht)
+
+	svc := newProbingSvc("demo", nil)
+	if err := r.Register(context.Background(), svc); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if len(dht.calls) != 2 {
+		t.Fatalf("Provide called %d times at registration, want 2", len(dht.calls))
+	}
+
+	svc.setProbeErr(errors.New("backend went away"))
+	r.ReprovideAll(context.Background())
+	if len(dht.calls) != 2 {
+		t.Errorf("Provide called %d times total, want 2: a backend that stopped answering must fall out of the DHT", len(dht.calls))
+	}
+}
+
+func TestServiceRegistry_ReprovideResumesWhenBackendRecovers(t *testing.T) {
+	dht := &fakeDHT{}
+	r := newServiceRegistryForTest(dht)
+
+	svc := newProbingSvc("demo", errors.New("not up yet"))
+	if err := r.Register(context.Background(), svc); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if len(dht.calls) != 0 {
+		t.Fatalf("Provide called %d times while the backend was down, want 0", len(dht.calls))
+	}
+
+	svc.setProbeErr(nil)
+	r.ReprovideAll(context.Background())
+	if len(dht.calls) != 2 {
+		t.Errorf("Provide called %d times after recovery, want 2 (name + type CID)", len(dht.calls))
 	}
 }
