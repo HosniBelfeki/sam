@@ -105,3 +105,41 @@ test('omitting the owner attributes the token to the session user', async ({ pag
 
   await expect(page.locator('#token-result-owner')).toHaveText('root-admin');
 });
+
+// The console holds mesh admin credentials. If they were reachable from JS, a
+// single XSS in this hand-written page would hand over the whole mesh.
+test('the session credential is never exposed to JavaScript', async ({ page, context }) => {
+  await login(page);
+
+  const storage = await page.evaluate(() => JSON.stringify(window.localStorage));
+  expect(storage).not.toContain(ADMIN_TOKEN);
+  expect(await page.evaluate(() => document.cookie)).not.toContain(ADMIN_TOKEN);
+
+  const session = (await context.cookies()).find((c) => c.name === 'sam_session');
+  expect(session, 'sam_session cookie was not set').toBeTruthy();
+  expect(session.httpOnly).toBe(true);
+});
+
+test('views are deep-linkable via the URL hash', async ({ page }) => {
+  await login(page);
+
+  await page.click('.nav-item[data-target="routers"]');
+  await expect(page).toHaveURL(/#routers$/);
+
+  // A reload must land back on the same view rather than resetting to Overview.
+  await page.reload();
+  await expect(page.locator('#view-routers')).toBeVisible();
+  await expect(page.locator('#view-overview')).toBeHidden();
+  await expect(page.locator('.nav-item[data-target="routers"]')).toHaveAttribute('aria-current', 'page');
+
+  // Back returns to the previously selected view.
+  await page.goBack();
+  await expect(page.locator('#view-overview')).toBeVisible();
+});
+
+test('an unknown hash falls back to the overview', async ({ page }) => {
+  await login(page);
+
+  await page.goto('/#not-a-view');
+  await expect(page.locator('#view-overview')).toBeVisible();
+});
