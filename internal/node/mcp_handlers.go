@@ -316,9 +316,7 @@ type remoteToolRow struct {
 //   - Otherwise the candidate list is obtained via DiscoverRemoteServices.
 //
 // Filtering:
-//   - Tools without a "." in their name (infra tools) are excluded.
-//   - If params.ServiceName is set, only tools whose name starts with
-//     "<service_name>." are returned.
+//   - If params.ServiceName is set, only tools from that service are returned.
 //   - params.Intent is accepted and logged at debug level, but does not
 //     filter or rank results in this implementation (placeholder for
 //     future semantic search).

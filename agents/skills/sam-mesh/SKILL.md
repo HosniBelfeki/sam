@@ -138,8 +138,16 @@ All tools returned by `find_remote_tools` are namespaced. Always call
 Remote MCP tools returned by `find_remote_tools` are namespaced as:
 
 ```text
-<service_name>.<tool_name>
+<scheme>://<service_name>/<tool_name>
 ```
+
+For example `mcp://everything/get-sum`. Pass the name exactly as returned to
+`describe_remote_tool` and `call_remote_tool`; do not reassemble it.
+
+Entries may carry an `error` field instead of a `description` when a peer
+advertises a service whose backend did not answer. Discovery is best-effort per
+peer, so a partly broken mesh yields a partly populated array rather than a
+failed call. Check for `error` before treating a tool as available.
 
 Use the input schema from `describe_remote_tool` to build the call arguments.
 Do not guess arguments if a tool cannot be described.
