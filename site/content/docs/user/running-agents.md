@@ -340,16 +340,30 @@ spec:
     # starts, no network.
     - name: agent
       image: your-agent-image
-      securityContext:
-        # The one relaxation the sandbox needs; see below.
-        appArmorProfile:
-          type: Unconfined
       command: ["/usr/local/bin/nano-init", "run", "--create-namespaces",
                 "/var/run/sam/agent.sock", "python3", "/app/agent.py"]
       volumeMounts:
         - { name: sam-uds, mountPath: /var/run/sam }
         - { name: scratch, mountPath: /tmp }
         - { name: tun,     mountPath: /dev/net/tun }
+        # The sandbox's own resolver, supplied by the kubelet.
+        - { name: resolv,  mountPath: /etc/resolv.conf, subPath: resolv.conf }
+```
+
+With the matching volume and a ConfigMap holding one line:
+
+```yaml
+    - name: resolv
+      configMap:
+        name: sandbox-resolv
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sandbox-resolv
+data:
+  resolv.conf: |
+    nameserver 169.254.1.1
 ```
 
 Note what is **not** there: no `securityContext`, no added capabilities, no
@@ -369,12 +383,12 @@ holds both over the namespaces it then makes. Granting `CAP_SYS_ADMIN` alone is
 in fact worse than granting nothing: the namespace gets created, and then the
 tun fails for want of `CAP_NET_ADMIN`.
 
-**A seccomp and AppArmor policy that permits it.** This is the one that bites,
-and it is the reason for the `appArmorProfile` above. containerd applies an
-AppArmor profile by default — `cri-containerd.apparmor.d` on GKE — which permits
-creating the mount namespace and then **denies the bind mount inside it**. The
-sandbox gets a namespace it cannot put a private `resolv.conf` into. Measured on
-a GKE 1.35 node:
+**The sandbox needs a `resolv.conf` of its own, and the kubelet should supply
+it.** A pod's `resolv.conf` is one file shared by every container, so pointing
+DNS at the sandbox's resolver by writing that file would point `sam-node` at it
+too — at an address that only exists inside the sandbox's network namespace.
+`nano-init` can bind-mount a private one, but that bind is the single operation
+containerd's default AppArmor profile denies:
 
 ```console
 user+net                          : ok
@@ -382,27 +396,32 @@ user+mount (unchanged propagation): ok
 bind mount inside                 : FAILED
 ```
 
-With `appArmorProfile: {type: Unconfined}` on that container, all three pass.
-Seccomp is not involved: GKE reports `Seccomp: 0` for pods that do not ask for a
-profile, and creating the namespaces is allowed. Docker is the other way round —
-its default seccomp blocks the user namespace and its default AppArmor blocks the
-mount — which is why running the same image locally needs
-`--security-opt seccomp=unconfined --security-opt apparmor=unconfined`.
+Mounting the file per container avoids the question. `nano-init` checks whether
+`/etc/resolv.conf` already names its resolver and, if so, does nothing — so the
+container needs no `securityContext` at all: no capabilities, not privileged, no
+AppArmor exception.
 
-It is worth being clear about what that costs, because the container it applies
-to is the least trusted one. The agent keeps every other constraint: no
-capabilities, not privileged, its own user namespace, and no network but the
-tun. What it gains is the ability to mount inside its own mount namespace, which
-a user namespace already confines to filesystems it owns. The tighter option is
-a custom profile — the default plus `mount` — loaded on the nodes and selected
-with `appArmorProfile: {type: Localhost, localhostProfile: ...}`; that is
-strictly better and costs an operational step, so it is the right thing to move
-to rather than the right thing to start with.
+**Why not `dnsConfig`?** Because `dnsPolicy` and `dnsConfig` are PodSpec fields
+and apply to every container in the pod. Measured on GKE, the per-container
+mount gives you this:
 
-**Somewhere writable.** A new mount namespace copies the mount table, not the
-files behind it, so a private `resolv.conf` is a bind mount over a real file,
-which has to be created somewhere. The `scratch` volume is that somewhere. With
-a read-only root filesystem and no writable path, `nano-init` says so and stops.
+```console
+[sandbox] nameserver 169.254.1.1
+[node]    search default.svc.cluster.local ... nameserver 34.118.224.10
+[node]    cluster DNS works
+```
+
+With `dnsConfig`, `sam-node` would get `169.254.1.1` as well and could no longer
+resolve the control plane.
+
+**If you do not supply one, it needs somewhere writable.** Without the mount
+above, `nano-init` falls back to bind-mounting a private `resolv.conf` itself,
+which needs a real file to bind and therefore a writable path — an `emptyDir` on
+`/tmp` will do. That path also needs a mount namespace, and the bind is what
+AppArmor refuses, so on a default GKE node the fallback fails and the supplied
+file is the way through. Verified on GKE 1.35: with the file mounted, the
+sandbox starts under `cri-containerd.apparmor.d` with no `securityContext`;
+without it, `nano-init` reports `permission denied` creating the namespaces.
 
 ### The harness must be nano-init's child
 

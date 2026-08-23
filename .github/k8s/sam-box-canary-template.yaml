@@ -12,6 +12,19 @@ data:
       rules: []
     services: []
 ---
+# The resolver the sandbox uses, which is nano-init's own on the tun. Supplied
+# here so nano-init does not have to mount it: a pod's resolv.conf is shared by
+# every container, and replacing it from inside needs a bind mount that
+# containerd's default AppArmor profile denies.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sam-canary-sandbox-resolv-${ENV_NAME}
+  namespace: sam-canary-${ENV_NAME}
+data:
+  resolv.conf: |
+    nameserver 169.254.1.1
+---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -116,17 +129,13 @@ spec:
         # uid: as root it would map 0 and hold no privilege over a file owned
         # by 65532, and the connection would be refused.
         #
-        # Unconfined AppArmor is the one relaxation the sandbox needs. The
-        # profile containerd applies by default permits the mount namespace and
-        # then denies the bind mount inside it, so the sandbox would get a
-        # namespace it cannot give a private resolv.conf. Everything else stays
-        # off: no capabilities, no privileged, and a user namespace that holds
-        # the process to what it owns.
+        # Nothing else is granted: no capabilities, not privileged, and no
+        # AppArmor change. The sandbox needs none because the resolv.conf it
+        # would otherwise have to bind-mount is mounted for it below, and that
+        # bind was the only thing containerd's default profile denied.
         securityContext:
           runAsUser: 65532
           runAsGroup: 65532
-          appArmorProfile:
-            type: Unconfined
         command:
           - "/sandbox/nano-init"
           - "run"
@@ -159,6 +168,14 @@ spec:
         # has to be created somewhere.
         - name: scratch
           mountPath: /tmp
+        # The sandbox's own resolver, supplied by the kubelet rather than
+        # mounted by nano-init. A pod's resolv.conf is one file shared by every
+        # container in it, so the sandbox needs one of its own; having the
+        # kubelet mount it means nano-init never has to, which is what keeps
+        # this container free of any AppArmor exception.
+        - name: resolv
+          mountPath: /etc/resolv.conf
+          subPath: resolv.conf
         # A bind mount is enough. The device cgroup does not deny this one, so
         # there is no device plugin involved; what the tun needs is the
         # capability, and the user namespace supplies that.
@@ -171,6 +188,9 @@ spec:
         emptyDir: {}
       - name: scratch
         emptyDir: {}
+      - name: resolv
+        configMap:
+          name: sam-canary-sandbox-resolv-${ENV_NAME}
       - name: tun
         hostPath:
           path: /dev/net/tun

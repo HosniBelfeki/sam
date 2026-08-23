@@ -81,7 +81,7 @@ func TestCapSysAdminFromStatus(t *testing.T) {
 func TestWithNamespaces(t *testing.T) {
 	t.Run("always makes a network and a mount namespace", func(t *testing.T) {
 		cmd := exec.Command("/bin/true")
-		withNamespaces(false)(cmd)
+		withNamespaces(false, true)(cmd)
 
 		if cmd.SysProcAttr.Cloneflags&syscall.CLONE_NEWNET == 0 {
 			t.Error("no CLONE_NEWNET: the sandbox would share the pod's network")
@@ -96,7 +96,7 @@ func TestWithNamespaces(t *testing.T) {
 
 	t.Run("adds a user namespace only when asked", func(t *testing.T) {
 		cmd := exec.Command("/bin/true")
-		withNamespaces(false)(cmd)
+		withNamespaces(false, true)(cmd)
 
 		if cmd.SysProcAttr.Cloneflags&syscall.CLONE_NEWUSER != 0 {
 			t.Error("CLONE_NEWUSER without being asked: it is a fallback, not the default")
@@ -108,7 +108,7 @@ func TestWithNamespaces(t *testing.T) {
 
 	t.Run("a user namespace comes with the mapping that makes it usable", func(t *testing.T) {
 		cmd := exec.Command("/bin/true")
-		withNamespaces(true)(cmd)
+		withNamespaces(true, true)(cmd)
 
 		if cmd.SysProcAttr.Cloneflags&syscall.CLONE_NEWUSER == 0 {
 			t.Fatal("no CLONE_NEWUSER: without CAP_SYS_ADMIN there is no other way to make a netns")
@@ -125,7 +125,7 @@ func TestWithNamespaces(t *testing.T) {
 
 	t.Run("marks the child so it does not do this again", func(t *testing.T) {
 		cmd := exec.Command("/bin/true")
-		withNamespaces(false)(cmd)
+		withNamespaces(false, true)(cmd)
 
 		var found bool
 		for _, kv := range cmd.Env {
@@ -137,4 +137,52 @@ func TestWithNamespaces(t *testing.T) {
 			t.Errorf("env = %v, want %s: without it the child re-executes forever", cmd.Env, nsCreatedEnv)
 		}
 	})
+}
+
+func TestResolvConfAlreadyOurs(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		contents string
+		want     bool
+	}{
+		{
+			name:     "the file a pod can mount for the sandbox",
+			contents: "nameserver " + tunIP + "\n",
+			want:     true,
+		},
+		{
+			name:     "comments and blank lines are not nameservers",
+			contents: "# supplied by the platform\n\nnameserver " + tunIP + "\n",
+			want:     true,
+		},
+		{
+			name: "a pod's own resolv.conf is not ours",
+			contents: "search default.svc.cluster.local svc.cluster.local\n" +
+				"nameserver 34.118.224.10\noptions ndots:5\n",
+			want: false,
+		},
+		{
+			// The dangerous one: ours plus somebody else's would send some
+			// lookups outside the boundary, so it does not count as done.
+			name:     "ours alongside another server",
+			contents: "nameserver " + tunIP + "\nnameserver 8.8.8.8\n",
+			want:     false,
+		},
+		{
+			name:     "empty",
+			contents: "",
+			want:     false,
+		},
+		{
+			name:     "a nameserver line with no address",
+			contents: "nameserver\n",
+			want:     false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := resolvConfSaysOurs(tc.contents); got != tc.want {
+				t.Errorf("resolvConfSaysOurs(%q) = %v, want %v", tc.contents, got, tc.want)
+			}
+		})
+	}
 }

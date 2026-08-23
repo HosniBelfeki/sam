@@ -50,21 +50,31 @@ func insideCreatedNamespaces() bool {
 	return os.Getenv(nsCreatedEnv) == "1"
 }
 
-// withNamespaces makes the child the first process in a new network and mount
-// namespace, adding a user namespace when that is the only way to be allowed.
+// withNamespaces makes the child the first process in a new network namespace,
+// adding a mount namespace when the sandbox needs one and a user namespace when
+// that is the only way to be allowed.
 //
 // The work happens in a child because unshare(CLONE_NEWNET) moves one thread,
 // and the Go runtime has several that goroutines migrate between: the only way
 // to get a whole program into a new network namespace is to start one there.
-func withNamespaces(userNS bool) func(*exec.Cmd) {
+//
+// The mount namespace is conditional because asking for one is not free. The
+// runtime marks / private when Unshareflags carries CLONE_NEWNS, and that mount
+// is exactly what containerd's default AppArmor profile denies -- so a sandbox
+// that was handed a resolv.conf of its own, and therefore has nothing to mount,
+// runs under that profile untouched by asking for no mount namespace at all.
+func withNamespaces(userNS, mountNS bool) func(*exec.Cmd) {
 	return func(c *exec.Cmd) {
 		if c.SysProcAttr == nil {
 			c.SysProcAttr = &syscall.SysProcAttr{}
 		}
 		c.SysProcAttr.Cloneflags |= syscall.CLONE_NEWNET
-		// Unshareflags rather than Cloneflags: the runtime also makes / private
-		// that way, so a bind mount below cannot propagate back to the pod.
-		c.SysProcAttr.Unshareflags |= syscall.CLONE_NEWNS
+		if mountNS {
+			// Unshareflags rather than Cloneflags: the runtime also makes /
+			// private that way, so a bind mount below cannot propagate back to
+			// the pod.
+			c.SysProcAttr.Unshareflags |= syscall.CLONE_NEWNS
+		}
 
 		if userNS {
 			c.SysProcAttr.Cloneflags |= syscall.CLONE_NEWUSER
@@ -194,9 +204,18 @@ func mountHint(err error) string {
 // without this, pointing DNS at the sandbox's own resolver would point every
 // container in the pod at it.
 //
+// Unless somebody already gave this container one of its own, which a pod can
+// do by mounting a file over /etc/resolv.conf. Then there is nothing to
+// arrange, and skipping it matters rather than merely saving work: the bind
+// below is the one operation containerd's default AppArmor profile denies, so
+// a sandbox that does not need it needs no profile change either.
+//
 // Only the privacy is arranged here. What goes in the file is setupNetwork's
 // business, and it writes through this mount.
 func privateResolvConf() error {
+	if resolvConfAlreadyOurs() {
+		return nil
+	}
 	f, err := os.CreateTemp("", "resolv.conf")
 	if err != nil {
 		return fmt.Errorf(
@@ -214,4 +233,34 @@ func privateResolvConf() error {
 	// The mount holds the inode, so the path it was reached by is litter.
 	_ = os.Remove(name)
 	return nil
+}
+
+// resolvConfAlreadyOurs reports whether this sandbox has been handed a
+// resolv.conf naming the resolver it is about to run.
+//
+// Read rather than assumed: a file that names some other server would send the
+// agent's lookups somewhere outside the boundary, so only an exact match counts
+// as already done.
+func resolvConfAlreadyOurs() bool {
+	contents, err := os.ReadFile("/etc/resolv.conf")
+	if err != nil {
+		return false
+	}
+	return resolvConfSaysOurs(string(contents))
+}
+
+// resolvConfSaysOurs reports whether a resolv.conf names our resolver and
+// nothing else.
+func resolvConfSaysOurs(contents string) bool {
+	for _, line := range strings.Split(contents, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 || strings.HasPrefix(fields[0], "#") {
+			continue
+		}
+		// Any nameserver but ours, and the file is not one we can rely on.
+		if !strings.EqualFold(fields[0], "nameserver") || len(fields) != 2 || fields[1] != tunIP {
+			return false
+		}
+	}
+	return strings.Contains(contents, tunIP)
 }

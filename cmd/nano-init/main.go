@@ -159,12 +159,16 @@ func run(createNS bool, ingressSocket, boundarySocket, cmdName string, cmdArgs [
 		if err != nil {
 			log.Fatalf("refusing to start: %v", err)
 		}
+		// Decided out here, where /etc/resolv.conf is the one the runtime gave
+		// this container: if it already names our resolver there is nothing to
+		// mount, and asking for a mount namespace would only invite a denial.
+		mountNS := !resolvConfAlreadyOurs()
 		self, err := os.Executable()
 		if err != nil {
 			log.Fatalf("locate this binary to re-execute it: %v", err)
 		}
 		args := runFlags(ingressSocket, boundarySocket, cmdName, cmdArgs)
-		code, err := runAgent(ctx, cancel, self, args, withNamespaces(userNS))
+		code, err := runAgent(ctx, cancel, self, args, withNamespaces(userNS, mountNS))
 		if err != nil {
 			log.Fatalf("create the sandbox namespaces: %v\n%s", err, namespaceHint(err))
 		}
@@ -269,9 +273,13 @@ func setupNetwork(ctx context.Context, boundarySocket string, names *resolver) e
 		_ = dns.Close()
 	}()
 
-	if err := os.WriteFile("/etc/resolv.conf", []byte("nameserver "+tunIP+"\n"), 0o644); err != nil {
-		// Not fatal: resolution is a convenience here, not the control.
-		log.Printf("could not write /etc/resolv.conf, name resolution may fail: %v", err)
+	// A pod can mount the file over instead, in which case it is read-only and
+	// already says this.
+	if !resolvConfAlreadyOurs() {
+		if err := os.WriteFile("/etc/resolv.conf", []byte("nameserver "+tunIP+"\n"), 0o644); err != nil {
+			// Not fatal: resolution is a convenience here, not the control.
+			log.Printf("could not write /etc/resolv.conf, name resolution may fail: %v", err)
+		}
 	}
 
 	// direct:// is a placeholder the engine insists on. The real dialer is

@@ -102,6 +102,26 @@ unservable() {
   [[ "${failed}" -eq 0 ]]
 }
 
+@test "Canary manifests: the sandbox resolv.conf names nano-init's own resolver" {
+  # The canary hands the sandbox a resolv.conf so nano-init does not have to
+  # mount one, and that only works while the address in it is the address
+  # nano-init answers on. A mismatch is quiet in the wrong way: nano-init falls
+  # back to the bind mount, which kind permits and containerd's default AppArmor
+  # profile denies, so it would pass here and fail on the cluster.
+  local declared resolver
+  declared=$(grep -A2 'resolv.conf: |' .github/k8s/sam-box-canary-template.yaml \
+    | grep nameserver | awk '{print $2}')
+  resolver=$(grep -oE 'tunIP[[:space:]]*=[[:space:]]*"[0-9.]+"' cmd/nano-init/main.go \
+    | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+')
+
+  echo "# canary declares: ${declared}" >&3
+  echo "# nano-init serves: ${resolver}" >&3
+
+  [[ -n "${declared}" ]]
+  [[ -n "${resolver}" ]]
+  [[ "${declared}" == "${resolver}" ]]
+}
+
 @test "Canary rollout: the sandbox canary comes up and is a sandbox" {
   # deploy.yaml pulls these from ghcr; here they are the images this commit
   # just built, retagged so the manifest under test is the manifest shipped
