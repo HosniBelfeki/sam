@@ -46,6 +46,20 @@ type NodeConfig struct {
 	Services    []ServiceConfig `yaml:"services"`
 }
 
+// NodeConfigVersionV1Alpha1 is the only node config schema this build understands.
+// A file omitting the version is read as this one, since it predates the check.
+const NodeConfigVersionV1Alpha1 = "v1alpha1"
+
+// SupportedNodeConfigVersions gates LoadNodeConfig. A node must refuse a schema
+// it does not know rather than parse it as this one: silently reinterpreting a
+// future config would silently reinterpret its attenuation rules. Adding a
+// version means adding it here and decoding it into the same internal type, so
+// the rest of the node stays version-agnostic.
+var SupportedNodeConfigVersions = map[string]bool{
+	"":                        true,
+	NodeConfigVersionV1Alpha1: true,
+}
+
 type Attenuation struct {
 	Policies []string `yaml:"policies"`
 	Checks   []string `yaml:"checks"`

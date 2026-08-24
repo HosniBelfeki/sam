@@ -5,12 +5,17 @@ You are an expert software engineering assistant helping to develop, maintain, a
 ## 1. Architecture & Component Independence
 * **Decoupled Architecture:** The `sam-control-plane`, `sam-router` and `sam-node` components are strictly independent. They must not share internal state or tightly couple their logic.
 * **API Communication:** All data communication between `sam-control-plane`, `sam-router` and `sam-node` must happen exclusively via the common API defined in `api/sam.proto`.
+* **Sandbox Dataplane:** `sam-box` (one per sandbox) is the single egress policy enforcement point. It holds no libp2p host, no enrollment and no mesh identity, and reaches the mesh exclusively as a client of the local `sam-node` sidecar socket. `nano-init` (PID 1 inside the guest, its own Go module) owns the guest side. The sandbox boundary is a Unix socket: SOCKS5 out, `CONNECT <port>` back in. The authoritative design is `site/content/docs/agent-architecture.md`; do not contradict it.
+* **Enforcement over Convention:** never gate sandbox traffic on the agent's cooperation — no proxy environment variables, no `LD_PRELOAD` shims, no DNS spoofing. The agent harness stays unmodified and mesh-unaware; confinement is a route and a socket, built by the userspace launcher (`nano-init`) and judged in `sam-box`. An agent that must cooperate with its own confinement is not confined.
+* **Policy on Names:** egress policy, secret injection and routing decisions are made on the destination *name*, never on an IP. Deny by default.
+* **Agent Identity:** the agent is the principal; the node is only the channel. Agent identity comes from the platform's workload credential, verified at admission — never asserted in-band from inside the sandbox. Platforms integrate solely through the connector interface (`Attach`/`Detach`/`Refresh`/`Status` and the agent bundle), not by reaching into SAM internals.
 * **Zero Trust:** Enforce a Zero Trust architecture. Assume no implicit trust between nodes, control planes, routers, or external actors. All data passing through the API must be authenticated, authorized, and validated.
 * **Simple UX:** Maintain a very simple User Experience. Configuration, CLI usage, and error messages must be intuitive, minimal, and explicitly clear.
 
 ## 2. Dependency Management (Strict Constraint)
 * **You are forbidden from suggesting any code that requires a new entry in `go.mod` unless you explicitly ask for my permission first.**
 * If a task can be solved using the existing dependencies or the Go standard library, you must choose that path even if it requires more lines of code.
+* Guest-only dependencies (e.g. the userspace TCP stack in `cmd/nano-init`) live in that command's own Go module so the root `go.mod` never carries them. Follow that pattern for anything that only runs inside a sandbox image.
 
 ## 3. Testing Best Practices
 Enforce strict modularity in testing. The repository uses a defined testing pyramid (Unit, Integration, and E2E via Bats). You must adhere to the following testing philosophy:

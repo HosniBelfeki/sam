@@ -31,8 +31,15 @@ func LoadNodeConfig(path string) (*NodeConfigComplete, error) {
 	}
 
 	var config api.NodeConfig
-	if err := yaml.Unmarshal(data, &config); err != nil {
-		return nil, err
+	// Strict: a key this build does not recognise is either a typo or a newer
+	// schema, and under attenuation either one silently weakens the node.
+	if err := yaml.UnmarshalStrict(data, &config); err != nil {
+		return nil, fmt.Errorf("invalid node config %s: %w", path, err)
+	}
+
+	if !api.SupportedNodeConfigVersions[config.Version] {
+		return nil, fmt.Errorf("node config %s declares version %q, which this build does not support (supported: %s); upgrade sam-node",
+			path, config.Version, api.NodeConfigVersionV1Alpha1)
 	}
 
 	complete := &NodeConfigComplete{
