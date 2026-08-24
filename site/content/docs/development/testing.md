@@ -9,6 +9,7 @@ Current testing is intentionally minimal and aligned with the current binaries.
 1. Go tests: `make test`
 2. BATS CLI tests: `make test-e2e`
 3. Containerized BATS mesh tests: `make test-e2e-container`
+4. Console UI tests: `make ui-test`
 
 ## Commands
 
@@ -17,6 +18,7 @@ make build
 make test
 make test-e2e
 make test-e2e-container
+make ui-test
 ```
 
 ## Go Tests
@@ -71,6 +73,31 @@ Optional image override:
 ```bash
 MESH_RUNTIME_IMAGE=sam-e2e-runtime:dev make test-e2e-container
 ```
+
+## Console UI
+
+Playwright drives the console in `tests/ui/console.spec.js`. The stack is built
+in `tests/ui/lib/stack.sh` and runs entirely as local processes against a
+throwaway sqlite database, so no docker, kind or postgres is involved.
+
+```bash
+make ui-test
+make ui-test WHAT="policy editor"   # --grep a subset
+```
+
+To click around that same stack instead of asserting against it:
+
+```bash
+make ui-dev
+```
+
+That seeds a mesh policy, enrolls a router and a node with bootstrap tokens, then
+leaves the console running with its URL and admin token printed. Only the OIDC
+issuer is a stand-in: it serves a discovery document but cannot sign tokens,
+which is why enrollment uses bootstrap tokens rather than a JWT.
+
+The console serves its static assets from `cmd/sam-console/public`, so edits to
+the HTML, CSS or JS need only a browser refresh; only Go changes need a rebuild.
 
 ## Troubleshooting
 
