@@ -295,3 +295,20 @@ test('invalid YAML is reported inline and blocks saving', async ({ page }) => {
   await expect(error).toBeHidden();
   await expect(page.locator('#policy-save')).toBeEnabled();
 });
+
+test('stat cards link to the view that lists what they count', async ({ page }) => {
+  await login(page);
+
+  await page.click('.stat-card[href="#routers"]');
+  await expect(page.locator('#view-routers')).toBeVisible();
+  await expect(page).toHaveURL(/#routers$/);
+});
+
+// Styling belongs in the stylesheet: a style attribute in the markup would need
+// style-src 'unsafe-inline' to survive any strict CSP. Styles the scripts set at
+// runtime go through the CSSOM, which CSP allows, so check what is served rather
+// than the live DOM.
+test('the served markup carries no inline style attribute', async ({ request }) => {
+  const html = await (await request.get('/index.html')).text();
+  expect(html).not.toMatch(/<[^>]+\sstyle=/);
+});

@@ -595,11 +595,12 @@ function renderRouterTopography(routers) {
         const dhtSize = r.DHTSize || 0;
         const peerID = String(r.PeerID || '');
 
-        // Calculate remaining lease time in seconds
-        let elapsed = 0;
+        let remaining = 0;
         if (r.ExpiresAt) {
-            elapsed = Math.max(0, Math.floor((new Date(r.ExpiresAt) - new Date()) / 1000));
+            remaining = Math.max(0, Math.floor((new Date(r.ExpiresAt) - new Date()) / 1000));
         }
+        const leaseClass = remaining === 0 ? 'badge-rejected' : 'badge-approved';
+        const leaseLabel = remaining === 0 ? 'Lease expired' : `Lease: ${formatDuration(remaining)}`;
 
         const peersHTML = conns.length === 0
             ? '<li>No connected peers</li>'
@@ -609,7 +610,7 @@ function renderRouterTopography(routers) {
             <div class="router-item-card">
                 <div class="router-header">
                     <span class="router-peer-id" title="${escapeHTML(peerID)}">${escapeHTML(peerID.substring(0, 12))}...${escapeHTML(peerID.slice(-8))}</span>
-                    <span class="badge badge-approved">Lease: ${elapsed}s</span>
+                    <span class="badge ${leaseClass}">${escapeHTML(leaseLabel)}</span>
                 </div>
                 <div class="router-metrics">
                     <div class="router-metric-item">
@@ -811,4 +812,17 @@ function escapeHTML(str) {
     return String(str).replace(/[&<>'"]/g, 
         tag => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[tag] || tag)
     );
+}
+
+function formatDuration(seconds) {
+    if (seconds < 60) {
+        return `${seconds}s`;
+    }
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) {
+        return `${minutes}m`;
+    }
+    const hours = Math.floor(minutes / 60);
+    const rest = minutes % 60;
+    return rest === 0 ? `${hours}h` : `${hours}h ${rest}m`;
 }

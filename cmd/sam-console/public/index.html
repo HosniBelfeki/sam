@@ -16,20 +16,20 @@
             </div>
             <p class="subtitle">Securely manage your global mesh network.</p>
             
-            <div class="auth-buttons" id="sso-login-group" style="display: none; margin-bottom: 24px;">
-                <p style="text-align: left; font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 8px;">Interactive Single Sign-On</p>
-                <button class="btn btn-primary" onclick="redirectToSSO()" style="width: 100%;">
+            <div class="auth-buttons auth-group" id="sso-login-group">
+                <p class="auth-label">Interactive Single Sign-On</p>
+                <button class="btn btn-primary btn-block" onclick="redirectToSSO()">
                     Log In with OIDC (Redirect)
                 </button>
-                <div class="divider" style="margin: 1.5rem 0;"><span>or use manual tokens</span></div>
+                <div class="divider divider-spaced"><span>or use manual tokens</span></div>
             </div>
 
             <div class="auth-buttons">
-                <p style="text-align: left; font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 8px;">Sign In via OIDC Token</p>
+                <p class="auth-label">Sign In via OIDC Token</p>
                 <div class="input-group">
                     <input type="password" id="oidc-token-input" placeholder="OIDC JWT Token">
                 </div>
-                <button class="btn btn-primary" onclick="loginOIDC()" style="width: 100%; margin-top: 12px; margin-bottom: 24px;">
+                <button class="btn btn-primary btn-block auth-submit" onclick="loginOIDC()">
                     Sign In with Token
                 </button>
             </div>
@@ -43,7 +43,7 @@
                 <div class="input-group">
                     <input type="password" id="admin-token-input" placeholder="Bearer Token">
                 </div>
-                <button class="btn btn-primary" onclick="saveAdminToken()" style="width: 100%; margin-top: 16px;">
+                <button class="btn btn-primary btn-block auth-submit" onclick="saveAdminToken()">
                     Login as Admin
                 </button>
             </div>
@@ -51,7 +51,7 @@
     </div>
 
     <!-- Main Dashboard Application -->
-    <div class="app-container" id="app-container" style="display: none;">
+    <div class="app-container" id="app-container">
         <!-- Sidebar Navigation -->
         <aside class="sidebar">
             <div class="sidebar-header">
@@ -106,7 +106,7 @@
                 <div class="user-profile">
                     <div class="avatar" aria-hidden="true">A</div>
                     <span>Admin</span>
-                    <button class="btn btn-sm btn-secondary" onclick="logout()" style="margin-left: 12px; padding: 4px 8px; font-size: 0.8rem; background: var(--border-color); border: 1px solid var(--border-color);">Logout</button>
+                    <button class="btn btn-sm btn-logout" onclick="logout()">Logout</button>
                 </div>
             </header>
 
@@ -123,30 +123,31 @@
                         </button>
                     </div>
 
+                    <!-- Each card links to the view that lists what it counts. -->
                     <div class="stats-grid">
-                        <div class="stat-card">
+                        <a class="stat-card" href="#users">
                             <div class="stat-title">Active Users</div>
                             <div class="stat-value" id="stat-users">0</div>
-                        </div>
-                        <div class="stat-card">
+                        </a>
+                        <a class="stat-card" href="#nodes">
                             <div class="stat-title">Enrolled Nodes</div>
                             <div class="stat-value" id="stat-nodes">0</div>
-                        </div>
-                        <div class="stat-card">
+                        </a>
+                        <a class="stat-card" href="#routers">
                             <div class="stat-title">Active Routers</div>
                             <div class="stat-value" id="stat-routers">0</div>
-                        </div>
-                        <div class="stat-card">
+                        </a>
+                        <a class="stat-card" href="#enrollments">
                             <div class="stat-title">Pending Enrollments</div>
                             <div class="stat-value" id="stat-pending">0</div>
-                        </div>
+                        </a>
                     </div>
 
-                    <div class="section-header" style="margin-top: 2rem;">
+                    <div class="section-header section-header-spaced">
                         <h2>Network Topography</h2>
                     </div>
                     <div id="router-topography-list" class="router-cards-grid">
-                        <div class="text-center" style="grid-column: 1/-1; padding: 2rem; color: var(--text-secondary);">Loading topography...</div>
+                        <div class="grid-placeholder">Loading topography...</div>
                     </div>
                 </section>
 
@@ -250,46 +251,45 @@
                     <div class="section-header">
                         <h2>Bootstrap Tokens</h2>
                     </div>
-                    <div class="card" style="margin-bottom: 2rem; padding: 2rem;">
+                    <div class="card card-form">
                         <h3>Generate Bootstrap Token</h3>
-                        <form id="form-generate-token" onsubmit="event.preventDefault(); generateBootstrapToken();" style="display: grid; gap: 1rem; max-width: 500px; margin-top: 1rem;">
-                            <div class="input-group" style="display: flex; flex-direction: column; gap: 4px;">
-                                <label for="token-role" style="font-size: 0.85rem; color: var(--text-secondary);">Role</label>
-                                <select id="token-role" class="form-control" style="background: rgba(0,0,0,0.2); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 4px; padding: 8px;">
+                        <form id="form-generate-token" class="stacked-form" onsubmit="event.preventDefault(); generateBootstrapToken();">
+                            <div class="input-group field">
+                                <label for="token-role" class="field-label">Role</label>
+                                <select id="token-role" class="form-control field-input">
                                     <option value="sam:role:node">Node (sam:role:node)</option>
                                     <option value="sam:role:router">Router (sam:role:router)</option>
                                     <option value="sam:role:sambox">Box (sam:role:sambox)</option>
                                 </select>
                             </div>
-                            <div class="input-group" style="display: flex; flex-direction: column; gap: 4px;">
-                                <label for="token-owner" style="font-size: 0.85rem; color: var(--text-secondary);">Owner ID <span style="opacity: 0.7;">(optional)</span></label>
-                                <input type="text" id="token-owner" placeholder="Leave blank to use your own identity" style="background: rgba(0,0,0,0.2); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 4px; padding: 8px;">
-                                <small id="token-owner-hint" style="font-size: 0.75rem; color: var(--text-secondary); opacity: 0.8;">Admins only: issue this token on behalf of another user. The user must have logged in at least once.</small>
+                            <div class="input-group field">
+                                <label for="token-owner" class="field-label">Owner ID <span class="field-optional">(optional)</span></label>
+                                <input type="text" id="token-owner" class="field-input" placeholder="Leave blank to use your own identity">
+                                <small id="token-owner-hint" class="field-hint">Admins only: issue this token on behalf of another user. The user must have logged in at least once.</small>
                             </div>
-                            <div class="input-group" style="display: flex; flex-direction: column; gap: 4px;">
-                                <label for="token-usages" style="font-size: 0.85rem; color: var(--text-secondary);">Max Usages</label>
-                                <input type="number" id="token-usages" value="1" min="1" style="background: rgba(0,0,0,0.2); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 4px; padding: 8px;" required>
+                            <div class="input-group field">
+                                <label for="token-usages" class="field-label">Max Usages</label>
+                                <input type="number" id="token-usages" class="field-input" value="1" min="1" required>
                             </div>
-                            <div class="input-group" style="display: flex; flex-direction: column; gap: 4px;">
-                                <label for="token-ttl" style="font-size: 0.85rem; color: var(--text-secondary);">TTL (hours)</label>
-                                <input type="number" id="token-ttl" value="24" min="1" style="background: rgba(0,0,0,0.2); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 4px; padding: 8px;" required>
+                            <div class="input-group field">
+                                <label for="token-ttl" class="field-label">TTL (hours)</label>
+                                <input type="number" id="token-ttl" class="field-input" value="24" min="1" required>
                             </div>
-                            <div class="input-group" style="display: flex; flex-direction: column; gap: 4px;">
-                                <label for="token-desc" style="font-size: 0.85rem; color: var(--text-secondary);">Description</label>
-                                <input type="text" id="token-desc" placeholder="Token purpose" style="background: rgba(0,0,0,0.2); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 4px; padding: 8px;">
+                            <div class="input-group field">
+                                <label for="token-desc" class="field-label">Description</label>
+                                <input type="text" id="token-desc" class="field-input" placeholder="Token purpose">
                             </div>
-                            <button type="submit" class="btn btn-primary" style="margin-top: 12px; max-width: 200px;">Generate Token</button>
+                            <button type="submit" class="btn btn-primary form-submit">Generate Token</button>
                         </form>
-                        <div id="token-result" hidden style="margin-top: 1.5rem; max-width: 500px; border: 1px solid var(--border-color); border-radius: 6px; padding: 1rem; background: rgba(0,0,0,0.2);">
-                            <div style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 8px;">
+                        <div id="token-result" class="token-result" hidden>
+                            <div class="token-result-note">
                                 Token generated for owner <code id="token-result-owner"></code>. Copy it now &mdash; it is not stored and will not be shown again.
                             </div>
-                            <div style="display: flex; gap: 8px; align-items: center;">
-                                <input type="text" id="token-result-value" readonly onfocus="this.select();"
-                                       style="flex: 1; font-family: monospace; background: rgba(0,0,0,0.35); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 4px; padding: 8px;">
+                            <div class="token-result-row">
+                                <input type="text" id="token-result-value" class="token-result-value" readonly onfocus="this.select();">
                                 <button type="button" class="btn" id="token-copy-btn" onclick="copyGeneratedToken();">Copy</button>
                             </div>
-                            <div style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 8px;">
+                            <div class="token-result-hint">
                                 Join a node with: <code id="token-result-cmd"></code>
                             </div>
                         </div>
