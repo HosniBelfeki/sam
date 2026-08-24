@@ -77,24 +77,23 @@ func TestPolicyPermutations(t *testing.T) {
 
 	// 1. Control plane policies
 	controlPlanePolicyFile := filepath.Join(tmpDir, "policies.yaml")
-	controlPlanePolicyYAML := `version: "v1alpha1"
-roles:
-  role-user:
+	controlPlanePolicyYAML := `roles:
+  - name: role-user
     allowed_services: ["mcp://test-user"]
     allowed_targets: ["user:bob-subject"]
-  role-email:
+  - name: role-email
     allowed_services: ["mcp://test-email"]
     allowed_targets: ["email:nodeB@example.com"]
-  role-group:
+  - name: role-group
     allowed_services: ["mcp://test-group"]
     allowed_targets: ["group:compute"]
-  role-node:
+  - name: role-node
     allowed_services: ["mcp://test-node"]
     allowed_targets: ["group:backend"]
-  role-direct:
+  - name: role-direct
     allowed_services: ["mcp://test-role"]
     allowed_targets: ["group:compute"]
-  admin:
+  - name: admin
     allowed_services: ["*"]
     allowed_targets: ["*:*"]
 

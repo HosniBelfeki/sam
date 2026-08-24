@@ -45,12 +45,11 @@ func TestNodeRevocationIntegration(t *testing.T) {
 
 	// 1. Create a mock policy file granting "router" role
 	policyFile := filepath.Join(tmpDir, "policies.yaml")
-	policyContent := `version: "v1alpha1"
-bindings:
+	policyContent := `bindings:
   - members: ["user:mock-user"]
     role: admin
 roles:
-  admin:
+  - name: admin
     allowed_services: ["*"]
     allowed_targets: ["*"]
 `

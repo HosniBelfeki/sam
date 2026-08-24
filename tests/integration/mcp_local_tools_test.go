@@ -32,9 +32,8 @@ func TestMCPLocalTools(t *testing.T) {
 
 	// Create a mock policy file
 	policyFile := filepath.Join(tmpDir, "policies.yaml")
-	policyContent := `version: "v1alpha1"
-bindings: []
-roles: {}
+	policyContent := `bindings: []
+roles: []
 `
 	if err := os.WriteFile(policyFile, []byte(policyContent), 0644); err != nil {
 		t.Fatal(err)

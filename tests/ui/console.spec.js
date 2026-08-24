@@ -105,3 +105,210 @@ test('omitting the owner attributes the token to the session user', async ({ pag
 
   await expect(page.locator('#token-result-owner')).toHaveText('root-admin');
 });
+
+// The console holds mesh admin credentials. If they were reachable from JS, a
+// single XSS in this hand-written page would hand over the whole mesh.
+test('the session credential is never exposed to JavaScript', async ({ page, context }) => {
+  await login(page);
+
+  const storage = await page.evaluate(() => JSON.stringify(window.localStorage));
+  expect(storage).not.toContain(ADMIN_TOKEN);
+  expect(await page.evaluate(() => document.cookie)).not.toContain(ADMIN_TOKEN);
+
+  const session = (await context.cookies()).find((c) => c.name === 'sam_session');
+  expect(session, 'sam_session cookie was not set').toBeTruthy();
+  expect(session.httpOnly).toBe(true);
+});
+
+test('views are deep-linkable via the URL hash', async ({ page }) => {
+  await login(page);
+
+  await page.click('.nav-item[data-target="routers"]');
+  await expect(page).toHaveURL(/#routers$/);
+
+  // A reload must land back on the same view rather than resetting to Overview.
+  await page.reload();
+  await expect(page.locator('#view-routers')).toBeVisible();
+  await expect(page.locator('#view-overview')).toBeHidden();
+  await expect(page.locator('.nav-item[data-target="routers"]')).toHaveAttribute('aria-current', 'page');
+
+  // Back returns to the previously selected view.
+  await page.goBack();
+  await expect(page.locator('#view-overview')).toBeVisible();
+});
+
+test('an unknown hash falls back to the overview', async ({ page }) => {
+  await login(page);
+
+  await page.goto('/#not-a-view');
+  await expect(page.locator('#view-overview')).toBeVisible();
+});
+
+test('the search box filters rendered rows', async ({ page }) => {
+  await login(page);
+  await page.click('.nav-item[data-target="bootstrap"]');
+
+  // Guarantee at least one row to filter, independent of test ordering.
+  await page.click('#form-generate-token button[type="submit"]');
+  await expect(page.locator('#table-bootstrap')).toContainText('root-admin');
+
+  await page.fill('#resource-search', 'root-admin');
+  await expect(page.locator('#table-bootstrap tr:visible')).not.toHaveCount(0);
+  await expect(page.locator('#table-bootstrap tr[data-filter-empty]')).toHaveCount(0);
+
+  await page.fill('#resource-search', 'zzz-no-such-resource');
+  await expect(page.locator('#table-bootstrap tr[data-filter-empty]')).toContainText('No rows match');
+
+  await page.fill('#resource-search', '');
+  await expect(page.locator('#table-bootstrap tr[data-filter-empty]')).toHaveCount(0);
+  await expect(page.locator('#table-bootstrap')).toContainText('root-admin');
+});
+
+// The policy textarea is the one place in the console where a stray click can
+// destroy work that exists nowhere else.
+test('leaving the policy view warns about unsaved edits', async ({ page }) => {
+  await login(page);
+  await page.click('.nav-item[data-target="policy"]');
+  await page.fill('#policy-yaml', '# unsaved edit\n');
+
+  let message = '';
+  const dismissed = new Promise((resolve) => {
+    page.once('dialog', async (d) => {
+      message = d.message();
+      await d.dismiss();
+      resolve();
+    });
+  });
+  await page.click('.nav-item[data-target="overview"]');
+  await dismissed;
+  expect(message).toContain('unsaved policy changes');
+  await expect(page.locator('#view-policy')).toBeVisible();
+
+  page.once('dialog', (d) => d.accept());
+  await page.click('.nav-item[data-target="overview"]');
+  await expect(page.locator('#view-overview')).toBeVisible();
+});
+
+test('an unedited policy view navigates away without prompting', async ({ page }) => {
+  await login(page);
+  await page.click('.nav-item[data-target="policy"]');
+
+  let prompted = false;
+  page.once('dialog', async (d) => {
+    prompted = true;
+    await d.dismiss();
+  });
+  await page.click('.nav-item[data-target="overview"]');
+  await expect(page.locator('#view-overview')).toBeVisible();
+  expect(prompted).toBe(false);
+});
+
+test('navigation is keyboard operable and refreshes are announced', async ({ page }) => {
+  await login(page);
+
+  // Real hrefs, so keyboard activation and open-in-new-tab work without JS.
+  await expect(page.locator('.nav-item[data-target="nodes"]')).toHaveAttribute('href', '#nodes');
+
+  await page.locator('.nav-item[data-target="routers"]').press('Enter');
+  await expect(page.locator('#view-routers')).toBeVisible();
+  await expect(page).toHaveURL(/#routers$/);
+
+  await expect(page.locator('#live-status')).toHaveText(/nodes, .* routers/);
+});
+
+// A blocking alert() would also stall the refresh timer, so feedback must not
+// come from a native dialog.
+test('action feedback is a dismissible toast, not a native dialog', async ({ page }) => {
+  await login(page);
+  await page.click('.nav-item[data-target="policy"]');
+
+  let dialogs = 0;
+  page.on('dialog', async (d) => {
+    dialogs += 1;
+    await d.dismiss();
+  });
+
+  await page.fill('#policy-yaml', 'roles:\n  - name: dev\n    allowed_services: ["mcp://git"]\n    allowed_targets: ["group:eng"]\nbindings:\n  - role: dev\n    members: ["user:bob"]\n');
+  await page.click('#policy-save');
+
+  const toast = page.locator('#toast-container .toast');
+  await expect(toast).toHaveClass(/toast-success/);
+  await expect(toast).toContainText('Mesh policy updated');
+  expect(dialogs).toBe(0);
+
+  await toast.locator('.toast-dismiss').click();
+  await expect(toast).toHaveCount(0);
+
+  // Saving cleared the dirty flag, so leaving must not prompt.
+  await page.click('.nav-item[data-target="overview"]');
+  await expect(page.locator('#view-overview')).toBeVisible();
+  expect(dialogs).toBe(0);
+});
+
+// The editor is YAML for readability, but the API speaks protojson. The console
+// converts, so a saved policy must come back as the same document.
+test('the policy editor round-trips through the API', async ({ page }) => {
+  await login(page);
+  await page.click('.nav-item[data-target="policy"]');
+
+  const policy = 'roles:\n  - name: reviewer\n    allowed_services: ["mcp://code-reviewer"]\n    allowed_targets: ["group:eng"]\n    custom_datalog: [\'right("data:read");\']\nbindings:\n  - role: reviewer\n    members: ["user:carol"]\n';
+  await page.fill('#policy-yaml', policy);
+
+  const posted = page.waitForRequest((r) => r.url().endsWith('/policies') && r.method() === 'POST');
+  await page.click('#policy-save');
+
+  // It must go over the wire as protojson, not as the YAML in the textarea.
+  const request = await posted;
+  expect(request.headers()['content-type']).toContain('application/json');
+  const body = JSON.parse(request.postData());
+  expect(body.roles[0].name).toBe('reviewer');
+  expect(body.roles[0].custom_datalog).toEqual(['right("data:read");']);
+
+  await expect(page.locator('#toast-container .toast')).toHaveClass(/toast-success/);
+
+  // Reload and confirm the stored policy renders back into the editor, with the
+  // custom_datalog that earlier renderers silently dropped.
+  await page.reload();
+  await page.click('.nav-item[data-target="policy"]');
+  const reloaded = await page.locator('#policy-yaml').inputValue();
+  expect(reloaded).toContain('reviewer');
+  expect(reloaded).toContain('custom_datalog');
+  expect(reloaded).toContain('mcp://code-reviewer');
+});
+
+test('invalid YAML is reported inline and blocks saving', async ({ page }) => {
+  await login(page);
+  await page.click('.nav-item[data-target="policy"]');
+
+  await expect(page.locator('#policy-error')).toBeHidden();
+  await expect(page.locator('#policy-save')).toBeEnabled();
+
+  await page.fill('#policy-yaml', 'roles:\n  - name: dev\n   bad indentation here\n');
+
+  const error = page.locator('#policy-error');
+  await expect(error).toBeVisible();
+  await expect(page.locator('#policy-save')).toBeDisabled();
+  await expect(page.locator('#policy-yaml')).toHaveAttribute('aria-invalid', 'true');
+
+  // Recovering must re-enable the button rather than requiring a reload.
+  await page.fill('#policy-yaml', 'roles: []\nbindings: []\n');
+  await expect(error).toBeHidden();
+  await expect(page.locator('#policy-save')).toBeEnabled();
+});
+
+test('stat cards link to the view that lists what they count', async ({ page }) => {
+  await login(page);
+
+  await page.click('.stat-card[href="#routers"]');
+  await expect(page.locator('#view-routers')).toBeVisible();
+  await expect(page).toHaveURL(/#routers$/);
+});
+
+// Styling belongs in the stylesheet: a style attribute in the markup would need
+// style-src 'unsafe-inline' to survive any strict CSP. Styles the scripts set at
+// runtime go through the CSSOM, which CSP allows, so check what is served rather
+// than the live DOM.
+test('the served markup carries no inline style attribute', async ({ request }) => {
+  const html = await (await request.get('/index.html')).text();
+  expect(html).not.toMatch(/<[^>]+\sstyle=/);
+});

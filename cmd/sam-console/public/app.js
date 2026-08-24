@@ -1,31 +1,110 @@
+const DEFAULT_TAB = 'overview';
+const REFRESH_INTERVAL_MS = 15000;
+const TOAST_TIMEOUT_MS = 5000;
+
+let refreshTimer = null;
+let refreshInFlight = false;
+// Last policy the server confirmed, so an edit is never silently overwritten by
+// a background refresh or thrown away by a stray click.
+let policyBaseline = '';
+
 document.addEventListener('DOMContentLoaded', () => {
-    // Navigation handling
-    const navItems = document.querySelectorAll('.nav-item');
-    const viewSections = document.querySelectorAll('.view-section');
+    // Each nav item is a real link to its view's hash, so the browser handles the
+    // routing and hashchange drives switchTab. This only dismisses the drawer,
+    // which is an overlay on mobile.
+    document.querySelectorAll('.nav-item').forEach(item => {
+        item.addEventListener('click', () => closeSidebar());
+    });
 
-    navItems.forEach(item => {
-        item.addEventListener('click', (e) => {
+    window.addEventListener('hashchange', () => switchTab(tabFromHash()));
+    switchTab(tabFromHash());
+
+    document.getElementById('resource-search').addEventListener('input', applySearchFilter);
+
+    const policyEditor = document.getElementById('policy-yaml');
+    policyEditor.addEventListener('input', validatePolicyEditor);
+    policyEditor.addEventListener('keydown', handlePolicyEditorKeydown);
+
+    // Warn before a reload or a close discards an in-progress policy edit.
+    window.addEventListener('beforeunload', (e) => {
+        if (policyIsDirty()) {
             e.preventDefault();
-            const target = e.currentTarget.getAttribute('data-target');
-            
-            // Update active states
-            navItems.forEach(n => n.classList.remove('active'));
-            e.currentTarget.classList.add('active');
-            
-            viewSections.forEach(v => v.classList.remove('active'));
-            document.getElementById(`view-${target}`).classList.add('active');
-            
-            // Optionally fetch data specifically for that view if needed
-            // Currently, loadData() fetches everything from the status endpoint.
-
-            // On mobile the sidebar is an overlay drawer; close it after navigating.
-            closeSidebar();
-        });
+            e.returnValue = '';
+        }
     });
 
     // Check auth status on load
     checkAuthAndLoad();
 });
+
+// Filters every rendered table and router card, so the result stays consistent
+// when the operator switches views or a background refresh re-renders a table.
+function applySearchFilter() {
+    const input = document.getElementById('resource-search');
+    const raw = input.value.trim();
+    const query = raw.toLowerCase();
+
+    document.querySelectorAll('.data-table tbody').forEach(tbody => {
+        tbody.querySelectorAll('tr[data-filter-empty]').forEach(tr => tr.remove());
+
+        const rows = Array.from(tbody.querySelectorAll('tr'));
+        const matches = rows.filter(tr => {
+            const match = !query || tr.textContent.toLowerCase().includes(query);
+            tr.hidden = !match;
+            return match;
+        });
+
+        if (query && rows.length > 0 && matches.length === 0) {
+            const table = tbody.closest('table');
+            const tr = document.createElement('tr');
+            tr.dataset.filterEmpty = 'true';
+            const td = document.createElement('td');
+            td.colSpan = table.querySelectorAll('thead th').length || 1;
+            td.className = 'text-center';
+            td.textContent = `No rows match "${raw}"`;
+            tr.appendChild(td);
+            tbody.appendChild(tr);
+        }
+    });
+
+    document.querySelectorAll('.router-item-card').forEach(card => {
+        card.hidden = query !== '' && !card.textContent.toLowerCase().includes(query);
+    });
+}
+
+function tabFromHash() {
+    const raw = window.location.hash.replace(/^#/, '');
+    let target = raw;
+    try {
+        target = decodeURIComponent(raw);
+    } catch (e) {
+        // A malformed escape sequence is just an unknown tab.
+    }
+    return document.getElementById(`view-${target}`) ? target : DEFAULT_TAB;
+}
+
+function startAutoRefresh() {
+    if (refreshTimer !== null) {
+        return;
+    }
+    refreshTimer = setInterval(() => {
+        // Polling a backgrounded tab only burns control-plane calls.
+        if (document.visibilityState !== 'visible' || refreshInFlight) {
+            return;
+        }
+        refreshInFlight = true;
+        loadData()
+            .catch(() => {})
+            .finally(() => { refreshInFlight = false; });
+    }, REFRESH_INTERVAL_MS);
+}
+
+function stopAutoRefresh() {
+    if (refreshTimer !== null) {
+        clearInterval(refreshTimer);
+        refreshTimer = null;
+    }
+}
 
 window.toggleSidebar = function() {
     document.querySelector('.sidebar').classList.toggle('open');
@@ -53,62 +132,72 @@ async function checkAuthAndLoad() {
 
     try {
         await loadData();
-        document.getElementById('landing-page').classList.remove('active');
-        document.getElementById('app-container').style.display = 'flex';
+        showApp();
     } catch (error) {
-        document.getElementById('landing-page').classList.add('active');
-        document.getElementById('app-container').style.display = 'none';
+        showLandingPage();
     }
+}
+
+function showApp() {
+    document.getElementById('landing-page').classList.remove('active');
+    document.getElementById('app-container').style.display = 'flex';
+    startAutoRefresh();
+}
+
+function showLandingPage() {
+    stopAutoRefresh();
+    document.getElementById('landing-page').classList.add('active');
+    document.getElementById('app-container').style.display = 'none';
 }
 
 window.redirectToSSO = function() {
     window.location.href = 'auth/login';
 };
 
-window.loginOIDC = function() {
-    const token = document.getElementById('oidc-token-input').value.trim();
-    if (token) {
-        localStorage.setItem('sam_admin_token', token);
-        document.getElementById('landing-page').classList.remove('active');
-        document.getElementById('app-container').style.display = 'flex';
-        loadData();
+// Hands the token to the server, which stores it in an httpOnly cookie and
+// attaches it to proxied API calls. Keeping it out of JS reach means an XSS in
+// the console cannot read or exfiltrate mesh credentials.
+async function startSession(token) {
+    const response = await fetch('auth/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token })
+    });
+    if (!response.ok) {
+        throw new Error((await response.text()).trim() || `HTTP ${response.status}`);
     }
+}
+
+async function loginWithToken(inputId) {
+    const input = document.getElementById(inputId);
+    const token = input.value.trim();
+    if (!token) {
+        return;
+    }
+    try {
+        await startSession(token);
+        input.value = '';
+        await loadData();
+        showApp();
+    } catch (error) {
+        showToast('Login failed: ' + error.message, 'error');
+    }
+}
+
+window.loginOIDC = function() {
+    loginWithToken('oidc-token-input');
 };
 
-function getAdminToken() {
-    let token = localStorage.getItem('sam_admin_token') || '';
-    token = token.trim();
-    if (token.toLowerCase().startsWith('bearer ')) {
-        token = token.substring(7).trim();
-    }
-    return token;
-}
-
 window.saveAdminToken = function() {
-    const val = document.getElementById('admin-token-input').value.trim();
-    if (val) {
-        localStorage.setItem('sam_admin_token', val);
-        document.getElementById('landing-page').classList.remove('active');
-        document.getElementById('app-container').style.display = 'flex';
-        loadData();
-    }
-}
-
-function getAuthHeaders() {
-    const token = getAdminToken();
-    return token ? { 'Authorization': 'Bearer ' + token } : {};
-}
+    loginWithToken('admin-token-input');
+};
 
 async function loadData() {
     try {
         // 1. Fetch user-scoped status
-        const response = await fetch('api/user/status', {
-            headers: getAuthHeaders()
-        });
+        const response = await fetch('api/user/status');
         if (response.status === 401 || response.status === 403) {
-            localStorage.removeItem('sam_admin_token');
-            document.getElementById('landing-page').classList.add('active');
-            document.getElementById('app-container').style.display = 'none';
+            showLandingPage();
             throw new Error('Unauthorized. Please login again.');
         }
         if (!response.ok) {
@@ -124,9 +213,7 @@ async function loadData() {
 
         // 2. If user is admin, fetch full unfiltered admin status
         if (role === 'admin') {
-            const adminResp = await fetch('api/admin/status', {
-                headers: getAuthHeaders()
-            });
+            const adminResp = await fetch('api/admin/status');
             if (adminResp.ok) {
                 data = await adminResp.json();
             }
@@ -150,28 +237,82 @@ async function loadData() {
         if (role === 'admin') {
             renderUsersTable(data.users || []);
             renderEnrollmentsTable(data.enrollment_requests || []);
+        } else {
+            // Their nav entries are hidden, but clear the placeholders anyway so a
+            // stale "Loading..." can never be observed.
+            setTableMessage('table-users', 4, 'Restricted to administrators.');
+            setTableMessage('table-enrollments', 4, 'Restricted to administrators.');
         }
         renderNodesTable(data.enrolled_nodes || []);
         renderRoutersTable(data.active_routers || []);
         renderRouterTopography(data.active_routers || []);
         renderBootstrapTokensTable(data.bootstrap_tokens || []);
-        
-        // Populate policy yaml if empty
+
         const policyArea = document.getElementById('policy-yaml');
-        if (policyArea && !policyArea.value && data.policy_yaml) {
-            policyArea.value = data.policy_yaml;
+        if (policyArea && data.policy_json !== undefined && !policyIsDirty()) {
+            policyArea.value = renderPolicyYAML(data.policy_json);
+            policyBaseline = policyArea.value;
+            validatePolicyEditor();
         }
+
+        applySearchFilter();
+        announce(`${nodesCount} nodes, ${routersCount} routers, ${reqsCount} enrollment requests.`);
 
     } catch (error) {
         console.error('Failed to load dashboard data:', error);
-        const errMsg = `<tr><td colspan="4" class="text-center" style="color: var(--danger)">Error loading data: ${error.message}</td></tr>`;
-        document.getElementById('table-users').innerHTML = errMsg;
-        document.getElementById('table-nodes').innerHTML = errMsg;
-        document.getElementById('table-enrollments').innerHTML = errMsg;
-        document.getElementById('table-routers').innerHTML = errMsg;
-        document.getElementById('table-bootstrap').innerHTML = `<tr><td colspan="5" class="text-center" style="color: var(--danger)">Error loading data: ${error.message}</td></tr>`;
+        const errMsg = `Error loading data: ${error.message}`;
+        setTableMessage('table-users', 4, errMsg, true);
+        setTableMessage('table-nodes', 4, errMsg, true);
+        setTableMessage('table-enrollments', 4, errMsg, true);
+        setTableMessage('table-routers', 3, errMsg, true);
+        setTableMessage('table-bootstrap', 5, errMsg, true);
+        announce(errMsg);
         throw error;
     }
+}
+
+// Table renders replace rows wholesale, which a screen reader would otherwise
+// never hear about.
+function announce(message) {
+    const region = document.getElementById('live-status');
+    if (region) {
+        region.textContent = message;
+    }
+}
+
+// alert() blocks the event loop, so it also stalls the refresh timer, and it is
+// unusable on the mobile layout.
+function showToast(message, type = 'info') {
+    const container = document.getElementById('toast-container');
+    if (!container) return;
+
+    const toast = document.createElement('div');
+    toast.className = `toast toast-${type}`;
+
+    const text = document.createElement('span');
+    text.textContent = message;
+    toast.appendChild(text);
+
+    const dismiss = document.createElement('button');
+    dismiss.className = 'toast-dismiss';
+    dismiss.type = 'button';
+    dismiss.setAttribute('aria-label', 'Dismiss notification');
+    dismiss.textContent = '\u00d7';
+    dismiss.addEventListener('click', () => toast.remove());
+    toast.appendChild(dismiss);
+
+    container.appendChild(toast);
+    // Errors stay until dismissed; the operator usually needs to act on them.
+    if (type !== 'error') {
+        setTimeout(() => toast.remove(), TOAST_TIMEOUT_MS);
+    }
+}
+
+function setTableMessage(tbodyID, colspan, message, isError = false) {
+    const tbody = document.getElementById(tbodyID);
+    if (!tbody) return;
+    const style = isError ? ' style="color: var(--danger)"' : '';
+    tbody.innerHTML = `<tr><td colspan="${colspan}" class="text-center"${style}>${escapeHTML(message)}</td></tr>`;
 }
 
 function renderUsersTable(users) {
@@ -272,7 +413,7 @@ async function actionRequest(url, method = 'POST', body = null) {
     try {
         const options = {
             method,
-            headers: getAuthHeaders()
+            headers: {}
         };
         if (body) {
             options.headers['Content-Type'] = 'application/json';
@@ -281,9 +422,7 @@ async function actionRequest(url, method = 'POST', body = null) {
         
         const response = await fetch(url, options);
         if (response.status === 401 || response.status === 403) {
-            localStorage.removeItem('sam_admin_token');
-            document.getElementById('landing-page').classList.add('active');
-            document.getElementById('app-container').style.display = 'none';
+            showLandingPage();
             throw new Error('Unauthorized. Please login again.');
         }
         if (!response.ok) {
@@ -300,7 +439,7 @@ async function actionRequest(url, method = 'POST', body = null) {
         loadData();
         return true;
     } catch (error) {
-        alert('Action failed: ' + error.message);
+        showToast('Action failed: ' + error.message, 'error');
         throw error;
     }
 }
@@ -324,7 +463,7 @@ function revokeDevice(id) {
 }
 
 window.logout = function() {
-    localStorage.removeItem('sam_admin_token');
+    stopAutoRefresh();
     window.location.href = 'auth/logout';
 };
 
@@ -383,46 +522,95 @@ function updateUIForRole(role, userId) {
     }
 }
 
+function policyIsDirty() {
+    const area = document.getElementById('policy-yaml');
+    return area !== null && area.value !== policyBaseline;
+}
+
+// The control plane sends the policy as protojson. Showing it as YAML keeps the
+// document readable without either side hand-maintaining a second field list.
+function renderPolicyYAML(policyJSON) {
+    if (!policyJSON) {
+        return '';
+    }
+    try {
+        return jsyaml.dump(JSON.parse(policyJSON), { indent: 2, lineWidth: -1, noRefs: true });
+    } catch (err) {
+        // Better to show the operator the raw document than an empty editor.
+        return policyJSON;
+    }
+}
+
 function switchTab(target) {
     const navItems = document.querySelectorAll('.nav-item');
     const viewSections = document.querySelectorAll('.view-section');
+
+    let activeNav = Array.from(navItems).find(n => n.getAttribute('data-target') === target);
+    // A shared or stale link can point at a view this role is not allowed to see.
+    if (!activeNav || activeNav.style.display === 'none') {
+        target = DEFAULT_TAB;
+        activeNav = Array.from(navItems).find(n => n.getAttribute('data-target') === target);
+    }
+
+    const onPolicy = document.getElementById('view-policy').classList.contains('active');
+    if (onPolicy && target !== 'policy' && policyIsDirty()) {
+        if (!confirm('You have unsaved policy changes. Leave without saving?')) {
+            // The hash may already have moved, e.g. via the back button.
+            if (tabFromHash() !== 'policy') {
+                window.location.hash = 'policy';
+            }
+            return;
+        }
+    }
+
     navItems.forEach(n => n.classList.remove('active'));
     viewSections.forEach(v => v.classList.remove('active'));
 
-    const activeNav = Array.from(navItems).find(n => n.getAttribute('data-target') === target);
-    if (activeNav) activeNav.classList.add('active');
+    if (activeNav) {
+        activeNav.classList.add('active');
+        activeNav.setAttribute('aria-current', 'page');
+    }
+    navItems.forEach(n => {
+        if (n !== activeNav) n.removeAttribute('aria-current');
+    });
 
     const activeView = document.getElementById(`view-${target}`);
     if (activeView) activeView.classList.add('active');
+
+    // Guarded so the resulting hashchange does not re-enter this function.
+    if (tabFromHash() !== target) {
+        window.location.hash = target;
+    }
 }
 
 function renderRouterTopography(routers) {
     const topoList = document.getElementById('router-topography-list');
-    topoList.innerHTML = '';
     if (routers.length === 0) {
         topoList.innerHTML = '<div style="grid-column: 1/-1; text-align: center; color: var(--text-secondary); padding: 2rem;">No active routers online in the mesh.</div>';
         return;
     }
 
-    routers.forEach(r => {
+    topoList.innerHTML = routers.map(r => {
         const conns = r.ConnectedPeers || [];
         const dhtSize = r.DHTSize || 0;
-        
-        // Calculate remaining lease time in seconds
-        let elapsed = 0;
+        const peerID = String(r.PeerID || '');
+
+        let remaining = 0;
         if (r.ExpiresAt) {
-            elapsed = Math.max(0, Math.floor((new Date(r.ExpiresAt) - new Date()) / 1000));
+            remaining = Math.max(0, Math.floor((new Date(r.ExpiresAt) - new Date()) / 1000));
         }
+        const leaseClass = remaining === 0 ? 'badge-rejected' : 'badge-approved';
+        const leaseLabel = remaining === 0 ? 'Lease expired' : `Lease: ${formatDuration(remaining)}`;
 
         const peersHTML = conns.length === 0
             ? '<li>No connected peers</li>'
-            : conns.map(p => `<li>${p.substring(0, 15)}... (${p.substring(p.length - 8)})</li>`).join('');
+            : conns.map(p => `<li>${escapeHTML(String(p).substring(0, 15))}... (${escapeHTML(String(p).slice(-8))})</li>`).join('');
 
-        topoList.innerHTML += `
+        return `
             <div class="router-item-card">
                 <div class="router-header">
-                    <span class="router-peer-id" title="${r.PeerID}">${r.PeerID.substring(0, 12)}...${r.PeerID.substring(r.PeerID.length - 8)}</span>
-                    <span class="badge badge-approved">Lease: ${elapsed}s</span>
+                    <span class="router-peer-id" title="${escapeHTML(peerID)}">${escapeHTML(peerID.substring(0, 12))}...${escapeHTML(peerID.slice(-8))}</span>
+                    <span class="badge ${leaseClass}">${escapeHTML(leaseLabel)}</span>
                 </div>
                 <div class="router-metrics">
                     <div class="router-metric-item">
@@ -430,7 +618,7 @@ function renderRouterTopography(routers) {
                         <div style="font-size: 0.7rem; color: var(--text-secondary)">Connections</div>
                     </div>
                     <div class="router-metric-item" style="border-left: 1px solid var(--border-color)">
-                        <div class="router-metric-val">${dhtSize}</div>
+                        <div class="router-metric-val">${escapeHTML(String(dhtSize))}</div>
                         <div style="font-size: 0.7rem; color: var(--text-secondary)">DHT Size</div>
                     </div>
                 </div>
@@ -438,7 +626,7 @@ function renderRouterTopography(routers) {
                 <ul class="router-peers-list">${peersHTML}</ul>
             </div>
         `;
-    });
+    }).join('');
 }
 
 function renderBootstrapTokensTable(tokens) {
@@ -449,15 +637,14 @@ function renderBootstrapTokensTable(tokens) {
     }
 
     tbody.innerHTML = tokens.map(token => {
-        const createdAt = new Date(token.CreatedAt).toLocaleString();
         const expiresAt = token.ExpiresAt && !token.ExpiresAt.startsWith('0001') ? new Date(token.ExpiresAt).toLocaleString() : 'Never';
         return `
             <tr>
-                <td><code>${token.ID.substring(0, 8)}...</code></td>
-                <td>${token.Role}</td>
-                <td><code>${token.OwnerID || '-'}</code></td>
-                <td>${token.UsagesCount} / ${token.MaxUsages}</td>
-                <td>${expiresAt}</td>
+                <td><code>${escapeHTML(String(token.ID || '').substring(0, 8))}...</code></td>
+                <td>${escapeHTML(token.Role)}</td>
+                <td><code>${escapeHTML(token.OwnerID || '-')}</code></td>
+                <td>${escapeHTML(String(token.UsagesCount))} / ${escapeHTML(String(token.MaxUsages))}</td>
+                <td>${escapeHTML(expiresAt)}</td>
             </tr>
         `;
     }).join('');
@@ -523,51 +710,119 @@ window.copyGeneratedToken = async function() {
     setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
 };
 
-function writeVarint(value) {
-    const bytes = [];
-    while (value > 127) {
-        bytes.push((value & 127) | 128);
-        value >>= 7;
-    }
-    bytes.push(value);
-    return bytes;
-}
-
 window.savePolicy = async function() {
     const yamlContent = document.getElementById('policy-yaml').value;
-    const encoder = new TextEncoder();
-    const yamlBytes = encoder.encode(yamlContent);
-    
-    const lenBytes = writeVarint(yamlBytes.length);
-    const pbBytes = new Uint8Array(1 + lenBytes.length + yamlBytes.length);
-    pbBytes[0] = 0x0a; // field tag 1 (YamlContent)
-    pbBytes.set(lenBytes, 1);
-    pbBytes.set(yamlBytes, 1 + lenBytes.length);
 
-    const headers = getAuthHeaders();
-    headers['Content-Type'] = 'application/x-protobuf';
+    let policy;
+    try {
+        policy = parsePolicyDocument(yamlContent);
+    } catch (err) {
+        setPolicyError(err.message);
+        showToast('Policy is not valid YAML. Fix the reported error first.', 'error');
+        return;
+    }
 
     try {
+        // The policy API speaks protojson; YAML is only the editing surface, so the
+        // document goes over the wire in the shape the API documents.
         const response = await fetch('api/policies', {
             method: 'POST',
-            headers: headers,
-            body: pbBytes
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(policy)
         });
         if (response.ok) {
-            alert('Mesh policy updated and applied successfully!');
+            policyBaseline = yamlContent;
+            updatePolicyDirtyIndicator();
+            showToast('Mesh policy updated and applied.', 'success');
             loadData();
         } else {
             const text = await response.text();
-            alert('Failed to save policy: ' + text);
+            showToast('Failed to save policy: ' + text.trim(), 'error');
         }
     } catch (err) {
-        alert('Network error: ' + err.message);
+        showToast('Network error: ' + err.message, 'error');
     }
 };
+
+// Throws with js-yaml's line and column detail so the editor can show it verbatim.
+function parsePolicyDocument(text) {
+    if (text.trim() === '') {
+        return {};
+    }
+    const parsed = jsyaml.load(text);
+    if (parsed === null || parsed === undefined) {
+        return {};
+    }
+    if (typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error('The policy must be a mapping of fields, not a list or a single value.');
+    }
+    return parsed;
+}
+
+function setPolicyError(message) {
+    const box = document.getElementById('policy-error');
+    const editor = document.getElementById('policy-yaml');
+    const save = document.getElementById('policy-save');
+    if (!box || !editor) return;
+
+    box.textContent = message || '';
+    box.hidden = !message;
+    editor.classList.toggle('is-invalid', Boolean(message));
+    editor.setAttribute('aria-invalid', message ? 'true' : 'false');
+    if (save) {
+        save.disabled = Boolean(message);
+    }
+}
+
+function validatePolicyEditor() {
+    const editor = document.getElementById('policy-yaml');
+    if (!editor) return;
+    try {
+        parsePolicyDocument(editor.value);
+        setPolicyError('');
+    } catch (err) {
+        setPolicyError(err.message);
+    }
+    updatePolicyDirtyIndicator();
+}
+
+function updatePolicyDirtyIndicator() {
+    const indicator = document.getElementById('policy-dirty');
+    if (indicator) {
+        indicator.hidden = !policyIsDirty();
+    }
+}
+
+// YAML forbids tabs for indentation, so Tab has to insert spaces or the document
+// becomes unparseable the moment someone reaches for it.
+function handlePolicyEditorKeydown(e) {
+    if (e.key !== 'Tab' || e.ctrlKey || e.altKey || e.metaKey) {
+        return;
+    }
+    e.preventDefault();
+    const editor = e.currentTarget;
+    const start = editor.selectionStart;
+    editor.value = editor.value.slice(0, start) + '  ' + editor.value.slice(editor.selectionEnd);
+    editor.selectionStart = editor.selectionEnd = start + 2;
+    validatePolicyEditor();
+}
 
 function escapeHTML(str) {
     if (!str) return '-';
     return String(str).replace(/[&<>'"]/g, 
         tag => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[tag] || tag)
     );
+}
+
+function formatDuration(seconds) {
+    if (seconds < 60) {
+        return `${seconds}s`;
+    }
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) {
+        return `${minutes}m`;
+    }
+    const hours = Math.floor(minutes / 60);
+    const rest = minutes % 60;
+    return rest === 0 ? `${hours}h` : `${hours}h ${rest}m`;
 }

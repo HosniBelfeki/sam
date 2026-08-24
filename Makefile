@@ -149,6 +149,12 @@ ui-test: build
 	chmod +x ./tests/ui/run.sh
 	./tests/ui/run.sh $(if $(WHAT),--grep "$(WHAT)")
 
+# Same stack as ui-test, seeded and left running so you can click around.
+.PHONY: ui-dev
+ui-dev: build
+	chmod +x ./tests/ui/dev.sh
+	./tests/ui/dev.sh
+
 test-e2e: build docker-build
 	@command -v bats >/dev/null 2>&1 || { \
 		echo "bats not found; attempting install"; \

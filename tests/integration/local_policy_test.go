@@ -19,9 +19,8 @@ func TestLocalPolicyCanGrantPermissions(t *testing.T) {
 
 	// Control plane policy that grants NOTHING.
 	controlPlanePolicyFile := filepath.Join(tmpDir, "policies.yaml")
-	controlPlanePolicyYAML := `version: "v1alpha1"
-roles:
-  none:
+	controlPlanePolicyYAML := `roles:
+  - name: none
     allowed_services: []
     allowed_targets: ["*"]
 bindings:
@@ -163,9 +162,8 @@ func TestLocalPolicyCannotBypassControlPlaneTargetConstraint(t *testing.T) {
 
 	// Control plane policy that grants service access but RESTRICTS target to "group:admin-only".
 	controlPlanePolicyFile := filepath.Join(tmpDir, "policies.yaml")
-	controlPlanePolicyYAML := `version: "v1alpha1"
-roles:
-  restricted-role:
+	controlPlanePolicyYAML := `roles:
+  - name: restricted-role
     allowed_services: ["*"]
     allowed_targets: ["group:admin-only"]
 bindings:

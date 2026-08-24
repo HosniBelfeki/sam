@@ -9,7 +9,7 @@ Welcome to the User & Operator Guides. This section provides detailed documentat
 ### In This Section
 
 1. **[Control Plane Configuration](control-plane-configuration/)**
-   Learn how to configure the OIDC identity bridge, set up cryptographic private keys, enforce TLS/mTLS, and write custom security role policy mappings in `policies.yaml`.
+   Learn how to configure the OIDC identity bridge, set up cryptographic private keys, enforce TLS/mTLS, and write custom security role policy mappings.
 
 2. **[Agent Usage & Connectivity](agent-usage/)**
    Understand how nodes connect to the mesh via OIDC login, secure credentials, run local Model Context Protocol (MCP) servers, and expose secure remote tool access to agents (like Google Gemini and Claude).

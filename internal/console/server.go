@@ -14,6 +14,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -140,6 +141,8 @@ func NewServer(cfg Config) (*Server, error) {
 		routes.HandleFunc("/auth/session", s.HandleSession)
 	}
 	routes.HandleFunc("/auth/logout", s.HandleLogout)
+	// Available without OIDC: the admin bearer token uses the same exchange.
+	routes.HandleFunc("/auth/token", s.HandleTokenLogin)
 	routes.HandleFunc("/info", s.HandleInfo)
 
 	// Serve under BasePath too, so the links this server emits resolve without the proxy
@@ -344,6 +347,80 @@ func (s *Server) HandleInfo(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"oidc_enabled": s.provider != nil,
 	})
+}
+
+// maxTokenLoginBody bounds the login body; a JWT with generous claims stays well
+// under this, and cookies larger than this would be dropped by browsers anyway.
+const maxTokenLoginBody = 16 << 10
+
+// HandleTokenLogin exchanges a token the operator pasted into the console for an
+// httpOnly session cookie, so the credential is never reachable from JavaScript
+// and an XSS in the console cannot exfiltrate mesh admin rights.
+func (s *Server) HandleTokenLogin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	// An HTML form cannot produce this content type, so a cross-origin POST is
+	// forced through a CORS preflight this server never approves. Blocks an
+	// attacker from planting their own session cookie in a victim's browser.
+	if ct := r.Header.Get("Content-Type"); ct != "application/json" {
+		http.Error(w, "expected Content-Type: application/json", http.StatusUnsupportedMediaType)
+		return
+	}
+
+	var req struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, maxTokenLoginBody)).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	token := strings.TrimSpace(req.Token)
+	// Operators routinely paste the whole "Bearer <token>" header value.
+	if fields := strings.Fields(token); len(fields) > 0 && strings.EqualFold(fields[0], "bearer") {
+		token = strings.Join(fields[1:], " ")
+	}
+	if token == "" {
+		http.Error(w, "token is required", http.StatusBadRequest)
+		return
+	}
+	// net/http silently drops a cookie whose value needs quoting, which would
+	// fail as a confusing 401 later. Reject it here instead.
+	if !isValidCookieValue(token) {
+		http.Error(w, "token contains characters that are not valid in a cookie", http.StatusBadRequest)
+		return
+	}
+
+	scheme := "http"
+	if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
+		scheme = "https"
+	}
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     "sam_session",
+		Value:    token,
+		Path:     s.cfg.BasePath + "/",
+		MaxAge:   24 * 3600,
+		HttpOnly: true,
+		Secure:   scheme == "https",
+		SameSite: http.SameSiteLaxMode,
+	})
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// isValidCookieValue reports whether v can be sent verbatim as a cookie value,
+// per the cookie-octet rule in RFC 6265 section 4.1.1.
+func isValidCookieValue(v string) bool {
+	for i := 0; i < len(v); i++ {
+		c := v[i]
+		if c < 0x21 || c > 0x7e || c == '"' || c == ',' || c == ';' || c == '\\' {
+			return false
+		}
+	}
+	return true
 }
 
 func generatePKCE() (string, string, error) {

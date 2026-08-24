@@ -16,20 +16,20 @@
             </div>
             <p class="subtitle">Securely manage your global mesh network.</p>
             
-            <div class="auth-buttons" id="sso-login-group" style="display: none; margin-bottom: 24px;">
-                <p style="text-align: left; font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 8px;">Interactive Single Sign-On</p>
-                <button class="btn btn-primary" onclick="redirectToSSO()" style="width: 100%;">
+            <div class="auth-buttons auth-group" id="sso-login-group">
+                <p class="auth-label">Interactive Single Sign-On</p>
+                <button class="btn btn-primary btn-block" onclick="redirectToSSO()">
                     Log In with OIDC (Redirect)
                 </button>
-                <div class="divider" style="margin: 1.5rem 0;"><span>or use manual tokens</span></div>
+                <div class="divider divider-spaced"><span>or use manual tokens</span></div>
             </div>
 
             <div class="auth-buttons">
-                <p style="text-align: left; font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 8px;">Sign In via OIDC Token</p>
+                <p class="auth-label">Sign In via OIDC Token</p>
                 <div class="input-group">
                     <input type="password" id="oidc-token-input" placeholder="OIDC JWT Token">
                 </div>
-                <button class="btn btn-primary" onclick="loginOIDC()" style="width: 100%; margin-top: 12px; margin-bottom: 24px;">
+                <button class="btn btn-primary btn-block auth-submit" onclick="loginOIDC()">
                     Sign In with Token
                 </button>
             </div>
@@ -43,7 +43,7 @@
                 <div class="input-group">
                     <input type="password" id="admin-token-input" placeholder="Bearer Token">
                 </div>
-                <button class="btn btn-primary" onclick="saveAdminToken()" style="width: 100%; margin-top: 16px;">
+                <button class="btn btn-primary btn-block auth-submit" onclick="saveAdminToken()">
                     Login as Admin
                 </button>
             </div>
@@ -51,40 +51,40 @@
     </div>
 
     <!-- Main Dashboard Application -->
-    <div class="app-container" id="app-container" style="display: none;">
+    <div class="app-container" id="app-container">
         <!-- Sidebar Navigation -->
         <aside class="sidebar">
             <div class="sidebar-header">
                 <div class="logo"></div>
                 <h2>SAM Console</h2>
             </div>
-            <nav class="sidebar-nav">
-                <a href="#" class="nav-item active" data-target="overview">
-                    <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
+            <nav class="sidebar-nav" aria-label="Sections">
+                <a href="#overview" class="nav-item active" data-target="overview">
+                    <svg aria-hidden="true" viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
                     Overview
                 </a>
-                <a href="#" class="nav-item" data-target="users">
-                    <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+                <a href="#users" class="nav-item" data-target="users">
+                    <svg aria-hidden="true" viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
                     Users
                 </a>
-                <a href="#" class="nav-item" data-target="nodes">
-                    <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+                <a href="#nodes" class="nav-item" data-target="nodes">
+                    <svg aria-hidden="true" viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
                     Nodes
                 </a>
-                <a href="#" class="nav-item" data-target="enrollments">
-                    <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+                <a href="#enrollments" class="nav-item" data-target="enrollments">
+                    <svg aria-hidden="true" viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
                     Enrollments
                 </a>
-                <a href="#" class="nav-item" data-target="routers">
-                    <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none"><path d="M2 12h20"></path><path d="M12 2v20"></path><rect x="2" y="2" width="20" height="20" rx="2" ry="2"></rect></svg>
+                <a href="#routers" class="nav-item" data-target="routers">
+                    <svg aria-hidden="true" viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none"><path d="M2 12h20"></path><path d="M12 2v20"></path><rect x="2" y="2" width="20" height="20" rx="2" ry="2"></rect></svg>
                     Routers
                 </a>
-                <a href="#" class="nav-item" data-target="bootstrap">
-                    <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+                <a href="#bootstrap" class="nav-item" data-target="bootstrap">
+                    <svg aria-hidden="true" viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
                     Bootstrap Tokens
                 </a>
-                <a href="#" class="nav-item" data-target="policy">
-                    <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+                <a href="#policy" class="nav-item" data-target="policy">
+                    <svg aria-hidden="true" viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
                     Mesh Policy
                 </a>
             </nav>
@@ -97,55 +97,57 @@
         <main class="main-content">
             <header class="topbar">
                 <button class="sidebar-toggle" id="sidebar-toggle" onclick="toggleSidebar()" aria-label="Toggle navigation">
-                    <svg viewBox="0 0 24 24" width="22" height="22" stroke="currentColor" stroke-width="2" fill="none"><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+                    <svg aria-hidden="true" viewBox="0 0 24 24" width="22" height="22" stroke="currentColor" stroke-width="2" fill="none"><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
                 </button>
                 <div class="search-bar">
-                    <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
-                    <input type="text" placeholder="Search resources...">
+                    <svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                    <input type="search" id="resource-search" placeholder="Search resources..." aria-label="Search resources">
                 </div>
                 <div class="user-profile">
-                    <div class="avatar">A</div>
+                    <div class="avatar" aria-hidden="true">A</div>
                     <span>Admin</span>
-                    <button class="btn btn-sm btn-secondary" onclick="logout()" style="margin-left: 12px; padding: 4px 8px; font-size: 0.8rem; background: var(--border-color); border: 1px solid var(--border-color);">Logout</button>
+                    <button class="btn btn-sm btn-logout" onclick="logout()">Logout</button>
                 </div>
             </header>
 
             <div class="content-scroll">
+                <p id="live-status" class="visually-hidden" role="status" aria-live="polite"></p>
                 <!-- Overview View -->
                 <section id="view-overview" class="view-section active">
                     <div class="header-banner">
                         <h1>Network Overview</h1>
                         <p>Real-time statistics for your zero-trust mesh.</p>
                         <button class="btn btn-primary" onclick="loadData()">
-                            <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
+                            <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
                             Refresh
                         </button>
                     </div>
 
+                    <!-- Each card links to the view that lists what it counts. -->
                     <div class="stats-grid">
-                        <div class="stat-card">
+                        <a class="stat-card" href="#users">
                             <div class="stat-title">Active Users</div>
                             <div class="stat-value" id="stat-users">0</div>
-                        </div>
-                        <div class="stat-card">
+                        </a>
+                        <a class="stat-card" href="#nodes">
                             <div class="stat-title">Enrolled Nodes</div>
                             <div class="stat-value" id="stat-nodes">0</div>
-                        </div>
-                        <div class="stat-card">
+                        </a>
+                        <a class="stat-card" href="#routers">
                             <div class="stat-title">Active Routers</div>
                             <div class="stat-value" id="stat-routers">0</div>
-                        </div>
-                        <div class="stat-card">
+                        </a>
+                        <a class="stat-card" href="#enrollments">
                             <div class="stat-title">Pending Enrollments</div>
                             <div class="stat-value" id="stat-pending">0</div>
-                        </div>
+                        </a>
                     </div>
 
-                    <div class="section-header" style="margin-top: 2rem;">
+                    <div class="section-header section-header-spaced">
                         <h2>Network Topography</h2>
                     </div>
                     <div id="router-topography-list" class="router-cards-grid">
-                        <div class="text-center" style="grid-column: 1/-1; padding: 2rem; color: var(--text-secondary);">Loading topography...</div>
+                        <div class="grid-placeholder">Loading topography...</div>
                     </div>
                 </section>
 
@@ -249,46 +251,45 @@
                     <div class="section-header">
                         <h2>Bootstrap Tokens</h2>
                     </div>
-                    <div class="card" style="margin-bottom: 2rem; padding: 2rem;">
+                    <div class="card card-form">
                         <h3>Generate Bootstrap Token</h3>
-                        <form id="form-generate-token" onsubmit="event.preventDefault(); generateBootstrapToken();" style="display: grid; gap: 1rem; max-width: 500px; margin-top: 1rem;">
-                            <div class="input-group" style="display: flex; flex-direction: column; gap: 4px;">
-                                <label for="token-role" style="font-size: 0.85rem; color: var(--text-secondary);">Role</label>
-                                <select id="token-role" class="form-control" style="background: rgba(0,0,0,0.2); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 4px; padding: 8px;">
+                        <form id="form-generate-token" class="stacked-form" onsubmit="event.preventDefault(); generateBootstrapToken();">
+                            <div class="input-group field">
+                                <label for="token-role" class="field-label">Role</label>
+                                <select id="token-role" class="form-control field-input">
                                     <option value="sam:role:node">Node (sam:role:node)</option>
                                     <option value="sam:role:router">Router (sam:role:router)</option>
                                     <option value="sam:role:sambox">Box (sam:role:sambox)</option>
                                 </select>
                             </div>
-                            <div class="input-group" style="display: flex; flex-direction: column; gap: 4px;">
-                                <label for="token-owner" style="font-size: 0.85rem; color: var(--text-secondary);">Owner ID <span style="opacity: 0.7;">(optional)</span></label>
-                                <input type="text" id="token-owner" placeholder="Leave blank to use your own identity" style="background: rgba(0,0,0,0.2); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 4px; padding: 8px;">
-                                <small id="token-owner-hint" style="font-size: 0.75rem; color: var(--text-secondary); opacity: 0.8;">Admins only: issue this token on behalf of another user. The user must have logged in at least once.</small>
+                            <div class="input-group field">
+                                <label for="token-owner" class="field-label">Owner ID <span class="field-optional">(optional)</span></label>
+                                <input type="text" id="token-owner" class="field-input" placeholder="Leave blank to use your own identity">
+                                <small id="token-owner-hint" class="field-hint">Admins only: issue this token on behalf of another user. The user must have logged in at least once.</small>
                             </div>
-                            <div class="input-group" style="display: flex; flex-direction: column; gap: 4px;">
-                                <label for="token-usages" style="font-size: 0.85rem; color: var(--text-secondary);">Max Usages</label>
-                                <input type="number" id="token-usages" value="1" min="1" style="background: rgba(0,0,0,0.2); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 4px; padding: 8px;" required>
+                            <div class="input-group field">
+                                <label for="token-usages" class="field-label">Max Usages</label>
+                                <input type="number" id="token-usages" class="field-input" value="1" min="1" required>
                             </div>
-                            <div class="input-group" style="display: flex; flex-direction: column; gap: 4px;">
-                                <label for="token-ttl" style="font-size: 0.85rem; color: var(--text-secondary);">TTL (hours)</label>
-                                <input type="number" id="token-ttl" value="24" min="1" style="background: rgba(0,0,0,0.2); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 4px; padding: 8px;" required>
+                            <div class="input-group field">
+                                <label for="token-ttl" class="field-label">TTL (hours)</label>
+                                <input type="number" id="token-ttl" class="field-input" value="24" min="1" required>
                             </div>
-                            <div class="input-group" style="display: flex; flex-direction: column; gap: 4px;">
-                                <label for="token-desc" style="font-size: 0.85rem; color: var(--text-secondary);">Description</label>
-                                <input type="text" id="token-desc" placeholder="Token purpose" style="background: rgba(0,0,0,0.2); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 4px; padding: 8px;">
+                            <div class="input-group field">
+                                <label for="token-desc" class="field-label">Description</label>
+                                <input type="text" id="token-desc" class="field-input" placeholder="Token purpose">
                             </div>
-                            <button type="submit" class="btn btn-primary" style="margin-top: 12px; max-width: 200px;">Generate Token</button>
+                            <button type="submit" class="btn btn-primary form-submit">Generate Token</button>
                         </form>
-                        <div id="token-result" hidden style="margin-top: 1.5rem; max-width: 500px; border: 1px solid var(--border-color); border-radius: 6px; padding: 1rem; background: rgba(0,0,0,0.2);">
-                            <div style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 8px;">
+                        <div id="token-result" class="token-result" hidden>
+                            <div class="token-result-note">
                                 Token generated for owner <code id="token-result-owner"></code>. Copy it now &mdash; it is not stored and will not be shown again.
                             </div>
-                            <div style="display: flex; gap: 8px; align-items: center;">
-                                <input type="text" id="token-result-value" readonly onfocus="this.select();"
-                                       style="flex: 1; font-family: monospace; background: rgba(0,0,0,0.35); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 4px; padding: 8px;">
+                            <div class="token-result-row">
+                                <input type="text" id="token-result-value" class="token-result-value" readonly onfocus="this.select();">
                                 <button type="button" class="btn" id="token-copy-btn" onclick="copyGeneratedToken();">Copy</button>
                             </div>
-                            <div style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 8px;">
+                            <div class="token-result-hint">
                                 Join a node with: <code id="token-result-cmd"></code>
                             </div>
                         </div>
@@ -319,14 +320,27 @@
                     <div class="section-header">
                         <h2>Mesh Security Policies</h2>
                     </div>
-                    <div class="card" style="padding: 2rem;">
-                        <textarea id="policy-yaml" style="width: 100%; height: 450px; font-family: monospace; background: rgba(0,0,0,0.2); color: #a5a1b8; border: 1px solid var(--border-color); border-radius: 0.5rem; padding: 1rem; margin-bottom: 1.5rem;" placeholder="# Loading policies..."></textarea>
-                        <button class="btn btn-primary" onclick="savePolicy()">Save & Apply Policy</button>
+                    <div class="card policy-editor">
+                        <p class="policy-hint">
+                            Edited as YAML, submitted as the JSON the control plane's policy API accepts.
+                            Field names mirror the API schema exactly.
+                        </p>
+                        <textarea id="policy-yaml" class="code-editor" spellcheck="false" wrap="off"
+                                  aria-label="Mesh policy document" aria-describedby="policy-error"
+                                  placeholder="roles:&#10;  - name: dev&#10;    allowed_services: [&quot;mcp://git&quot;]&#10;    allowed_targets: [&quot;group:eng&quot;]&#10;bindings:&#10;  - role: dev&#10;    members: [&quot;user:bob&quot;]"></textarea>
+                        <p id="policy-error" class="editor-error" role="alert" hidden></p>
+                        <div class="policy-actions">
+                            <button class="btn btn-primary" id="policy-save" onclick="savePolicy()">Save &amp; Apply Policy</button>
+                            <span id="policy-dirty" class="policy-dirty" hidden>Unsaved changes</span>
+                        </div>
                     </div>
                 </section>
             </div>
         </main>
     </div>
+    <!-- Transient action feedback, announced as it arrives. -->
+    <div id="toast-container" class="toast-container" role="status" aria-live="polite"></div>
+    <script src="vendor/js-yaml.min.js"></script>
     <script src="app.js"></script>
 </body>
 </html>

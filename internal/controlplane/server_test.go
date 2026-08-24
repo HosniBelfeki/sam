@@ -29,6 +29,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -41,6 +42,7 @@ import (
 	"github.com/google/sam/internal/storage"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -435,6 +437,180 @@ func TestNodeAndRouterRegistrationFlow(t *testing.T) {
 	}
 	if resp.StatusCode != http.StatusForbidden {
 		t.Errorf("expectedStatusForbidden (403) for rogue router lease, got: %s", resp.Status)
+	}
+}
+
+// The console renders this JSON for editing and posts the result straight back,
+// so anything the render drops is silently deleted from the mesh policy on the
+// next save. protojson is generated, which is the point: a hand-written renderer
+// is what lost custom_datalog before.
+func TestMarshalPolicyJSONRoundTrip(t *testing.T) {
+	roles := []*api.PolicyRole{
+		{
+			Name:            "dev",
+			AllowedServices: []string{"mcp://git"},
+			AllowedTargets:  []string{"node:abc"},
+			CustomDatalog:   []string{"right(\"data:read\");"},
+		},
+		{
+			Name:            "ops",
+			AllowedServices: []string{"mcp://deploy"},
+		},
+	}
+	bindings := []*api.PolicyBinding{
+		{Role: "dev", Members: []string{"group:developers"}},
+		{Role: "ops", Members: []string{"user:root"}},
+	}
+
+	rendered, err := marshalPolicyJSON(roles, bindings)
+	if err != nil {
+		t.Fatalf("rendering the policy: %v", err)
+	}
+
+	// Proto names, because that is what the docs and the Helm bootstrap job use.
+	if !strings.Contains(rendered, "allowed_services") || !strings.Contains(rendered, "custom_datalog") {
+		t.Fatalf("rendered policy does not use proto field names:\n%s", rendered)
+	}
+
+	// Exactly what the console posts back.
+	parsed := &api.PolicyConfigUpdateRequest{}
+	if err := protojson.Unmarshal([]byte(rendered), parsed); err != nil {
+		t.Fatalf("parsing back the rendered policy: %v\n%s", err, rendered)
+	}
+
+	if len(parsed.Roles) != len(roles) {
+		t.Fatalf("got %d roles, want %d", len(parsed.Roles), len(roles))
+	}
+	for i, want := range roles {
+		if !proto.Equal(parsed.Roles[i], want) {
+			t.Errorf("role %d round-tripped as %v, want %v", i, parsed.Roles[i], want)
+		}
+	}
+	if len(parsed.Bindings) != len(bindings) {
+		t.Fatalf("got %d bindings, want %d", len(parsed.Bindings), len(bindings))
+	}
+	for i, want := range bindings {
+		if !proto.Equal(parsed.Bindings[i], want) {
+			t.Errorf("binding %d round-tripped as %v, want %v", i, parsed.Bindings[i], want)
+		}
+	}
+
+	// The result must survive the same validation a POST applies.
+	if err := validatePolicyConfig(parsed); err != nil {
+		t.Errorf("round-tripped policy failed validation: %v", err)
+	}
+}
+
+// The console posts the policy editor's contents as protojson, so this is the
+// path the only editor a mesh operator has depends on.
+func TestPoliciesAcceptConsoleJSON(t *testing.T) {
+	issuer, _ := startCustomMockOIDC(t)
+	srv, store, baseURL := setupTestServer(t, issuer)
+	defer func() {
+		_ = srv.Close()
+		_ = store.Close()
+	}()
+
+	srv.config.AdminToken = "super-secret-admin-token"
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	// Proto field names, exactly as the docs and the Helm bootstrap job write them.
+	policy := `{
+	  "roles": [
+	    {
+	      "name": "dev",
+	      "allowed_services": ["mcp://git"],
+	      "allowed_targets": ["group:eng"],
+	      "custom_datalog": ["right(\"data:read\");"]
+	    }
+	  ],
+	  "bindings": [{"role": "dev", "members": ["user:bob"]}]
+	}`
+
+	req, _ := http.NewRequest(http.MethodPost, baseURL+"/policies", strings.NewReader(policy))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer super-secret-admin-token")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("POST /policies: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /policies as JSON: got %s (body: %s)", resp.Status, body)
+	}
+
+	roles, bindings, err := store.GetMeshPolicy(context.Background())
+	if err != nil {
+		t.Fatalf("reading back the stored policy: %v", err)
+	}
+	if len(roles) != 1 || roles[0].Name != "dev" {
+		t.Fatalf("stored roles = %v, want a single role named dev", roles)
+	}
+	if len(roles[0].CustomDatalog) != 1 {
+		t.Errorf("custom_datalog was dropped on save: %v", roles[0])
+	}
+	if len(bindings) != 1 || bindings[0].Role != "dev" {
+		t.Fatalf("stored bindings = %v, want a single binding for dev", bindings)
+	}
+
+	// What /status hands the console must be postable back unchanged.
+	rendered, err := marshalPolicyJSON(roles, bindings)
+	if err != nil {
+		t.Fatalf("rendering the stored policy: %v", err)
+	}
+	req, _ = http.NewRequest(http.MethodPost, baseURL+"/policies", strings.NewReader(rendered))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer super-secret-admin-token")
+	resp, err = client.Do(req)
+	if err != nil {
+		t.Fatalf("re-posting the rendered policy: %v", err)
+	}
+	body, _ = io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("re-posting the rendered policy: got %s (body: %s)", resp.Status, body)
+	}
+}
+
+// A misspelled field is the difference between a permission being granted and
+// silently not existing, so it has to be an error rather than a discarded key.
+func TestPoliciesRejectUnknownJSONFields(t *testing.T) {
+	issuer, _ := startCustomMockOIDC(t)
+	srv, store, baseURL := setupTestServer(t, issuer)
+	defer func() {
+		_ = srv.Close()
+		_ = store.Close()
+	}()
+
+	srv.config.AdminToken = "super-secret-admin-token"
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	for name, policy := range map[string]string{
+		"misspelled role field": `{"roles": [{"name": "dev", "allowed_service": ["mcp://git"]}]}`,
+		"misspelled top level":  `{"role": [{"name": "dev"}]}`,
+		"legacy version key":    `{"version": "v1alpha1", "roles": [{"name": "dev"}]}`,
+	} {
+		req, _ := http.NewRequest(http.MethodPost, baseURL+"/policies", strings.NewReader(policy))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer super-secret-admin-token")
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("%s: POST /policies: %v", name, err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("%s: got status %d, want %d", name, resp.StatusCode, http.StatusBadRequest)
+		}
+	}
+
+	// Nothing should have been stored by any of those.
+	roles, bindings, err := store.GetMeshPolicy(context.Background())
+	if err != nil && err != storage.ErrNotFound {
+		t.Fatalf("reading back the stored policy: %v", err)
+	}
+	if len(roles) != 0 || len(bindings) != 0 {
+		t.Errorf("a rejected policy was stored anyway: roles=%v bindings=%v", roles, bindings)
 	}
 }
 

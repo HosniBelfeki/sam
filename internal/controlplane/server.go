@@ -47,7 +47,6 @@ import (
 	"golang.org/x/time/rate"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
-	"gopkg.in/yaml.v2"
 )
 
 var logger = golog.Logger("sam-control-plane")
@@ -976,21 +975,22 @@ func (s *Server) HandlePolicies(w http.ResponseWriter, r *http.Request) {
 		}
 		defer func() { _ = r.Body.Close() }()
 
-		var req api.PolicyConfigUpdateRequest
+		req := &api.PolicyConfigUpdateRequest{}
 		if strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
-			unmarshaler := protojson.UnmarshalOptions{DiscardUnknown: true}
-			if err := unmarshaler.Unmarshal(body, &req); err != nil {
+			// Strict: an unknown field here is a typo like "allowed_service", and
+			// discarding it would quietly drop the permission it was meant to grant.
+			if err := protojson.Unmarshal(body, req); err != nil {
 				http.Error(w, "Invalid JSON format: "+err.Error(), http.StatusBadRequest)
 				return
 			}
 		} else {
-			if err := proto.Unmarshal(body, &req); err != nil {
+			if err := proto.Unmarshal(body, req); err != nil {
 				http.Error(w, "Invalid request format", http.StatusBadRequest)
 				return
 			}
 		}
 
-		if err := validatePolicyConfig(&req); err != nil {
+		if err := validatePolicyConfig(req); err != nil {
 			http.Error(w, "Invalid policy configuration: "+err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -1743,35 +1743,11 @@ func (s *Server) HandleUserStatus(w http.ResponseWriter, r *http.Request) {
 		logger.Errorf("Failed to list policy: %v", err)
 	}
 
-	type displayRole struct {
-		AllowedServices []string `yaml:"allowed_services"`
-		AllowedTargets  []string `yaml:"allowed_targets"`
-	}
-	type displayBinding struct {
-		Role    string   `yaml:"role"`
-		Members []string `yaml:"members"`
-	}
-	displayMap := map[string]interface{}{
-		"roles":    make(map[string]displayRole),
-		"bindings": make([]displayBinding, 0),
-	}
-
-	for _, role := range roles {
-		displayMap["roles"].(map[string]displayRole)[role.Name] = displayRole{
-			AllowedServices: role.AllowedServices,
-			AllowedTargets:  role.AllowedTargets,
-		}
-	}
-	for _, b := range bindings {
-		displayMap["bindings"] = append(displayMap["bindings"].([]displayBinding), displayBinding{
-			Role:    b.Role,
-			Members: b.Members,
-		})
-	}
-
-	var policyYAML string
-	if yamlBytes, err := yaml.Marshal(displayMap); err == nil {
-		policyYAML = string(yamlBytes)
+	var policyJSON string
+	if rendered, err := marshalPolicyJSON(roles, bindings); err == nil {
+		policyJSON = rendered
+	} else {
+		logger.Errorf("Failed to render policy: %v", err)
 	}
 
 	resp := map[string]any{
@@ -1783,7 +1759,7 @@ func (s *Server) HandleUserStatus(w http.ResponseWriter, r *http.Request) {
 		"active_routers":   routers,
 		"enrolled_nodes":   nodes,
 		"bootstrap_tokens": tokens,
-		"policy_yaml":      policyYAML,
+		"policy_json":      policyJSON,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -2027,6 +2003,20 @@ func toStringSlice(val any) []string {
 		return res
 	}
 	return nil
+}
+
+// marshalPolicyJSON renders the stored mesh policy as protojson using the proto
+// field names. Generated marshalling is the point: a hand-maintained mirror of
+// PolicyRole silently drops any field it forgets, which is how custom_datalog
+// went missing from the console for so long.
+func marshalPolicyJSON(roles []*api.PolicyRole, bindings []*api.PolicyBinding) (string, error) {
+	resp := &api.PolicyConfigGetResponse{Roles: roles, Bindings: bindings}
+	marshaler := protojson.MarshalOptions{UseProtoNames: true, Multiline: true, Indent: "  "}
+	out, err := marshaler.Marshal(resp)
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
 }
 
 // maxIdentityFactBudget bounds the worst-case number of Datalog facts a policy

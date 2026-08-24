@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -293,6 +294,126 @@ func TestNewServer_BasePathServesBothPrefixes(t *testing.T) {
 	if got := resp.Header.Get("Location"); got != "/console/" {
 		t.Errorf("GET /console: Location = %q, want %q", got, "/console/")
 	}
+}
+
+// The console holds mesh admin credentials, so a pasted token must land in an
+// httpOnly cookie rather than anywhere JavaScript can read it.
+func TestHandleTokenLogin(t *testing.T) {
+	controlPlane := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK) // empty /info: no OIDC, which the console tolerates
+	}))
+	defer controlPlane.Close()
+
+	srv, err := NewServer(Config{
+		ControlPlaneURL: controlPlane.URL,
+		AdminToken:      "test-admin-token",
+		StaticDir:       t.TempDir(),
+		BasePath:        "/console",
+	})
+	if err != nil {
+		t.Fatalf("failed to create server: %v", err)
+	}
+	console := httptest.NewServer(srv.Handler())
+	defer console.Close()
+
+	post := func(t *testing.T, contentType, body string) *http.Response {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodPost, console.URL+"/console/auth/token", strings.NewReader(body))
+		if err != nil {
+			t.Fatalf("build request: %v", err)
+		}
+		req.Header.Set("Content-Type", contentType)
+		resp, err := console.Client().Do(req)
+		if err != nil {
+			t.Fatalf("POST /console/auth/token: %v", err)
+		}
+		return resp
+	}
+
+	sessionCookie := func(resp *http.Response) *http.Cookie {
+		for _, c := range resp.Cookies() {
+			if c.Name == "sam_session" {
+				return c
+			}
+		}
+		return nil
+	}
+
+	t.Run("sets an httpOnly session cookie", func(t *testing.T) {
+		resp := post(t, "application/json", `{"token":"test-admin-token"}`)
+		defer func() { _ = resp.Body.Close() }()
+		if resp.StatusCode != http.StatusNoContent {
+			t.Fatalf("got status %d, want %d", resp.StatusCode, http.StatusNoContent)
+		}
+		c := sessionCookie(resp)
+		if c == nil {
+			t.Fatal("no sam_session cookie set")
+		}
+		if c.Value != "test-admin-token" {
+			t.Errorf("cookie value = %q, want %q", c.Value, "test-admin-token")
+		}
+		if !c.HttpOnly {
+			t.Error("cookie is not HttpOnly, so an XSS could read the mesh admin token")
+		}
+		if c.Path != "/console/" {
+			t.Errorf("cookie path = %q, want %q", c.Path, "/console/")
+		}
+	})
+
+	t.Run("strips a Bearer prefix", func(t *testing.T) {
+		resp := post(t, "application/json", `{"token":"  BeArEr   test-admin-token  "}`)
+		defer func() { _ = resp.Body.Close() }()
+		c := sessionCookie(resp)
+		if c == nil || c.Value != "test-admin-token" {
+			t.Fatalf("cookie = %+v, want value %q", c, "test-admin-token")
+		}
+	})
+
+	// An HTML form can only send these content types, so rejecting them is what
+	// stops a cross-origin POST from planting an attacker's session cookie.
+	t.Run("rejects form content types", func(t *testing.T) {
+		for _, ct := range []string{"application/x-www-form-urlencoded", "text/plain", "multipart/form-data"} {
+			resp := post(t, ct, `{"token":"test-admin-token"}`)
+			_ = resp.Body.Close()
+			if resp.StatusCode != http.StatusUnsupportedMediaType {
+				t.Errorf("Content-Type %s: got status %d, want %d", ct, resp.StatusCode, http.StatusUnsupportedMediaType)
+			}
+			if c := sessionCookie(resp); c != nil {
+				t.Errorf("Content-Type %s: session cookie was set anyway", ct)
+			}
+		}
+	})
+
+	t.Run("rejects bad tokens", func(t *testing.T) {
+		for name, body := range map[string]string{
+			"empty":                `{"token":""}`,
+			"whitespace only":      `{"token":"   "}`,
+			"bearer with no token": `{"token":"Bearer "}`,
+			"not json":             `nonsense`,
+			"cookie separator":     `{"token":"abc;def"}`,
+			"control char":         `{"token":"abc\ndef"}`,
+		} {
+			resp := post(t, "application/json", body)
+			_ = resp.Body.Close()
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Errorf("%s: got status %d, want %d", name, resp.StatusCode, http.StatusBadRequest)
+			}
+			if c := sessionCookie(resp); c != nil {
+				t.Errorf("%s: session cookie was set anyway", name)
+			}
+		}
+	})
+
+	t.Run("rejects GET", func(t *testing.T) {
+		resp, err := console.Client().Get(console.URL + "/console/auth/token")
+		if err != nil {
+			t.Fatalf("GET /console/auth/token: %v", err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		if resp.StatusCode != http.StatusMethodNotAllowed {
+			t.Errorf("got status %d, want %d", resp.StatusCode, http.StatusMethodNotAllowed)
+		}
+	})
 }
 
 // BasePath is concatenated into cookie paths, redirect URLs and mux patterns, so malformed
