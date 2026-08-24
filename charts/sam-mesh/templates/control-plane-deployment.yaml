@@ -11,6 +11,9 @@ spec:
       app: {{ include "sam-mesh.fullname" . }}-control-plane
   template:
     metadata:
+      annotations:
+        # Secrets land as env vars, which are not live-reloaded; roll the pods on change.
+        checksum/secrets: {{ include (print $.Template.BasePath "/secrets.yaml") . | sha256sum }}
       labels:
         app: {{ include "sam-mesh.fullname" . }}-control-plane
     spec:
