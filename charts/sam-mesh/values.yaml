@@ -122,6 +122,8 @@ router:
   # Overrides the announced multiaddrs; derived from hostPort when left empty.
   externalAddrs: []
   allowLoopback: false
+  # PVC for /data/router.key, so the libp2p peer ID survives rescheduling.
+  storageSize: 1Gi
   resources:
     requests:
       cpu: 100m

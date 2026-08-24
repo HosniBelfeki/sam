@@ -129,10 +129,8 @@ spec:
           mountPath: /var/run/secrets/tokens
           readOnly: true
         {{- end }}
-      volumes:
-      - name: router-data
-        emptyDir: {}
       {{- if .Values.router.useOidcToken }}
+      volumes:
       - name: sam-token
         projected:
           sources:
@@ -141,4 +139,12 @@ spec:
               expirationSeconds: 3600
               audience: "sam-control-plane-audience"
       {{- end }}
+  volumeClaimTemplates:
+  - metadata:
+      name: router-data
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      resources:
+        requests:
+          storage: {{ .Values.router.storageSize | quote }}
 {{- end }}
