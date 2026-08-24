@@ -12,9 +12,15 @@ metadata:
   labels:
     {{- include "sam-mesh.labels" . | nindent 4 }}
 rules:
+# resourceNames cannot restrict create (the name is unknown at admission),
+# so it gets a bare rule; everything else is pinned to the router-token secret.
 - apiGroups: [""]
   resources: ["secrets"]
-  verbs: ["get", "create", "delete", "patch", "update"]
+  verbs: ["create"]
+- apiGroups: [""]
+  resources: ["secrets"]
+  resourceNames: ["{{ include "sam-mesh.fullname" . }}-router-token"]
+  verbs: ["get", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
