@@ -320,9 +320,19 @@
                     <div class="section-header">
                         <h2>Mesh Security Policies</h2>
                     </div>
-                    <div class="card" style="padding: 2rem;">
-                        <textarea id="policy-yaml" style="width: 100%; height: 450px; font-family: monospace; background: rgba(0,0,0,0.2); color: #a5a1b8; border: 1px solid var(--border-color); border-radius: 0.5rem; padding: 1rem; margin-bottom: 1.5rem;" placeholder="# Loading policies..."></textarea>
-                        <button class="btn btn-primary" onclick="savePolicy()">Save & Apply Policy</button>
+                    <div class="card policy-editor">
+                        <p class="policy-hint">
+                            Edited as YAML, submitted as the JSON the control plane's policy API accepts.
+                            Field names mirror the API schema exactly.
+                        </p>
+                        <textarea id="policy-yaml" class="code-editor" spellcheck="false" wrap="off"
+                                  aria-label="Mesh policy document" aria-describedby="policy-error"
+                                  placeholder="roles:&#10;  - name: dev&#10;    allowed_services: [&quot;mcp://git&quot;]&#10;    allowed_targets: [&quot;group:eng&quot;]&#10;bindings:&#10;  - role: dev&#10;    members: [&quot;user:bob&quot;]"></textarea>
+                        <p id="policy-error" class="editor-error" role="alert" hidden></p>
+                        <div class="policy-actions">
+                            <button class="btn btn-primary" id="policy-save" onclick="savePolicy()">Save &amp; Apply Policy</button>
+                            <span id="policy-dirty" class="policy-dirty" hidden>Unsaved changes</span>
+                        </div>
                     </div>
                 </section>
             </div>
@@ -330,6 +340,7 @@
     </div>
     <!-- Transient action feedback, announced as it arrives. -->
     <div id="toast-container" class="toast-container" role="status" aria-live="polite"></div>
+    <script src="vendor/js-yaml.min.js"></script>
     <script src="app.js"></script>
 </body>
 </html>

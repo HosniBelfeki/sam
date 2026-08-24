@@ -228,8 +228,8 @@ test('action feedback is a dismissible toast, not a native dialog', async ({ pag
     await d.dismiss();
   });
 
-  await page.fill('#policy-yaml', '# applied by playwright\n');
-  await page.click('button:has-text("Save & Apply Policy")');
+  await page.fill('#policy-yaml', 'roles:\n  - name: dev\n    allowed_services: ["mcp://git"]\n    allowed_targets: ["group:eng"]\nbindings:\n  - role: dev\n    members: ["user:bob"]\n');
+  await page.click('#policy-save');
 
   const toast = page.locator('#toast-container .toast');
   await expect(toast).toHaveClass(/toast-success/);
@@ -243,4 +243,55 @@ test('action feedback is a dismissible toast, not a native dialog', async ({ pag
   await page.click('.nav-item[data-target="overview"]');
   await expect(page.locator('#view-overview')).toBeVisible();
   expect(dialogs).toBe(0);
+});
+
+// The editor is YAML for readability, but the API speaks protojson. The console
+// converts, so a saved policy must come back as the same document.
+test('the policy editor round-trips through the API', async ({ page }) => {
+  await login(page);
+  await page.click('.nav-item[data-target="policy"]');
+
+  const policy = 'roles:\n  - name: reviewer\n    allowed_services: ["mcp://code-reviewer"]\n    allowed_targets: ["group:eng"]\n    custom_datalog: [\'right("data:read");\']\nbindings:\n  - role: reviewer\n    members: ["user:carol"]\n';
+  await page.fill('#policy-yaml', policy);
+
+  const posted = page.waitForRequest((r) => r.url().endsWith('/policies') && r.method() === 'POST');
+  await page.click('#policy-save');
+
+  // It must go over the wire as protojson, not as the YAML in the textarea.
+  const request = await posted;
+  expect(request.headers()['content-type']).toContain('application/json');
+  const body = JSON.parse(request.postData());
+  expect(body.roles[0].name).toBe('reviewer');
+  expect(body.roles[0].custom_datalog).toEqual(['right("data:read");']);
+
+  await expect(page.locator('#toast-container .toast')).toHaveClass(/toast-success/);
+
+  // Reload and confirm the stored policy renders back into the editor, with the
+  // custom_datalog that earlier renderers silently dropped.
+  await page.reload();
+  await page.click('.nav-item[data-target="policy"]');
+  const reloaded = await page.locator('#policy-yaml').inputValue();
+  expect(reloaded).toContain('reviewer');
+  expect(reloaded).toContain('custom_datalog');
+  expect(reloaded).toContain('mcp://code-reviewer');
+});
+
+test('invalid YAML is reported inline and blocks saving', async ({ page }) => {
+  await login(page);
+  await page.click('.nav-item[data-target="policy"]');
+
+  await expect(page.locator('#policy-error')).toBeHidden();
+  await expect(page.locator('#policy-save')).toBeEnabled();
+
+  await page.fill('#policy-yaml', 'roles:\n  - name: dev\n   bad indentation here\n');
+
+  const error = page.locator('#policy-error');
+  await expect(error).toBeVisible();
+  await expect(page.locator('#policy-save')).toBeDisabled();
+  await expect(page.locator('#policy-yaml')).toHaveAttribute('aria-invalid', 'true');
+
+  // Recovering must re-enable the button rather than requiring a reload.
+  await page.fill('#policy-yaml', 'roles: []\nbindings: []\n');
+  await expect(error).toBeHidden();
+  await expect(page.locator('#policy-save')).toBeEnabled();
 });

@@ -29,7 +29,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -48,7 +47,6 @@ import (
 	"golang.org/x/time/rate"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
-	"gopkg.in/yaml.v2"
 )
 
 var logger = golog.Logger("sam-control-plane")
@@ -978,22 +976,13 @@ func (s *Server) HandlePolicies(w http.ResponseWriter, r *http.Request) {
 		defer func() { _ = r.Body.Close() }()
 
 		req := &api.PolicyConfigUpdateRequest{}
-		contentType := r.Header.Get("Content-Type")
-		switch {
-		case strings.HasPrefix(contentType, "application/json"):
+		if strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
 			unmarshaler := protojson.UnmarshalOptions{DiscardUnknown: true}
 			if err := unmarshaler.Unmarshal(body, req); err != nil {
 				http.Error(w, "Invalid JSON format: "+err.Error(), http.StatusBadRequest)
 				return
 			}
-		case strings.HasPrefix(contentType, "application/yaml"), strings.HasPrefix(contentType, "text/yaml"):
-			parsed, err := parsePolicyYAML(body)
-			if err != nil {
-				http.Error(w, "Invalid YAML format: "+err.Error(), http.StatusBadRequest)
-				return
-			}
-			req = parsed
-		default:
+		} else {
 			if err := proto.Unmarshal(body, req); err != nil {
 				http.Error(w, "Invalid request format", http.StatusBadRequest)
 				return
@@ -1753,9 +1742,11 @@ func (s *Server) HandleUserStatus(w http.ResponseWriter, r *http.Request) {
 		logger.Errorf("Failed to list policy: %v", err)
 	}
 
-	var policyYAML string
-	if yamlBytes, err := yaml.Marshal(newPolicyDocument(roles, bindings)); err == nil {
-		policyYAML = string(yamlBytes)
+	var policyJSON string
+	if rendered, err := marshalPolicyJSON(roles, bindings); err == nil {
+		policyJSON = rendered
+	} else {
+		logger.Errorf("Failed to render policy: %v", err)
 	}
 
 	resp := map[string]any{
@@ -1767,7 +1758,7 @@ func (s *Server) HandleUserStatus(w http.ResponseWriter, r *http.Request) {
 		"active_routers":   routers,
 		"enrolled_nodes":   nodes,
 		"bootstrap_tokens": tokens,
-		"policy_yaml":      policyYAML,
+		"policy_json":      policyJSON,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -2013,79 +2004,18 @@ func toStringSlice(val any) []string {
 	return nil
 }
 
-// policyDocument is the YAML rendering of a mesh policy. It is both what
-// /user/status and /admin/status hand the console and what POST /policies
-// accepts back, so an operator can round-trip the text they were shown. Keep
-// every PolicyRole field represented here: anything omitted is silently dropped
-// on save.
-type policyDocument struct {
-	Roles    map[string]policyDocumentRole `yaml:"roles"`
-	Bindings []policyDocumentBinding       `yaml:"bindings"`
-}
-
-type policyDocumentRole struct {
-	AllowedServices []string `yaml:"allowed_services"`
-	AllowedTargets  []string `yaml:"allowed_targets"`
-	CustomDatalog   []string `yaml:"custom_datalog,omitempty"`
-}
-
-type policyDocumentBinding struct {
-	Role    string   `yaml:"role"`
-	Members []string `yaml:"members"`
-}
-
-func newPolicyDocument(roles []*api.PolicyRole, bindings []*api.PolicyBinding) policyDocument {
-	doc := policyDocument{
-		Roles:    make(map[string]policyDocumentRole, len(roles)),
-		Bindings: make([]policyDocumentBinding, 0, len(bindings)),
+// marshalPolicyJSON renders the stored mesh policy as protojson using the proto
+// field names. Generated marshalling is the point: a hand-maintained mirror of
+// PolicyRole silently drops any field it forgets, which is how custom_datalog
+// went missing from the console for so long.
+func marshalPolicyJSON(roles []*api.PolicyRole, bindings []*api.PolicyBinding) (string, error) {
+	resp := &api.PolicyConfigGetResponse{Roles: roles, Bindings: bindings}
+	marshaler := protojson.MarshalOptions{UseProtoNames: true, Multiline: true, Indent: "  "}
+	out, err := marshaler.Marshal(resp)
+	if err != nil {
+		return "", err
 	}
-	for _, role := range roles {
-		if role == nil {
-			continue
-		}
-		doc.Roles[role.Name] = policyDocumentRole{
-			AllowedServices: role.AllowedServices,
-			AllowedTargets:  role.AllowedTargets,
-			CustomDatalog:   role.CustomDatalog,
-		}
-	}
-	for _, b := range bindings {
-		if b == nil {
-			continue
-		}
-		doc.Bindings = append(doc.Bindings, policyDocumentBinding{Role: b.Role, Members: b.Members})
-	}
-	return doc
-}
-
-// parsePolicyYAML converts the console's editable YAML back into an update
-// request. Role order is not preserved by the YAML map, but the policy is a set,
-// and validatePolicyConfig rejects duplicates.
-func parsePolicyYAML(body []byte) (*api.PolicyConfigUpdateRequest, error) {
-	var doc policyDocument
-	if err := yaml.UnmarshalStrict(body, &doc); err != nil {
-		return nil, err
-	}
-
-	req := &api.PolicyConfigUpdateRequest{}
-	names := make([]string, 0, len(doc.Roles))
-	for name := range doc.Roles {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		role := doc.Roles[name]
-		req.Roles = append(req.Roles, &api.PolicyRole{
-			Name:            name,
-			AllowedTargets:  role.AllowedTargets,
-			AllowedServices: role.AllowedServices,
-			CustomDatalog:   role.CustomDatalog,
-		})
-	}
-	for _, b := range doc.Bindings {
-		req.Bindings = append(req.Bindings, &api.PolicyBinding{Role: b.Role, Members: b.Members})
-	}
-	return req, nil
+	return string(out), nil
 }
 
 // maxIdentityFactBudget bounds the worst-case number of Datalog facts a policy

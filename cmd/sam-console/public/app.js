@@ -21,6 +21,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     document.getElementById('resource-search').addEventListener('input', applySearchFilter);
 
+    const policyEditor = document.getElementById('policy-yaml');
+    policyEditor.addEventListener('input', validatePolicyEditor);
+    policyEditor.addEventListener('keydown', handlePolicyEditorKeydown);
+
     // Warn before a reload or a close discards an in-progress policy edit.
     window.addEventListener('beforeunload', (e) => {
         if (policyIsDirty()) {
@@ -245,9 +249,10 @@ async function loadData() {
         renderBootstrapTokensTable(data.bootstrap_tokens || []);
 
         const policyArea = document.getElementById('policy-yaml');
-        if (policyArea && data.policy_yaml !== undefined && !policyIsDirty()) {
-            policyArea.value = data.policy_yaml || '';
+        if (policyArea && data.policy_json !== undefined && !policyIsDirty()) {
+            policyArea.value = renderPolicyYAML(data.policy_json);
             policyBaseline = policyArea.value;
+            validatePolicyEditor();
         }
 
         applySearchFilter();
@@ -522,6 +527,20 @@ function policyIsDirty() {
     return area !== null && area.value !== policyBaseline;
 }
 
+// The control plane sends the policy as protojson. Showing it as YAML keeps the
+// document readable without either side hand-maintaining a second field list.
+function renderPolicyYAML(policyJSON) {
+    if (!policyJSON) {
+        return '';
+    }
+    try {
+        return jsyaml.dump(JSON.parse(policyJSON), { indent: 2, lineWidth: -1, noRefs: true });
+    } catch (err) {
+        // Better to show the operator the raw document than an empty editor.
+        return policyJSON;
+    }
+}
+
 function switchTab(target) {
     const navItems = document.querySelectorAll('.nav-item');
     const viewSections = document.querySelectorAll('.view-section');
@@ -693,13 +712,26 @@ window.copyGeneratedToken = async function() {
 window.savePolicy = async function() {
     const yamlContent = document.getElementById('policy-yaml').value;
 
+    let policy;
     try {
+        policy = parsePolicyDocument(yamlContent);
+    } catch (err) {
+        setPolicyError(err.message);
+        showToast('Policy is not valid YAML. Fix the reported error first.', 'error');
+        return;
+    }
+
+    try {
+        // The policy API speaks protojson; YAML is only the editing surface, so the
+        // document goes over the wire in the shape the API documents.
         const response = await fetch('api/policies', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/yaml' },
-            body: yamlContent
-        });        if (response.ok) {
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(policy)
+        });
+        if (response.ok) {
             policyBaseline = yamlContent;
+            updatePolicyDirtyIndicator();
             showToast('Mesh policy updated and applied.', 'success');
             loadData();
         } else {
@@ -710,6 +742,69 @@ window.savePolicy = async function() {
         showToast('Network error: ' + err.message, 'error');
     }
 };
+
+// Throws with js-yaml's line and column detail so the editor can show it verbatim.
+function parsePolicyDocument(text) {
+    if (text.trim() === '') {
+        return {};
+    }
+    const parsed = jsyaml.load(text);
+    if (parsed === null || parsed === undefined) {
+        return {};
+    }
+    if (typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error('The policy must be a mapping of fields, not a list or a single value.');
+    }
+    return parsed;
+}
+
+function setPolicyError(message) {
+    const box = document.getElementById('policy-error');
+    const editor = document.getElementById('policy-yaml');
+    const save = document.getElementById('policy-save');
+    if (!box || !editor) return;
+
+    box.textContent = message || '';
+    box.hidden = !message;
+    editor.classList.toggle('is-invalid', Boolean(message));
+    editor.setAttribute('aria-invalid', message ? 'true' : 'false');
+    if (save) {
+        save.disabled = Boolean(message);
+    }
+}
+
+function validatePolicyEditor() {
+    const editor = document.getElementById('policy-yaml');
+    if (!editor) return;
+    try {
+        parsePolicyDocument(editor.value);
+        setPolicyError('');
+    } catch (err) {
+        setPolicyError(err.message);
+    }
+    updatePolicyDirtyIndicator();
+}
+
+function updatePolicyDirtyIndicator() {
+    const indicator = document.getElementById('policy-dirty');
+    if (indicator) {
+        indicator.hidden = !policyIsDirty();
+    }
+}
+
+// YAML forbids tabs for indentation, so Tab has to insert spaces or the document
+// becomes unparseable the moment someone reaches for it.
+function handlePolicyEditorKeydown(e) {
+    if (e.key !== 'Tab' || e.ctrlKey || e.altKey || e.metaKey) {
+        return;
+    }
+    e.preventDefault();
+    const editor = e.currentTarget;
+    const start = editor.selectionStart;
+    editor.value = editor.value.slice(0, start) + '  ' + editor.value.slice(editor.selectionEnd);
+    editor.selectionStart = editor.selectionEnd = start + 2;
+    validatePolicyEditor();
+}
 
 function escapeHTML(str) {
     if (!str) return '-';

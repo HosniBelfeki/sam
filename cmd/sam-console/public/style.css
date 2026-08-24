@@ -105,6 +105,66 @@ body {
     to { opacity: 1; transform: translateX(0); }
 }
 
+/* Policy editor */
+.policy-editor {
+    padding: 2rem;
+}
+
+.policy-hint {
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+    margin-bottom: 1rem;
+}
+
+.code-editor {
+    width: 100%;
+    height: 450px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.85rem;
+    line-height: 1.6;
+    tab-size: 2;
+    background: rgba(0, 0, 0, 0.25);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 0.5rem;
+    padding: 1rem;
+    resize: vertical;
+}
+
+.code-editor.is-invalid {
+    border-color: var(--danger);
+}
+
+.editor-error {
+    margin-top: 0.75rem;
+    padding: 10px 14px;
+    border-radius: 6px;
+    border: 1px solid var(--danger);
+    background: rgba(239, 68, 68, 0.1);
+    color: var(--text-primary);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.8rem;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.policy-actions {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-top: 1.5rem;
+}
+
+.btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.policy-dirty {
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+}
+
 /* Layout */
 .app-container {
     display: flex;

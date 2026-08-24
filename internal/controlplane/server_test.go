@@ -29,6 +29,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -41,8 +42,8 @@ import (
 	"github.com/google/sam/internal/storage"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
-	"gopkg.in/yaml.v2"
 )
 
 func startCustomMockOIDC(t *testing.T) (string, func(claims map[string]interface{}) string) {
@@ -439,10 +440,11 @@ func TestNodeAndRouterRegistrationFlow(t *testing.T) {
 	}
 }
 
-// The console shows the operator this YAML and posts the edited text straight
-// back, so anything the render drops is silently deleted from the mesh policy on
-// the next save.
-func TestPolicyYAMLRoundTrip(t *testing.T) {
+// The console renders this JSON for editing and posts the result straight back,
+// so anything the render drops is silently deleted from the mesh policy on the
+// next save. protojson is generated, which is the point: a hand-written renderer
+// is what lost custom_datalog before.
+func TestMarshalPolicyJSONRoundTrip(t *testing.T) {
 	roles := []*api.PolicyRole{
 		{
 			Name:            "dev",
@@ -460,33 +462,30 @@ func TestPolicyYAMLRoundTrip(t *testing.T) {
 		{Role: "ops", Members: []string{"user:root"}},
 	}
 
-	rendered, err := yaml.Marshal(newPolicyDocument(roles, bindings))
+	rendered, err := marshalPolicyJSON(roles, bindings)
 	if err != nil {
-		t.Fatalf("rendering the policy document: %v", err)
+		t.Fatalf("rendering the policy: %v", err)
 	}
 
-	parsed, err := parsePolicyYAML(rendered)
-	if err != nil {
+	// Proto names, because that is what the docs and the Helm bootstrap job use.
+	if !strings.Contains(rendered, "allowed_services") || !strings.Contains(rendered, "custom_datalog") {
+		t.Fatalf("rendered policy does not use proto field names:\n%s", rendered)
+	}
+
+	// Exactly what the console posts back.
+	parsed := &api.PolicyConfigUpdateRequest{}
+	if err := protojson.Unmarshal([]byte(rendered), parsed); err != nil {
 		t.Fatalf("parsing back the rendered policy: %v\n%s", err, rendered)
 	}
 
 	if len(parsed.Roles) != len(roles) {
 		t.Fatalf("got %d roles, want %d", len(parsed.Roles), len(roles))
 	}
-	byName := make(map[string]*api.PolicyRole, len(parsed.Roles))
-	for _, r := range parsed.Roles {
-		byName[r.Name] = r
-	}
-	for _, want := range roles {
-		got, ok := byName[want.Name]
-		if !ok {
-			t.Fatalf("role %q was lost in the round trip", want.Name)
-		}
-		if !proto.Equal(got, want) {
-			t.Errorf("role %q round-tripped as %v, want %v", want.Name, got, want)
+	for i, want := range roles {
+		if !proto.Equal(parsed.Roles[i], want) {
+			t.Errorf("role %d round-tripped as %v, want %v", i, parsed.Roles[i], want)
 		}
 	}
-
 	if len(parsed.Bindings) != len(bindings) {
 		t.Fatalf("got %d bindings, want %d", len(parsed.Bindings), len(bindings))
 	}
@@ -502,16 +501,75 @@ func TestPolicyYAMLRoundTrip(t *testing.T) {
 	}
 }
 
-func TestParsePolicyYAMLRejectsGarbage(t *testing.T) {
-	for name, body := range map[string]string{
-		"not yaml":        "\tnot: [valid",
-		"wrong shape":     "roles: a string",
-		"unknown field":   "roles: {}\nbindings: []\nsurprise: 1",
-		"scalar document": "42",
-	} {
-		if _, err := parsePolicyYAML([]byte(body)); err == nil {
-			t.Errorf("%s: parsePolicyYAML accepted %q", name, body)
-		}
+// The console posts the policy editor's contents as protojson, so this is the
+// path the only editor a mesh operator has depends on.
+func TestPoliciesAcceptConsoleJSON(t *testing.T) {
+	issuer, _ := startCustomMockOIDC(t)
+	srv, store, baseURL := setupTestServer(t, issuer)
+	defer func() {
+		_ = srv.Close()
+		_ = store.Close()
+	}()
+
+	srv.config.AdminToken = "super-secret-admin-token"
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	// Proto field names, exactly as the docs and the Helm bootstrap job write them.
+	policy := `{
+	  "roles": [
+	    {
+	      "name": "dev",
+	      "allowed_services": ["mcp://git"],
+	      "allowed_targets": ["group:eng"],
+	      "custom_datalog": ["right(\"data:read\");"]
+	    }
+	  ],
+	  "bindings": [{"role": "dev", "members": ["user:bob"]}]
+	}`
+
+	req, _ := http.NewRequest(http.MethodPost, baseURL+"/policies", strings.NewReader(policy))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer super-secret-admin-token")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("POST /policies: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /policies as JSON: got %s (body: %s)", resp.Status, body)
+	}
+
+	roles, bindings, err := store.GetMeshPolicy(context.Background())
+	if err != nil {
+		t.Fatalf("reading back the stored policy: %v", err)
+	}
+	if len(roles) != 1 || roles[0].Name != "dev" {
+		t.Fatalf("stored roles = %v, want a single role named dev", roles)
+	}
+	if len(roles[0].CustomDatalog) != 1 {
+		t.Errorf("custom_datalog was dropped on save: %v", roles[0])
+	}
+	if len(bindings) != 1 || bindings[0].Role != "dev" {
+		t.Fatalf("stored bindings = %v, want a single binding for dev", bindings)
+	}
+
+	// What /status hands the console must be postable back unchanged.
+	rendered, err := marshalPolicyJSON(roles, bindings)
+	if err != nil {
+		t.Fatalf("rendering the stored policy: %v", err)
+	}
+	req, _ = http.NewRequest(http.MethodPost, baseURL+"/policies", strings.NewReader(rendered))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer super-secret-admin-token")
+	resp, err = client.Do(req)
+	if err != nil {
+		t.Fatalf("re-posting the rendered policy: %v", err)
+	}
+	body, _ = io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("re-posting the rendered policy: got %s (body: %s)", resp.Status, body)
 	}
 }
 

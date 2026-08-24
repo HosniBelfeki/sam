@@ -17,8 +17,6 @@ package controlplane
 import (
 	"encoding/json"
 	"net/http"
-
-	"gopkg.in/yaml.v2"
 )
 
 // HandleAdminStatus returns a consolidated JSON state of the control plane.
@@ -74,36 +72,11 @@ func (s *Server) HandleAdminStatus(w http.ResponseWriter, r *http.Request) {
 		logger.Errorf("Failed to list policy: %v", err)
 	}
 
-	type displayRole struct {
-		AllowedServices []string `yaml:"allowed_services"`
-		AllowedTargets  []string `yaml:"allowed_targets"`
-	}
-	type displayBinding struct {
-		Role    string   `yaml:"role"`
-		Members []string `yaml:"members"`
-	}
-	displayMap := map[string]interface{}{
-		"roles":    make(map[string]displayRole),
-		"bindings": make([]displayBinding, 0),
-	}
-
-	for _, role := range roles {
-		displayMap["roles"].(map[string]displayRole)[role.Name] = displayRole{
-			AllowedServices: role.AllowedServices,
-			AllowedTargets:  role.AllowedTargets,
-		}
-	}
-	for _, b := range bindings {
-		displayMap["bindings"] = append(displayMap["bindings"].([]displayBinding), displayBinding{
-			Role:    b.Role,
-			Members: b.Members,
-		})
-	}
-
-	var policyYAML string
-	yamlBytes, err := yaml.Marshal(displayMap)
-	if err == nil {
-		policyYAML = string(yamlBytes)
+	var policyJSON string
+	if rendered, err := marshalPolicyJSON(roles, bindings); err == nil {
+		policyJSON = rendered
+	} else {
+		logger.Errorf("Failed to render policy: %v", err)
 	}
 
 	resp := map[string]any{
@@ -112,7 +85,7 @@ func (s *Server) HandleAdminStatus(w http.ResponseWriter, r *http.Request) {
 		"enrolled_nodes":      nodes,
 		"enrollment_requests": reqs,
 		"bootstrap_tokens":    tokens,
-		"policy_yaml":         policyYAML,
+		"policy_json":         policyJSON,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
