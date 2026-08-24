@@ -204,6 +204,48 @@ attenuation:
 `,
 			wantErr: true,
 		},
+		{
+			// A node must refuse a schema it cannot read rather than reinterpret it
+			// as v1alpha1, which would silently reinterpret its attenuation rules.
+			name: "Unsupported future config version",
+			yamlContent: `
+version: "v2"
+services:
+  - type: "mcp"
+    name: "db-reader"
+    target_url: "http://127.0.0.1:5001/mcp"
+`,
+			wantErr: true,
+		},
+		{
+			name: "Version omitted is read as the original schema",
+			yamlContent: `
+services:
+  - type: "mcp"
+    name: "db-reader"
+    target_url: "http://127.0.0.1:5001/mcp"
+`,
+			wantErr: false,
+			verify: func(t *testing.T, config *NodeConfigComplete) {
+				if len(config.Services) != 1 {
+					t.Fatalf("got %d services, want 1", len(config.Services))
+				}
+			},
+		},
+		{
+			// Dropping an unrecognised key under attenuation would quietly weaken
+			// the node, so an unknown key is an error rather than a no-op.
+			name: "Unknown key is rejected",
+			yamlContent: `
+version: "v1alpha1"
+attenuation:
+  policies:
+    - 'deny if user("bob");'
+  policiez:
+    - 'deny if user("alice");'
+`,
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
