@@ -197,6 +197,12 @@ helm-lint:
 lint: fmt helm-lint
 	hack/lint.sh
 
+# fast chart template checks; no cluster needed
+.PHONY: helm-test
+helm-test:
+	@helm plugin list 2>/dev/null | grep -q '^unittest' || helm plugin install https://github.com/helm-unittest/helm-unittest --verify=false
+	helm unittest charts/sam-mesh
+
 .PHONY: verify
 verify:
 	./hack/verify-generated.sh
