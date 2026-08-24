@@ -47,6 +47,9 @@ controlPlane:
   # (comma-separated for more than one); the control plane refuses to start without one.
   oidcIssuer: ""
   allowedAudiences: "sam-mesh-audience,sam-control-plane-audience"
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
   podSecurityContext:
     runAsNonRoot: true
     # Dockerfiles say "USER nonroot" by name; runAsNonRoot needs the numeric uid.
@@ -85,6 +88,9 @@ database:
     port: 5432
     sslmode: disable
     storageSize: 1Gi
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
     resources:
       requests:
         cpu: 100m
@@ -119,6 +125,8 @@ router:
   # transports. One router per node.
   hostPort: null
   nodeSelector: {}
+  tolerations: []
+  affinity: {}
   # Overrides the announced multiaddrs; derived from hostPort when left empty.
   externalAddrs: []
   allowLoopback: false
@@ -142,6 +150,9 @@ console:
     repository: sam-console
     # Overrides global.imageTag for this image only.
     tag: ""
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
   podSecurityContext:
     runAsNonRoot: true
     # Dockerfiles say "USER nonroot" by name; runAsNonRoot needs the numeric uid.

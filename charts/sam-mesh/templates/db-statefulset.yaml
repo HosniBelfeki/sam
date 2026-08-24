@@ -16,6 +16,18 @@ spec:
       labels:
         app: {{ include "sam-mesh.fullname" . }}-db
     spec:
+      {{- with .Values.database.postgres.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.database.postgres.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.database.postgres.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
       - name: postgres
         image: "{{ .Values.database.postgres.image.repository }}:{{ .Values.database.postgres.image.tag }}"

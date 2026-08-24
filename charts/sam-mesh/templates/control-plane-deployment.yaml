@@ -17,6 +17,18 @@ spec:
       labels:
         app: {{ include "sam-mesh.fullname" . }}-control-plane
     spec:
+      {{- with .Values.controlPlane.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.controlPlane.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.controlPlane.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- with .Values.controlPlane.podSecurityContext }}
       securityContext:
         {{- toYaml . | nindent 8 }}

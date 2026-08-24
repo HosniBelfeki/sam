@@ -18,6 +18,18 @@ spec:
       labels:
         app: {{ include "sam-mesh.fullname" . }}-console
     spec:
+      {{- with .Values.console.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.console.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.console.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- with .Values.console.podSecurityContext }}
       securityContext:
         {{- toYaml . | nindent 8 }}
