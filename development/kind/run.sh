@@ -15,8 +15,6 @@ HELM="helm"
 # cloud-provider-kind GatewayClass itself, so the cluster needs no CRD step.
 CPK_CONTAINER="cloud-provider-kind"
 CPK_IMAGE="registry.k8s.io/cloud-provider-kind/cloud-controller-manager:v0.11.1"
-# The console shares the control plane's gateway under this prefix, as it does on the
-# cloud: the route rewrites the prefix away before the console sees the request.
 CONSOLE_BASE_PATH="/console"
 
 

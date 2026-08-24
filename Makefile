@@ -194,6 +194,12 @@ helm-lint:
 	fi; \
 	$$HELM_BIN lint ./charts/sam-mesh
 
+# render the chart to bin/chart/ for inspection; pass extra flags via ARGS, e.g. ARGS="--set gateway.enabled=true"
+.PHONY: helm-template
+helm-template:
+	rm -rf bin/chart
+	helm template sam-mesh ./charts/sam-mesh --output-dir bin/chart $(ARGS)
+
 lint: fmt helm-lint
 	hack/lint.sh
 

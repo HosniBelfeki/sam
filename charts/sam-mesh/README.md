@@ -2,7 +2,7 @@
 
 Deploys a self-contained SAM mesh (control plane, router, console, and an
 in-cluster Postgres) for local development, testing, or self-hosting your
-own hub.
+own mesh.
 
 > For large-scale production deployments (GKE/EKS/AKS) using externally
 > managed Postgres/DNS/OIDC, see the
@@ -81,11 +81,11 @@ The route exposes only the control plane's enrollment surface (`/register`,
 including `/admin` and `/user`, is unrouted. `gateway.adminRoute: true`
 additionally routes `/admin` — a dev convenience, leave it off in production.
 
-The console rules mirror the cloud deployment exactly: the bare prefix
-(`/console`) is answered with a 302 to `/console/`, and a `URLRewrite` filter
-strips the prefix before the request reaches the console. `URLRewrite` is
-**Extended** (not core) Gateway API conformance, so the provider must support
-it. Set `gateway.consolePath: ""` to leave the console unrouted.
+For the console, the bare prefix (`/console`) is answered with a 302 to
+`/console/`, and a `URLRewrite` filter strips the prefix before the request
+reaches the console. `URLRewrite` is **Extended** (not core) Gateway API
+conformance, so the provider must support it. Set `gateway.consolePath: ""`
+to leave the console unrouted.
 
 `listeners`, `hostnames`, `addresses` and `annotations` are passed through to
 the Gateway API objects verbatim, so anything the spec allows is expressible.
@@ -106,14 +106,14 @@ gateway:
     allowedRoutes:
       namespaces:
         from: Same
-  hostnames: [hub.example.com]
+  hostnames: [sam.example.com]
   addresses:
   - type: NamedAddress
-    value: sam-hub-ip
+    value: sam-cp-ip
 ```
 
 ## OIDC login for the console
 
 There is no bundled Dex. Point `controlPlane.oidcIssuer` at your identity
-provider and register `https://<hub-hostname><consolePath>/auth/callback` as
+provider and register `https://<control-plane-hostname><consolePath>/auth/callback` as
 a redirect URI for the OIDC client the control plane reports.
