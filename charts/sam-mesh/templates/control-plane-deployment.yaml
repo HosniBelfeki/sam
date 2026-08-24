@@ -20,7 +20,7 @@ spec:
       {{- end }}
       containers:
       - name: sam-control-plane
-        image: "{{ .Values.controlPlane.image.repository }}:{{ .Values.global.imageTag }}"
+        image: "{{ .Values.controlPlane.image.repository }}:{{ .Values.controlPlane.image.tag | default .Values.global.imageTag }}"
         imagePullPolicy: {{ .Values.global.imagePullPolicy }}
         {{- with .Values.controlPlane.securityContext }}
         securityContext:
