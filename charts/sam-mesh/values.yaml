@@ -45,6 +45,17 @@ controlPlane:
   # (comma-separated for more than one); the control plane refuses to start without one.
   oidcIssuer: ""
   allowedAudiences: "sam-mesh-audience,sam-control-plane-audience"
+  podSecurityContext:
+    runAsNonRoot: true
+    # Dockerfiles say "USER nonroot" by name; runAsNonRoot needs the numeric uid.
+    runAsUser: 65532
+    runAsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: ["ALL"]
   resources:
     requests:
       cpu: 100m
@@ -84,8 +95,18 @@ router:
   enabled: true
   replicaCount: 1
   podSecurityContext:
+    runAsNonRoot: true
+    # Dockerfiles say "USER nonroot" by name; runAsNonRoot needs the numeric uid.
+    runAsUser: 65532
+    runAsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
     fsGroup: 65532
     fsGroupChangePolicy: "OnRootMismatch"
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: ["ALL"]
   image:
     repository: sam-router
   useOidcToken: false
@@ -113,6 +134,17 @@ console:
   replicaCount: 1
   image:
     repository: sam-console
+  podSecurityContext:
+    runAsNonRoot: true
+    # Dockerfiles say "USER nonroot" by name; runAsNonRoot needs the numeric uid.
+    runAsUser: 65532
+    runAsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: ["ALL"]
   resources:
     requests:
       cpu: 50m

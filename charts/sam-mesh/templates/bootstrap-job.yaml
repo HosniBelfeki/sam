@@ -49,10 +49,20 @@ spec:
     spec:
       serviceAccountName: {{ include "sam-mesh.fullname" . }}-bootstrap-sa
       restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+        # curlimages/curl's USER is non-numeric; runAsNonRoot needs an explicit uid.
+        runAsUser: 100
+        seccompProfile:
+          type: RuntimeDefault
       containers:
       - name: bootstrap
         image: curlimages/curl:8.6.0
         imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
         env:
         - name: NAMESPACE
           value: {{ .Release.Namespace | quote }}

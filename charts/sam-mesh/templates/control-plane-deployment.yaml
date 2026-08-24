@@ -14,10 +14,18 @@ spec:
       labels:
         app: {{ include "sam-mesh.fullname" . }}-control-plane
     spec:
+      {{- with .Values.controlPlane.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
       - name: sam-control-plane
         image: "{{ .Values.controlPlane.image.repository }}:{{ .Values.global.imageTag }}"
         imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+        {{- with .Values.controlPlane.securityContext }}
+        securityContext:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
         env:
         - name: DB_PASSWORD
           valueFrom:

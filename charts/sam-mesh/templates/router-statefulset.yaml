@@ -36,6 +36,12 @@ spec:
       - name: wait-control-plane
         image: curlimages/curl:8.6.0
         imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+        securityContext:
+          # curlimages/curl's USER is non-numeric; runAsNonRoot needs an explicit uid.
+          runAsUser: 100
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
         command: ["/bin/sh", "-c"]
         args:
         - |
@@ -49,6 +55,10 @@ spec:
       - name: sam-router
         image: "{{ .Values.router.image.repository }}:{{ .Values.global.imageTag }}"
         imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+        {{- with .Values.router.securityContext }}
+        securityContext:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
         ports:
         - containerPort: 4501
           name: p2p-tcp
