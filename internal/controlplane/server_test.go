@@ -573,6 +573,47 @@ func TestPoliciesAcceptConsoleJSON(t *testing.T) {
 	}
 }
 
+// A misspelled field is the difference between a permission being granted and
+// silently not existing, so it has to be an error rather than a discarded key.
+func TestPoliciesRejectUnknownJSONFields(t *testing.T) {
+	issuer, _ := startCustomMockOIDC(t)
+	srv, store, baseURL := setupTestServer(t, issuer)
+	defer func() {
+		_ = srv.Close()
+		_ = store.Close()
+	}()
+
+	srv.config.AdminToken = "super-secret-admin-token"
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	for name, policy := range map[string]string{
+		"misspelled role field": `{"roles": [{"name": "dev", "allowed_service": ["mcp://git"]}]}`,
+		"misspelled top level":  `{"role": [{"name": "dev"}]}`,
+		"legacy version key":    `{"version": "v1alpha1", "roles": [{"name": "dev"}]}`,
+	} {
+		req, _ := http.NewRequest(http.MethodPost, baseURL+"/policies", strings.NewReader(policy))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer super-secret-admin-token")
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("%s: POST /policies: %v", name, err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("%s: got status %d, want %d", name, resp.StatusCode, http.StatusBadRequest)
+		}
+	}
+
+	// Nothing should have been stored by any of those.
+	roles, bindings, err := store.GetMeshPolicy(context.Background())
+	if err != nil && err != storage.ErrNotFound {
+		t.Fatalf("reading back the stored policy: %v", err)
+	}
+	if len(roles) != 0 || len(bindings) != 0 {
+		t.Errorf("a rejected policy was stored anyway: roles=%v bindings=%v", roles, bindings)
+	}
+}
+
 func TestPoliciesConfigurationREST(t *testing.T) {
 	issuer, _ := startCustomMockOIDC(t)
 	srv, store, baseURL := setupTestServer(t, issuer)

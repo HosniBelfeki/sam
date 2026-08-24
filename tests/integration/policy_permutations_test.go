@@ -77,8 +77,7 @@ func TestPolicyPermutations(t *testing.T) {
 
 	// 1. Control plane policies
 	controlPlanePolicyFile := filepath.Join(tmpDir, "policies.yaml")
-	controlPlanePolicyYAML := `version: "v1alpha1"
-roles:
+	controlPlanePolicyYAML := `roles:
   - name: role-user
     allowed_services: ["mcp://test-user"]
     allowed_targets: ["user:bob-subject"]

@@ -977,8 +977,9 @@ func (s *Server) HandlePolicies(w http.ResponseWriter, r *http.Request) {
 
 		req := &api.PolicyConfigUpdateRequest{}
 		if strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
-			unmarshaler := protojson.UnmarshalOptions{DiscardUnknown: true}
-			if err := unmarshaler.Unmarshal(body, req); err != nil {
+			// Strict: an unknown field here is a typo like "allowed_service", and
+			// discarding it would quietly drop the permission it was meant to grant.
+			if err := protojson.Unmarshal(body, req); err != nil {
 				http.Error(w, "Invalid JSON format: "+err.Error(), http.StatusBadRequest)
 				return
 			}

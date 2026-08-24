@@ -44,8 +44,7 @@ func TestRouterFederationAndRelay(t *testing.T) {
 
 	// Create a mock policy file
 	policyFile := filepath.Join(tmpDir, "policies.yaml")
-	policyContent := `version: "v1alpha1"
-bindings:
+	policyContent := `bindings:
   - members: ["user:mock-user"]
     role: admin
 roles:

@@ -46,8 +46,7 @@ func TestFailoverUpdatesRelay(t *testing.T) {
 
 	// Create a mock policy file
 	policyFile := filepath.Join(tmpDir, "policies.yaml")
-	policyContent := `version: "v1alpha1"
-bindings: []
+	policyContent := `bindings: []
 roles: []
 `
 	writePolicyWithRouter(t, policyFile, policyContent)
