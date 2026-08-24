@@ -3,7 +3,7 @@ title: "SAM Policy & Authorization Reference"
 linkTitle: "SAM Policy & Authorization Reference"
 ---
 SAM uses a decentralized authorization model powered by [Biscuit](https://www.biscuitsec.org/). 
-The `sam-control-plane` authenticates users via OIDC and injects **Facts** into their token based on `policies.yaml`. The `sam-node` operates offline, evaluating the token against baseline rules and optional local attenuation policies.
+The `sam-control-plane` authenticates users via OIDC and injects **Facts** into their token based on the mesh policy held in its database. The `sam-node` operates offline, evaluating the token against baseline rules and optional local attenuation policies.
 
 > [!IMPORTANT]
 > **Default-Deny Security Posture**

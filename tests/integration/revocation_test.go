@@ -50,7 +50,7 @@ bindings:
   - members: ["user:mock-user"]
     role: admin
 roles:
-  admin:
+  - name: admin
     allowed_services: ["*"]
     allowed_targets: ["*"]
 `

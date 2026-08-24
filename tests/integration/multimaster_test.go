@@ -45,7 +45,7 @@ func TestMultiMasterControlPlane(t *testing.T) {
 	policyFile := filepath.Join(tmpDir, "policies.yaml")
 	policyContent := `version: "v1alpha1"
 bindings: []
-roles: {}
+roles: []
 `
 	writePolicyWithRouter(t, policyFile, policyContent)
 

@@ -93,32 +93,7 @@ kubectl rollout status deployment/dex -n dex
 
 The Control Plane verifies OIDC tokens and manages access policies. The Routers handle peer discovery and routing within the GossipSub mesh.
 
-### 1. Configure Access Control Policies (`policies.yaml`)
-Create a ConfigMap defining your global mesh access rules:
-```yaml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: sam-control-plane-policies
-  namespace: sam
-data:
-  policies.yaml: |
-    version: "v1alpha1"
-    bindings:
-      - members: ["user:system:serviceaccount:sam-nodes:sam-node-sa"]
-        role: "node-role"
-    roles:
-      node-role:
-        allowed_services:
-          - "*"
-        allowed_targets:
-          - "*"
-```
-```bash
-kubectl apply -f policies-configmap.yaml
-```
-
-### 2. Deploy SAM Control Plane
+### 1. Deploy SAM Control Plane
 The Control Plane is stateless and can scale horizontally. It connects to a shared PostgreSQL database to persist active leases and rotated capability signing keys.
 
 ```yaml
@@ -146,19 +121,34 @@ spec:
         - "--db-dsn=postgres://sam:password@sam-db-service:5432/sam_mesh?sslmode=disable"
         - "--issuer=https://AUTH.YOUR-DOMAIN.COM"
         - "--allowed-audiences=YOUR-CLIENT-AUDIENCE"
-        - "--policy-file=/etc/sam/policies/policies.yaml"
         ports:
         - containerPort: 8080
           name: http
-        volumeMounts:
-        - name: policies-volume
-          mountPath: /etc/sam/policies
-          readOnly: true
-      volumes:
-      - name: policies-volume
-        configMap:
-          name: sam-control-plane-policies
 ```
+
+### 2. Configure Access Control Policies
+The Control Plane starts **default closed**: until a policy is posted it authorizes
+nothing. Policy lives in the database, not on disk, so seed it through the admin
+API. Roles and bindings use the same schema everywhere, including the Mesh Policy
+editor in the console.
+
+```bash
+curl -sf -X POST \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer ${SAM_ADMIN_TOKEN}" \
+  -d '{
+    "roles": [
+      {"name": "node-role", "allowed_services": ["*"], "allowed_targets": ["*"]}
+    ],
+    "bindings": [
+      {"role": "node-role", "members": ["user:system:serviceaccount:sam-nodes:sam-node-sa"]}
+    ]
+  }' \
+  https://CONTROL-PLANE.YOUR-DOMAIN.COM/policies
+```
+
+The `sam-mesh` Helm chart runs this as a bootstrap Job for you; see
+`charts/sam-mesh/templates/bootstrap-job.yaml`.
 
 ### 3. Deploy SAM Router StatefulSet
 The Router must be deployed as a StatefulSet to allocate a persistent volume for storing its libp2p identity key, ensuring a stable Peer ID across pod restarts.

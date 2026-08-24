@@ -17,6 +17,7 @@ package integration_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -628,9 +629,9 @@ func writePolicyWithRouter(t *testing.T, path string, yamlContent string) {
 
 	// Replace empty markers first
 	content = strings.ReplaceAll(content, "bindings: []", "bindings:")
-	content = strings.ReplaceAll(content, "roles: {}", "roles:")
+	content = strings.ReplaceAll(content, "roles: []", "roles:")
 
-	routerRole := fmt.Sprintf(`  %s:
+	routerRole := fmt.Sprintf(`  - name: %s
     allowed_services: []
     allowed_targets: ["*"]`, api.RoleRouter)
 	routerBinding := fmt.Sprintf(`  - role: %s
@@ -671,21 +672,10 @@ func waitForNodeOnline(t *testing.T, logPath string) {
 	}
 }
 
-type testBinding struct {
-	Role    string   `yaml:"role"`
-	Members []string `yaml:"members"`
-}
-
-type testRolePolicy struct {
-	AllowedTargets  []string `yaml:"allowed_targets"`
-	AllowedServices []string `yaml:"allowed_services"`
-}
-
-type testPolicyConfig struct {
-	Bindings []testBinding             `yaml:"bindings"`
-	Roles    map[string]testRolePolicy `yaml:"roles"`
-}
-
+// injectPolicyYAML posts a policy fixture through the same conversion the console
+// performs: YAML for readability, protojson on the wire. Going through JSON keeps
+// this helper free of any field list, so a new PolicyRole field needs no change
+// here and cannot be silently dropped.
 func injectPolicyYAML(t *testing.T, port int, adminToken string, policyFile string) {
 	t.Helper()
 
@@ -694,37 +684,18 @@ func injectPolicyYAML(t *testing.T, port int, adminToken string, policyFile stri
 		t.Fatalf("failed to read policy file %s: %v", policyFile, err)
 	}
 
-	var config testPolicyConfig
-	if err := yaml.Unmarshal(data, &config); err != nil {
+	var doc interface{}
+	if err := yaml.Unmarshal(data, &doc); err != nil {
 		t.Fatalf("failed to unmarshal policy file %s: %v", policyFile, err)
 	}
 
-	reqData := &api.PolicyConfigUpdateRequest{
-		Roles:    make([]*api.PolicyRole, 0, len(config.Roles)),
-		Bindings: make([]*api.PolicyBinding, 0, len(config.Bindings)),
-	}
-
-	for name, role := range config.Roles {
-		reqData.Roles = append(reqData.Roles, &api.PolicyRole{
-			Name:            name,
-			AllowedServices: role.AllowedServices,
-			AllowedTargets:  role.AllowedTargets,
-		})
-	}
-	for _, b := range config.Bindings {
-		reqData.Bindings = append(reqData.Bindings, &api.PolicyBinding{
-			Role:    b.Role,
-			Members: b.Members,
-		})
-	}
-
-	protoData, err := proto.Marshal(reqData)
+	jsonData, err := json.Marshal(yamlToJSON(doc))
 	if err != nil {
-		t.Fatalf("failed to marshal policy request: %v", err)
+		t.Fatalf("failed to convert policy file %s to JSON: %v", policyFile, err)
 	}
 
-	req, _ := http.NewRequest(http.MethodPost, fmt.Sprintf("http://127.0.0.1:%d/policies", port), bytes.NewReader(protoData))
-	req.Header.Set("Content-Type", "application/x-protobuf")
+	req, _ := http.NewRequest(http.MethodPost, fmt.Sprintf("http://127.0.0.1:%d/policies", port), bytes.NewReader(jsonData))
+	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+adminToken)
 
 	client := &http.Client{Timeout: 5 * time.Second}
@@ -737,5 +708,25 @@ func injectPolicyYAML(t *testing.T, port int, adminToken string, policyFile stri
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		t.Fatalf("unexpected POST /policies status: %s (body: %s)", resp.Status, string(body))
+	}
+}
+
+// yamlToJSON rewrites the map[interface{}]interface{} that yaml.v2 produces into
+// the map[string]interface{} encoding/json requires.
+func yamlToJSON(v interface{}) interface{} {
+	switch typed := v.(type) {
+	case map[interface{}]interface{}:
+		converted := make(map[string]interface{}, len(typed))
+		for key, value := range typed {
+			converted[fmt.Sprintf("%v", key)] = yamlToJSON(value)
+		}
+		return converted
+	case []interface{}:
+		for i, value := range typed {
+			typed[i] = yamlToJSON(value)
+		}
+		return typed
+	default:
+		return v
 	}
 }

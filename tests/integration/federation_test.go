@@ -49,8 +49,8 @@ bindings:
   - members: ["user:mock-user"]
     role: admin
 roles:
-  admin:
-    allowed_services: 
+  - name: admin
+    allowed_services:
       - "mcp://*"
       - "system://sam.catalog"
     allowed_targets: ["*"]

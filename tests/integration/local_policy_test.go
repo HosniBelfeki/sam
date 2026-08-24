@@ -21,7 +21,7 @@ func TestLocalPolicyCanGrantPermissions(t *testing.T) {
 	controlPlanePolicyFile := filepath.Join(tmpDir, "policies.yaml")
 	controlPlanePolicyYAML := `version: "v1alpha1"
 roles:
-  none:
+  - name: none
     allowed_services: []
     allowed_targets: ["*"]
 bindings:
@@ -165,7 +165,7 @@ func TestLocalPolicyCannotBypassControlPlaneTargetConstraint(t *testing.T) {
 	controlPlanePolicyFile := filepath.Join(tmpDir, "policies.yaml")
 	controlPlanePolicyYAML := `version: "v1alpha1"
 roles:
-  restricted-role:
+  - name: restricted-role
     allowed_services: ["*"]
     allowed_targets: ["group:admin-only"]
 bindings:

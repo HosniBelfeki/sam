@@ -19,6 +19,8 @@ metadata:
 type: Opaque
 stringData:
   SAM_OIDC_ISSUER: "http://mock-oidc:18080"
+  # Authenticates the policy admin API. Replace before using this outside a demo.
+  SAM_ADMIN_TOKEN: "replace-me-with-a-generated-token"
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -46,7 +48,6 @@ spec:
         - "--db-dsn=/data/control-plane.db"
         - "--issuer=$(SAM_OIDC_ISSUER)"
         - "--allowed-audiences=sam-mesh-audience,sam-control-plane-audience"
-        - "--policy-file=/etc/sam/policies/policies.yaml"
         - "--insecure-skip-tls-verify"
         ports:
         - containerPort: 8080
@@ -57,16 +58,15 @@ spec:
             secretKeyRef:
               name: sam-control-plane-secret
               key: SAM_OIDC_ISSUER
+        - name: SAM_ADMIN_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: sam-control-plane-secret
+              key: SAM_ADMIN_TOKEN
         volumeMounts:
-        - name: policies-volume
-          mountPath: /etc/sam/policies
-          readOnly: true
         - name: db-data
           mountPath: /data
       volumes:
-      - name: policies-volume
-        configMap:
-          name: sam-control-plane-policies
       - name: db-data
         emptyDir: {}
 ---
@@ -84,19 +84,40 @@ spec:
     targetPort: 8080
     name: http
 ---
-apiVersion: v1
-kind: ConfigMap
+# The control plane starts default closed: it has no policy until one is posted.
+# Seed it over the admin API, which is the only way policy is ever set.
+apiVersion: batch/v1
+kind: Job
 metadata:
-  name: sam-control-plane-policies
-data:
-  policies.yaml: |
-    version: "v1alpha1"
-    bindings:
-      - members: ["sam:system:authenticated"]
-        role: "public-mesh"
-    roles:
-      public-mesh:
-        allowed_services:
-          - "*"
-        allowed_targets:
-          - "*"
+  name: sam-control-plane-seed-policy
+spec:
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: seed
+        image: curlimages/curl:8.6.0
+        env:
+        - name: SAM_ADMIN_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: sam-control-plane-secret
+              key: SAM_ADMIN_TOKEN
+        command:
+        - sh
+        - -c
+        - |
+          set -eu
+          until curl -sf -o /dev/null http://sam-control-plane:8080/healthz; do sleep 2; done
+          curl -sf -X POST \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${SAM_ADMIN_TOKEN}" \
+            -d '{
+              "roles": [
+                {"name": "public-mesh", "allowed_services": ["*"], "allowed_targets": ["*"]}
+              ],
+              "bindings": [
+                {"role": "public-mesh", "members": ["sam:system:authenticated"]}
+              ]
+            }' \
+            http://sam-control-plane:8080/policies
