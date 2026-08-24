@@ -91,6 +91,98 @@ if [[ -z "${MESH_HELPERS_LOADED:-}" ]]; then
     return 1
   }
 
+  # Pods matching a selector that will never become ready on their own.
+  # Deliberately excludes CrashLoopBackOff: the control plane restarts a few
+  # times while the database comes up, so treating that as terminal would swap
+  # one flake for another. Images are preloaded with `kind load`, so a pull
+  # failure is always a real one.
+  mesh_unrecoverable_pods() {
+    local selector="$1"
+    [[ -n "${selector}" ]] || return 0
+    kubectl --context="${KUBECONTEXT}" get pods -l "${selector}" \
+      -o jsonpath='{range .items[*]}{.metadata.name}{"="}{range .status.containerStatuses[*]}{.state.waiting.reason}{end}{"\n"}{end}' 2>/dev/null |
+      grep -E '=(ImagePullBackOff|InvalidImageName|CreateContainerConfigError)$' || true
+  }
+
+  # Scoped so an unrelated broken pod elsewhere in the namespace cannot abort a
+  # wait for a healthy workload.
+  mesh_selector_for() {
+    local target="$1" selector
+    selector=$(kubectl --context="${KUBECONTEXT}" get "${target}" \
+      -o go-template='{{range $k, $v := .spec.selector.matchLabels}}{{$k}}={{$v}},{{end}}' 2>/dev/null) || return 0
+    echo "${selector%,}"
+  }
+
+  mesh_dump_cluster() {
+    local what="$1"
+    {
+      echo "--- ${what} never became ready ---"
+      kubectl --context="${KUBECONTEXT}" get pods -o wide
+      kubectl --context="${KUBECONTEXT}" get events --sort-by=.lastTimestamp | tail -30
+      local pod
+      for pod in $(kubectl --context="${KUBECONTEXT}" get pods -o name); do
+        echo "--- ${pod} ---"
+        kubectl --context="${KUBECONTEXT}" logs "${pod}" --all-containers --tail=50 2>&1 || true
+      done
+    } >&2 2>&1 || true
+  }
+
+  # Waits for a workload without putting a stopwatch on a busy machine.
+  #
+  # The ceiling is generous, which costs nothing when things are healthy because
+  # this returns the moment the rollout completes; the old fixed 60s failed runs
+  # for being slow rather than broken, on a cold cluster that had just loaded
+  # four images onto three nodes. A pod that cannot recover still aborts at once,
+  # so a genuine breakage is no slower to report than before, and now says why.
+  mesh_wait_for_rollout() {
+    local target="$1"
+    local timeout_s="${2:-${MESH_ROLLOUT_TIMEOUT:-300}}"
+    local deadline=$((SECONDS + timeout_s))
+    local selector
+    selector="$(mesh_selector_for "${target}")"
+
+    while true; do
+      # Doubles as the poll interval: it blocks until ready or the slice expires.
+      if kubectl --context="${KUBECONTEXT}" rollout status "${target}" --timeout=5s >/dev/null 2>&1; then
+        return 0
+      fi
+      local stuck
+      stuck="$(mesh_unrecoverable_pods "${selector}")"
+      if [[ -n "${stuck}" ]]; then
+        echo "${target}: pod cannot recover: ${stuck}" >&2
+        mesh_dump_cluster "${target}"
+        return 1
+      fi
+      if ((SECONDS >= deadline)); then
+        echo "${target}: not ready after ${timeout_s}s" >&2
+        mesh_dump_cluster "${target}"
+        return 1
+      fi
+    done
+  }
+
+  mesh_wait_for_job() {
+    local target="$1"
+    local timeout_s="${2:-${MESH_ROLLOUT_TIMEOUT:-300}}"
+    local deadline=$((SECONDS + timeout_s))
+
+    while true; do
+      if kubectl --context="${KUBECONTEXT}" wait --for=condition=complete --timeout=5s "${target}" >/dev/null 2>&1; then
+        return 0
+      fi
+      if kubectl --context="${KUBECONTEXT}" wait --for=condition=failed --timeout=1s "${target}" >/dev/null 2>&1; then
+        echo "${target}: failed" >&2
+        mesh_dump_cluster "${target}"
+        return 1
+      fi
+      if ((SECONDS >= deadline)); then
+        echo "${target}: did not complete within ${timeout_s}s" >&2
+        mesh_dump_cluster "${target}"
+        return 1
+      fi
+    done
+  }
+
   mesh_wait_for_mcp_ready() {
     local idx="$1"
     local timeout_s="${2:-20}"
@@ -246,7 +338,7 @@ if [[ -z "${MESH_HELPERS_LOADED:-}" ]]; then
     kind load docker-image sam-mock-oidc:local --name "${KUBERNETES_CLUSTER_NAME}"
 
     kubectl --context="${KUBECONTEXT}" apply -f tests/e2e/fixtures/mock-oidc.yaml
-    kubectl --context="${KUBECONTEXT}" rollout status deployment/mock-oidc --timeout=60s
+    mesh_wait_for_rollout deployment/mock-oidc
 
     local kube_issuer
     kube_issuer=$(kubectl --context="${KUBECONTEXT}" get --raw /.well-known/openid-configuration | jq -r .issuer)
@@ -282,12 +374,13 @@ if [[ -z "${MESH_HELPERS_LOADED:-}" ]]; then
       --set controlPlane.replicaCount=2 \
       --set controlPlane.hostPort=8080 \
       --set router.useOidcToken=false \
-      --set router.hostPort=4501
+      --set router.hostPort=4501 \
+      --set console.enabled=false
 
-    kubectl --context="${KUBECONTEXT}" rollout status statefulset/sam-db --timeout=60s
-    kubectl --context="${KUBECONTEXT}" rollout status deployment/sam-control-plane --timeout=60s
-    kubectl --context="${KUBECONTEXT}" wait --for=condition=complete --timeout=60s job/sam-bootstrap
-    kubectl --context="${KUBECONTEXT}" rollout status statefulset/sam-router --timeout=60s
+    mesh_wait_for_rollout statefulset/sam-db
+    mesh_wait_for_rollout deployment/sam-control-plane
+    mesh_wait_for_job job/sam-bootstrap
+    mesh_wait_for_rollout statefulset/sam-router
 
     local i
     for ((i=0; i<200; i++)); do
