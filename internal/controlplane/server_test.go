@@ -42,6 +42,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"google.golang.org/protobuf/proto"
+	"gopkg.in/yaml.v2"
 )
 
 func startCustomMockOIDC(t *testing.T) (string, func(claims map[string]interface{}) string) {
@@ -435,6 +436,82 @@ func TestNodeAndRouterRegistrationFlow(t *testing.T) {
 	}
 	if resp.StatusCode != http.StatusForbidden {
 		t.Errorf("expectedStatusForbidden (403) for rogue router lease, got: %s", resp.Status)
+	}
+}
+
+// The console shows the operator this YAML and posts the edited text straight
+// back, so anything the render drops is silently deleted from the mesh policy on
+// the next save.
+func TestPolicyYAMLRoundTrip(t *testing.T) {
+	roles := []*api.PolicyRole{
+		{
+			Name:            "dev",
+			AllowedServices: []string{"mcp://git"},
+			AllowedTargets:  []string{"node:abc"},
+			CustomDatalog:   []string{"right(\"data:read\");"},
+		},
+		{
+			Name:            "ops",
+			AllowedServices: []string{"mcp://deploy"},
+		},
+	}
+	bindings := []*api.PolicyBinding{
+		{Role: "dev", Members: []string{"group:developers"}},
+		{Role: "ops", Members: []string{"user:root"}},
+	}
+
+	rendered, err := yaml.Marshal(newPolicyDocument(roles, bindings))
+	if err != nil {
+		t.Fatalf("rendering the policy document: %v", err)
+	}
+
+	parsed, err := parsePolicyYAML(rendered)
+	if err != nil {
+		t.Fatalf("parsing back the rendered policy: %v\n%s", err, rendered)
+	}
+
+	if len(parsed.Roles) != len(roles) {
+		t.Fatalf("got %d roles, want %d", len(parsed.Roles), len(roles))
+	}
+	byName := make(map[string]*api.PolicyRole, len(parsed.Roles))
+	for _, r := range parsed.Roles {
+		byName[r.Name] = r
+	}
+	for _, want := range roles {
+		got, ok := byName[want.Name]
+		if !ok {
+			t.Fatalf("role %q was lost in the round trip", want.Name)
+		}
+		if !proto.Equal(got, want) {
+			t.Errorf("role %q round-tripped as %v, want %v", want.Name, got, want)
+		}
+	}
+
+	if len(parsed.Bindings) != len(bindings) {
+		t.Fatalf("got %d bindings, want %d", len(parsed.Bindings), len(bindings))
+	}
+	for i, want := range bindings {
+		if !proto.Equal(parsed.Bindings[i], want) {
+			t.Errorf("binding %d round-tripped as %v, want %v", i, parsed.Bindings[i], want)
+		}
+	}
+
+	// The result must survive the same validation a POST applies.
+	if err := validatePolicyConfig(parsed); err != nil {
+		t.Errorf("round-tripped policy failed validation: %v", err)
+	}
+}
+
+func TestParsePolicyYAMLRejectsGarbage(t *testing.T) {
+	for name, body := range map[string]string{
+		"not yaml":        "\tnot: [valid",
+		"wrong shape":     "roles: a string",
+		"unknown field":   "roles: {}\nbindings: []\nsurprise: 1",
+		"scalar document": "42",
+	} {
+		if _, err := parsePolicyYAML([]byte(body)); err == nil {
+			t.Errorf("%s: parsePolicyYAML accepted %q", name, body)
+		}
 	}
 }
 

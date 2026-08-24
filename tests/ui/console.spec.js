@@ -215,3 +215,32 @@ test('navigation is keyboard operable and refreshes are announced', async ({ pag
 
   await expect(page.locator('#live-status')).toHaveText(/nodes, .* routers/);
 });
+
+// A blocking alert() would also stall the refresh timer, so feedback must not
+// come from a native dialog.
+test('action feedback is a dismissible toast, not a native dialog', async ({ page }) => {
+  await login(page);
+  await page.click('.nav-item[data-target="policy"]');
+
+  let dialogs = 0;
+  page.on('dialog', async (d) => {
+    dialogs += 1;
+    await d.dismiss();
+  });
+
+  await page.fill('#policy-yaml', '# applied by playwright\n');
+  await page.click('button:has-text("Save & Apply Policy")');
+
+  const toast = page.locator('#toast-container .toast');
+  await expect(toast).toHaveClass(/toast-success/);
+  await expect(toast).toContainText('Mesh policy updated');
+  expect(dialogs).toBe(0);
+
+  await toast.locator('.toast-dismiss').click();
+  await expect(toast).toHaveCount(0);
+
+  // Saving cleared the dirty flag, so leaving must not prompt.
+  await page.click('.nav-item[data-target="overview"]');
+  await expect(page.locator('#view-overview')).toBeVisible();
+  expect(dialogs).toBe(0);
+});

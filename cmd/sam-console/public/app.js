@@ -1,5 +1,6 @@
 const DEFAULT_TAB = 'overview';
 const REFRESH_INTERVAL_MS = 15000;
+const TOAST_TIMEOUT_MS = 5000;
 
 let refreshTimer = null;
 let refreshInFlight = false;
@@ -175,7 +176,7 @@ async function loginWithToken(inputId) {
         await loadData();
         showApp();
     } catch (error) {
-        alert('Login failed: ' + error.message);
+        showToast('Login failed: ' + error.message, 'error');
     }
 }
 
@@ -271,6 +272,34 @@ function announce(message) {
     const region = document.getElementById('live-status');
     if (region) {
         region.textContent = message;
+    }
+}
+
+// alert() blocks the event loop, so it also stalls the refresh timer, and it is
+// unusable on the mobile layout.
+function showToast(message, type = 'info') {
+    const container = document.getElementById('toast-container');
+    if (!container) return;
+
+    const toast = document.createElement('div');
+    toast.className = `toast toast-${type}`;
+
+    const text = document.createElement('span');
+    text.textContent = message;
+    toast.appendChild(text);
+
+    const dismiss = document.createElement('button');
+    dismiss.className = 'toast-dismiss';
+    dismiss.type = 'button';
+    dismiss.setAttribute('aria-label', 'Dismiss notification');
+    dismiss.textContent = '\u00d7';
+    dismiss.addEventListener('click', () => toast.remove());
+    toast.appendChild(dismiss);
+
+    container.appendChild(toast);
+    // Errors stay until dismissed; the operator usually needs to act on them.
+    if (type !== 'error') {
+        setTimeout(() => toast.remove(), TOAST_TIMEOUT_MS);
     }
 }
 
@@ -405,7 +434,7 @@ async function actionRequest(url, method = 'POST', body = null) {
         loadData();
         return true;
     } catch (error) {
-        alert('Action failed: ' + error.message);
+        showToast('Action failed: ' + error.message, 'error');
         throw error;
     }
 }
@@ -661,44 +690,24 @@ window.copyGeneratedToken = async function() {
     setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
 };
 
-function writeVarint(value) {
-    const bytes = [];
-    while (value > 127) {
-        bytes.push((value & 127) | 128);
-        value >>= 7;
-    }
-    bytes.push(value);
-    return bytes;
-}
-
 window.savePolicy = async function() {
     const yamlContent = document.getElementById('policy-yaml').value;
-    const encoder = new TextEncoder();
-    const yamlBytes = encoder.encode(yamlContent);
-    
-    const lenBytes = writeVarint(yamlBytes.length);
-    const pbBytes = new Uint8Array(1 + lenBytes.length + yamlBytes.length);
-    pbBytes[0] = 0x0a; // field tag 1 (YamlContent)
-    pbBytes.set(lenBytes, 1);
-    pbBytes.set(yamlBytes, 1 + lenBytes.length);
-
-    const headers = { 'Content-Type': 'application/x-protobuf' };
 
     try {
         const response = await fetch('api/policies', {
             method: 'POST',
-            headers: headers,
-            body: pbBytes
+            headers: { 'Content-Type': 'application/yaml' },
+            body: yamlContent
         });        if (response.ok) {
             policyBaseline = yamlContent;
-            alert('Mesh policy updated and applied successfully!');
+            showToast('Mesh policy updated and applied.', 'success');
             loadData();
         } else {
             const text = await response.text();
-            alert('Failed to save policy: ' + text);
+            showToast('Failed to save policy: ' + text.trim(), 'error');
         }
     } catch (err) {
-        alert('Network error: ' + err.message);
+        showToast('Network error: ' + err.message, 'error');
     }
 };
 
