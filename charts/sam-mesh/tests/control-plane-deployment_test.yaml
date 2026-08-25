@@ -26,6 +26,24 @@ tests:
           path: spec.template.metadata.annotations["checksum/secrets"]
           pattern: ^[0-9a-f]{64}$
 
+  - it: hostPort disables surge so rollouts can rebind the node port
+    template: templates/control-plane-deployment.yaml
+    set:
+      controlPlane.hostPort: 8080
+    asserts:
+      - equal:
+          path: spec.strategy.rollingUpdate.maxSurge
+          value: 0
+      - equal:
+          path: spec.strategy.rollingUpdate.maxUnavailable
+          value: 1
+
+  - it: no strategy override without hostPort
+    template: templates/control-plane-deployment.yaml
+    asserts:
+      - notExists:
+          path: spec.strategy
+
   - it: uses the default image tag when none is pinned
     template: templates/control-plane-deployment.yaml
     asserts:

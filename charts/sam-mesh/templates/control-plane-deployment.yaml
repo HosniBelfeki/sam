@@ -6,6 +6,14 @@ metadata:
     {{- include "sam-mesh.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.controlPlane.replicaCount }}
+  {{- if .Values.controlPlane.hostPort }}
+  # hostPort: a surged pod can't bind a port the old pod still holds, so the
+  # default maxSurge=1 deadlocks the rollout on port-saturated nodes.
+  strategy:
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
+  {{- end }}
   selector:
     matchLabels:
       app: {{ include "sam-mesh.fullname" . }}-control-plane
