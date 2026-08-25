@@ -30,6 +30,9 @@ func TestTunHint(t *testing.T) {
 		name    string
 		err     error
 		statErr error
+		// restricted is a host that hands back a user namespace and then
+		// denies the capabilities it would have granted.
+		restricted bool
 		// want is a phrase naming the fix, so the test fails when the advice
 		// stops matching the cause rather than only when the wording changes.
 		want string
@@ -64,6 +67,21 @@ func TestTunHint(t *testing.T) {
 			want: "CAP_NET_ADMIN",
 		},
 		{
+			// The capability advice is worse than useless here: it was granted
+			// by the namespace and taken back by the host.
+			name:       "a host that strips a user namespace's capabilities names the sysctl",
+			err:        syscall.EPERM,
+			restricted: true,
+			want:       "apparmor_restrict_unprivileged_userns",
+		},
+		{
+			name:       "a device that cannot be opened is still not blamed on the sysctl",
+			err:        syscall.EPERM,
+			statErr:    denied,
+			restricted: true,
+			want:       "cannot be opened",
+		},
+		{
 			name: "EACCES is treated as EPERM is",
 			err:  syscall.EACCES,
 			want: "CAP_NET_ADMIN",
@@ -80,9 +98,9 @@ func TestTunHint(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := tunHint(tc.err, tc.statErr)
+			got := tunHint(tc.err, tc.statErr, tc.restricted)
 			if !strings.Contains(got, tc.want) {
-				t.Errorf("tunHint(%v, %v) = %q, want it to mention %q", tc.err, tc.statErr, got, tc.want)
+				t.Errorf("tunHint(%v, %v, %v) = %q, want it to mention %q", tc.err, tc.statErr, tc.restricted, got, tc.want)
 			}
 		})
 	}

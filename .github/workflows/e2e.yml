@@ -51,6 +51,20 @@ jobs:
         id: setup-bats
         uses: bats-core/bats-action@77d6fb60505b4d0d1d73e48bd035b55074bbfb43 # 4.0.0
 
+      # The sandbox canary builds its own namespaces from inside a pod, and a
+      # user namespace is what grants it CAP_NET_ADMIN for the tun. Ubuntu
+      # 24.04 confines an AppArmor-unconfined process that creates one to the
+      # unprivileged_userns profile, which denies every capability -- so the
+      # namespace is created and the tun is then refused. kind runs its pods
+      # unconfined, so every sandbox in this cluster is that process.
+      - name: Let an unprivileged user namespace keep its capabilities
+        shell: bash
+        run: |
+          restrict=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
+          if [[ -e "${restrict}" ]]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+
       - name: Bats tests
         shell: bash
         env:
