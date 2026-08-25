@@ -24,6 +24,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime/debug"
@@ -379,14 +380,16 @@ func (r *Router) enrollBootstrap(peerID peer.ID) error {
 
 	if enrollResp.Status == api.EnrollmentStatus_ENROLLMENT_STATUS_PENDING {
 		logger.Infof("Enrollment is pending approval. Polling status...")
-		statusReq := &api.EnrollmentStatusRequest{
-			PeerId: peerID.String(),
-		}
-		statusData, err := proto.Marshal(statusReq)
-		if err != nil {
-			return fmt.Errorf("failed to marshal status request: %w", err)
-		}
 
+		u, err := url.Parse(r.config.ControlPlaneURL)
+		if err != nil {
+			return fmt.Errorf("invalid control plane URL: %w", err)
+		}
+		u = u.JoinPath("enroll", "status")
+		q := u.Query()
+		q.Set("peer_id", peerID.String())
+		u.RawQuery = q.Encode()
+		statusURL := u.String()
 		ticker := time.NewTicker(2 * time.Second)
 		defer ticker.Stop()
 
@@ -396,7 +399,11 @@ func (r *Router) enrollBootstrap(peerID peer.ID) error {
 			case <-r.ctx.Done():
 				return r.ctx.Err()
 			case <-ticker.C:
-				statusResp, err := client.Post(r.config.ControlPlaneURL+"/enroll/status", "application/x-protobuf", bytes.NewReader(statusData))
+				req, err := http.NewRequestWithContext(r.ctx, http.MethodGet, statusURL, nil)
+				if err != nil {
+					return fmt.Errorf("failed to create status request: %w", err)
+				}
+				statusResp, err := client.Do(req)
 				if err != nil {
 					logger.Warnf("failed to poll enrollment status: %v", err)
 					continue

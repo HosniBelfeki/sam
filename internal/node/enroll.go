@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -208,11 +209,11 @@ func (n *SamNode) EnrollBootstrap(ctx context.Context, controlPlaneURL string, b
 	if !strings.HasPrefix(controlPlaneURL, "http://") && !strings.HasPrefix(controlPlaneURL, "https://") {
 		return fmt.Errorf("control plane address must be an HTTP or HTTPS URL for enrollment: %s", controlPlaneURL)
 	}
-	url := controlPlaneURL + "/enroll"
-	logger.Infof("Enrolling via Bootstrap token at %s", url)
+	enrollURL := controlPlaneURL + "/enroll"
+	logger.Infof("Enrolling via Bootstrap token at %s", enrollURL)
 
 	client := &http.Client{Timeout: 30 * time.Second}
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(data))
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", enrollURL, bytes.NewReader(data))
 	if err != nil {
 		return fmt.Errorf("failed to create HTTP request: %w", err)
 	}
@@ -245,14 +246,16 @@ func (n *SamNode) EnrollBootstrap(ctx context.Context, controlPlaneURL string, b
 
 	if enrollResp.Status == api.EnrollmentStatus_ENROLLMENT_STATUS_PENDING {
 		logger.Infof("Enrollment is pending approval. Polling status...")
-		statusReq := &api.EnrollmentStatusRequest{
-			PeerId: n.Host.ID().String(),
-		}
-		statusData, err := proto.Marshal(statusReq)
-		if err != nil {
-			return fmt.Errorf("failed to marshal status request: %w", err)
-		}
 
+		u, err := url.Parse(controlPlaneURL)
+		if err != nil {
+			return fmt.Errorf("invalid control plane URL: %w", err)
+		}
+		u = u.JoinPath("enroll", "status")
+		q := u.Query()
+		q.Set("peer_id", n.Host.ID().String())
+		u.RawQuery = q.Encode()
+		statusURL := u.String()
 		ticker := time.NewTicker(2 * time.Second)
 		defer ticker.Stop()
 
@@ -262,12 +265,10 @@ func (n *SamNode) EnrollBootstrap(ctx context.Context, controlPlaneURL string, b
 			case <-ctx.Done():
 				return ctx.Err()
 			case <-ticker.C:
-				statusURL := controlPlaneURL + "/enroll/status"
-				hReq, err := http.NewRequestWithContext(ctx, "POST", statusURL, bytes.NewReader(statusData))
+				hReq, err := http.NewRequestWithContext(ctx, http.MethodGet, statusURL, nil)
 				if err != nil {
 					return fmt.Errorf("failed to create status request: %w", err)
 				}
-				hReq.Header.Set("Content-Type", "application/x-protobuf")
 
 				hResp, err := client.Do(hReq)
 				if err != nil {

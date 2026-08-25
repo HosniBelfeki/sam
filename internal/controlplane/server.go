@@ -1046,6 +1046,7 @@ func cryptoRandUUID() string {
 }
 
 func (s *Server) writeEnrollResponse(w http.ResponseWriter, resp *api.BootstrapEnrollResponse) {
+	w.Header().Set("Cache-Control", "no-store")
 	respData, err := proto.Marshal(resp)
 	if err != nil {
 		http.Error(w, "Failed to serialize response", http.StatusInternalServerError)
