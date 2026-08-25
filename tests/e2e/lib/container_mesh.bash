@@ -367,21 +367,27 @@ if [[ -z "${MESH_HELPERS_LOADED:-}" ]]; then
     # announce that name. Announcing a node IP instead is unroutable from an isolated test network.
     # bootstrap.nodeServices: policy.bats asserts the control plane denies an ungranted service, so
     # this lane pins the grants it tests rather than inheriting the chart default.
-    "${helm_bin}" --kube-context="${KUBECONTEXT}" upgrade --install sam ./charts/sam-mesh \
-      --namespace default \
-      --set fullnameOverride="sam" \
-      --set global.imageTag="local" \
-      --set controlPlane.oidcIssuer="${ISSUERS//,/\\,}" \
-      --set controlPlane.allowedAudiences="sam-mesh-audience\,sam-control-plane-audience" \
-      --set controlPlane.insecureSkipTlsVerify=true \
-      --set controlPlane.adminToken="super-secret-admin-token" \
-      --set controlPlane.replicaCount=2 \
-      --set controlPlane.hostPort=8080 \
-      --set router.useOidcToken=false \
-      --set router.hostPort=4501 \
-      --set console.enabled=false \
-      --set 'router.externalAddrs={/dns4/sam-router/tcp/4501}' \
-      --set 'bootstrap.nodeServices={mcp://calculator,mcp://db-agent,mcp://http-tool,mcp://stdio-tool,system://sam.catalog}'
+    local helm_args=(--kube-context="${KUBECONTEXT}" upgrade --install sam ./charts/sam-mesh
+      --namespace default
+      --set fullnameOverride="sam"
+      --set global.imageTag="local"
+      --set controlPlane.oidcIssuer="${ISSUERS//,/\\,}"
+      --set controlPlane.allowedAudiences="sam-mesh-audience\,sam-control-plane-audience"
+      --set controlPlane.insecureSkipTlsVerify=true
+      --set controlPlane.adminToken="super-secret-admin-token"
+      --set controlPlane.replicaCount=2
+      --set controlPlane.hostPort=8080
+      --set router.useOidcToken=false
+      --set router.hostPort=4501
+      --set console.enabled=false
+      --set 'router.externalAddrs={/dns4/sam-router/tcp/4501}'
+      --set 'bootstrap.nodeServices={mcp://calculator,mcp://db-agent,mcp://http-tool,mcp://stdio-tool,system://sam.catalog}')
+    if ! "${helm_bin}" "${helm_args[@]}"; then
+      # The reused cluster may hold StatefulSets whose immutable spec (e.g.
+      # volumeClaimTemplates) changed; drop them (PVCs survive) and retry.
+      kubectl --context="${KUBECONTEXT}" delete statefulset sam-router sam-db --ignore-not-found
+      "${helm_bin}" "${helm_args[@]}"
+    fi
 
     mesh_wait_for_rollout statefulset/sam-db
     mesh_wait_for_rollout deployment/sam-control-plane
