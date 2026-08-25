@@ -20,7 +20,7 @@ rules:
 - apiGroups: [""]
   resources: ["secrets"]
   resourceNames: ["{{ include "sam-mesh.fullname" . }}-router-token"]
-  verbs: ["get", "patch"]
+  verbs: ["get", "patch", "update"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

@@ -17,7 +17,7 @@ tests:
           value: [sam-mesh-router-token]
       - equal:
           path: rules[1].verbs
-          value: [get, patch]
+          value: [get, patch, update]
       - lengthEqual:
           path: rules
           count: 2
