@@ -506,8 +506,12 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request) {
 	finalRoles := []string{req.RequestedRole}
 	finalRoles = append(finalRoles, customAccessRoles...)
 
-	// Mint token
-	biscuitExpiry := time.Now().Add(api.BiscuitTokenTTL)
+	// Mint token. A biscuit must never outlive the OIDC token that vouched
+	// for it, so its expiration is capped at whichever comes first.
+	biscuitExpiry := time.Now().Add(s.config.BiscuitTTL)
+	if token.Expiry.Before(biscuitExpiry) {
+		biscuitExpiry = token.Expiry
+	}
 	biscuitData, _, err := identity.MintBiscuitToken(privKey, claims, token, pID, biscuitExpiry, finalRoles, policyRoles, req.Labels)
 	if err != nil {
 		logger.Errorw("Biscuit minting failed", "peer_id", req.PeerId, "error", err)
@@ -562,7 +566,7 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request) {
 		BiscuitToken:          biscuitData,
 		ControlPlanePublicKey: pubKey,
 		RouterAddresses:       routerAddrs, // routers nodes multiaddresses
-		Expiration:            token.Expiry.Unix(),
+		Expiration:            biscuitExpiry.Unix(),
 	}
 
 	respData, err := proto.Marshal(resp)
@@ -687,7 +691,7 @@ func (s *Server) HandleRefresh(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var biscuitBytes []byte
-	biscuitExpiry := time.Now().Add(api.BiscuitTokenTTL)
+	biscuitExpiry := time.Now().Add(s.config.BiscuitTTL)
 
 	if nodeRecord.EnrollmentType == "OIDC" {
 		var claims jwt.MapClaims
@@ -1194,7 +1198,7 @@ func (s *Server) HandleEnroll(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
 		}
-		biscuitBytes, err := identity.MintBootstrapBiscuitToken(privKey, pID, tokenRecord.Role, time.Now().Add(api.BiscuitTokenTTL), policyRoles, req.Labels)
+		biscuitBytes, err := identity.MintBootstrapBiscuitToken(privKey, pID, tokenRecord.Role, time.Now().Add(s.config.BiscuitTTL), policyRoles, req.Labels)
 		if err != nil {
 			logger.Errorf("Failed to mint bootstrap biscuit: %v", err)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -1547,7 +1551,7 @@ func (s *Server) HandleAdminEnrollmentAction(w http.ResponseWriter, r *http.Requ
 		}
 		// Admin approval is the attestation of the operator-declared labels
 		// recorded on the pending request.
-		biscuitBytes, err := identity.MintBootstrapBiscuitToken(privKey, pID, tokenRecord.Role, time.Now().Add(api.BiscuitTokenTTL), policyRoles, enrollReq.Labels)
+		biscuitBytes, err := identity.MintBootstrapBiscuitToken(privKey, pID, tokenRecord.Role, time.Now().Add(s.config.BiscuitTTL), policyRoles, enrollReq.Labels)
 		if err != nil {
 			logger.Errorf("Failed to mint bootstrap biscuit: %v", err)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -1672,9 +1676,9 @@ func (s *Server) buildApprovedBootstrapEnrollResponse(ctx context.Context, biscu
 		routerAddrs = append(routerAddrs, r.Addresses...)
 	}
 
-	expiration := time.Now().Add(api.BiscuitTokenTTL).Unix()
+	expiration := time.Now().Add(s.config.BiscuitTTL).Unix()
 	if resolvedAt != nil {
-		expiration = resolvedAt.Add(api.BiscuitTokenTTL).Unix()
+		expiration = resolvedAt.Add(s.config.BiscuitTTL).Unix()
 	}
 
 	return &api.BootstrapEnrollResponse{

@@ -17,6 +17,8 @@ package controlplane
 import (
 	"fmt"
 	"time"
+
+	"github.com/google/sam/api"
 )
 
 // Options holds configuration for the control plane.
@@ -32,6 +34,7 @@ type Options struct {
 	KeyGracePeriod        time.Duration
 	InsecureSkipTLSVerify bool
 	BiscuitTimeout        time.Duration
+	BiscuitTTL            time.Duration // Lifespan minted into every issued Biscuit's expiration() fact; defaults to api.BiscuitTokenTTL
 	AdminToken            string // Optional: administrative bearer token for protecting policy and enrollment queue REST APIs
 	AutoApproveEnrollment bool   // If true, valid bootstrap token enrollment requests are immediately approved without administrative manual gate
 }
@@ -53,6 +56,9 @@ func (o *Options) Default() {
 	}
 	if o.KeyGracePeriod <= 0 {
 		o.KeyGracePeriod = 1 * time.Hour
+	}
+	if o.BiscuitTTL <= 0 {
+		o.BiscuitTTL = api.BiscuitTokenTTL
 	}
 }
 
