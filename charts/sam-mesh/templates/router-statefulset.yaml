@@ -124,7 +124,7 @@ spec:
         - "--external-addr=/ip4/$(HOST_IP)/tcp/{{ .Values.router.hostPort }}"
         - "--external-addr=/ip4/$(HOST_IP)/udp/{{ .Values.router.hostPort }}/quic-v1"
         {{- else }}
-        - "--external-addr=/dns4/{{ include "sam-mesh.fullname" . }}-router/tcp/4501"
+        - "--external-addr=/dns4/{{ include "sam-mesh.fullname" . }}-router/tcp/{{ .Values.router.service.port }}"
         {{- end }}
         - "--keys-path=/data/router.key"
         {{- if .Values.router.allowLoopback }}
@@ -159,6 +159,9 @@ spec:
       name: router-data
     spec:
       accessModes: [ "ReadWriteOnce" ]
+      {{- if .Values.router.storageClass }}
+      storageClassName: {{ .Values.router.storageClass | quote }}
+      {{- end }}
       resources:
         requests:
           storage: {{ .Values.router.storageSize | quote }}

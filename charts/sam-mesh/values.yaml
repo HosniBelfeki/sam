@@ -127,6 +127,8 @@ router:
   allowLoopback: false
   # PVC for /data/router.key, so the libp2p peer ID survives rescheduling.
   storageSize: 1Gi
+  # PVC StorageClass; cluster default when null.
+  storageClass: null
   resources:
     requests:
       cpu: 100m
