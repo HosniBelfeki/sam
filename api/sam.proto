@@ -70,10 +70,6 @@ message EnrollResponse {
   int64 expiration = 5;
 }
 
-message EnrollmentStatusRequest {
-  string peer_id = 1;
-}
-
 enum EnrollmentStatus {
   ENROLLMENT_STATUS_UNSPECIFIED = 0;
   ENROLLMENT_STATUS_PENDING = 1;
