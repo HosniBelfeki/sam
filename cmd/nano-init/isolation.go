@@ -80,10 +80,26 @@ func isolationError(links []string) error {
 // is the whole reason for the diagnosis below.
 const tunDevice = "/dev/net/tun"
 
+// userNSRestriction is Ubuntu's switch for what an unprivileged user namespace
+// may do.
+const userNSRestriction = "/proc/sys/kernel/apparmor_restrict_unprivileged_userns"
+
+// userNSCapabilitiesRestricted reports whether this host takes back the
+// capabilities a user namespace would otherwise grant.
+//
+// Where it is on, a process with no AppArmor profile that creates a user
+// namespace is confined to the unprivileged_userns profile, and that profile
+// denies every capability. Nothing fails at the time: the namespace is created,
+// and the capability inside it is refused later.
+func userNSCapabilitiesRestricted() bool {
+	value, err := os.ReadFile(userNSRestriction)
+	return err == nil && strings.TrimSpace(string(value)) != "0"
+}
+
 // describeTunFailure turns a netlink error into the thing to change.
 func describeTunFailure(err error) string {
 	_, statErr := os.Stat(tunDevice)
-	return tunHint(err, statErr)
+	return tunHint(err, statErr, userNSCapabilitiesRestricted())
 }
 
 // tunHint explains a failed tun creation.
@@ -93,7 +109,7 @@ func describeTunFailure(err error) string {
 // means the device was not passed in or the capability was not granted. The
 // profiles fail differently, so they are told apart here rather than left to
 // whoever is reading a log at the time.
-func tunHint(err error, statErr error) string {
+func tunHint(err error, statErr error, restrictedUserNS bool) string {
 	switch {
 	case os.IsNotExist(statErr):
 		return "there is no " + tunDevice + ". In a microVM that means a guest kernel built without CONFIG_TUN" +
@@ -110,6 +126,16 @@ func tunHint(err error, statErr error) string {
 		// netlink formats this one rather than wrapping the errno, so there is
 		// nothing for errors.Is to match on.
 		err != nil && strings.Contains(err.Error(), "TUNSETIFF"):
+		// Named first because the advice below is wrong here: the capability
+		// was granted and then taken away again, so granting it harder is no
+		// answer.
+		if restrictedUserNS {
+			return "creating a tun was refused, and this host restricts what an unprivileged user namespace may do" +
+				" (" + userNSRestriction + " is not 0): a process with no AppArmor profile that creates one is" +
+				" confined to the unprivileged_userns profile, which denies every capability -- so the namespace" +
+				" was created and CAP_NET_ADMIN in it was refused anyway. Give the sandbox an AppArmor profile" +
+				" that permits capabilities, or set that sysctl to 0"
+		}
 		return "creating a tun was refused. It needs CAP_NET_ADMIN in the user namespace that owns this network" +
 			" namespace: a user namespace of your own grants it over the namespaces it owns, which is what" +
 			" --create-namespaces relies on; otherwise `--cap-add NET_ADMIN` for docker, or" +
