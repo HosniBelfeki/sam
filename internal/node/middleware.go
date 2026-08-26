@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"runtime/debug"
 	"sync/atomic"
-	"time"
 
 	"github.com/biscuit-auth/biscuit-go/v2"
 	"github.com/google/sam/api"
@@ -263,14 +262,7 @@ func (n *SamNode) Authorize(rawToken []byte, req RequestContext, pubKey ed25519.
 	// Enforce client_peer_id matches connection_peer_id
 	authorizer.AddCheck(api.BaselineReplayCheck)
 
-	// Inject the current time and enforce expiration, matching identity.VerifyBiscuit.
-	authorizer.AddFact(biscuit.Fact{
-		Predicate: biscuit.Predicate{
-			Name: api.FactTime,
-			IDs:  []biscuit.Term{biscuit.Date(time.Now())},
-		},
-	})
-	authorizer.AddCheck(api.ControlPlaneStaticTimeCheck)
+	identity.EnforceExpiration(authorizer)
 
 	// Inject facts from our own identity token to support target matching
 	if err := n.injectIdentityFacts(authorizer, pubKey); err != nil {

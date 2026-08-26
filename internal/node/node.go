@@ -1452,6 +1452,7 @@ func (n *SamNode) verifyBiscuit(biscuitData []byte, remotePeer peer.ID) (*biscui
 			continue
 		}
 
+		identity.EnforceExpiration(authorizer)
 		authorizer.AddPolicy(api.AllowIfTruePolicy)
 
 		if err := authorizer.Authorize(); err == nil {

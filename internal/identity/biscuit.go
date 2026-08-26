@@ -47,6 +47,21 @@ func AuthorizerOptions(timeout time.Duration) []biscuit.AuthorizerOption {
 	return []biscuit.AuthorizerOption{biscuit.WithWorldOptions(datalog.WithMaxDuration(timeout))}
 }
 
+// EnforceExpiration injects the current time and the expiration check into an
+// authorizer. Every path that admits a biscuit must call this: expiry is a
+// Datalog check over a time fact, so an authorizer built without the fact
+// silently accepts expired tokens (see #296). A token carrying no expiration()
+// fact fails the check, so this is fail-closed.
+func EnforceExpiration(authorizer biscuit.Authorizer) {
+	authorizer.AddFact(biscuit.Fact{
+		Predicate: biscuit.Predicate{
+			Name: api.FactTime,
+			IDs:  []biscuit.Term{biscuit.Date(time.Now())},
+		},
+	})
+	authorizer.AddCheck(api.ControlPlaneStaticTimeCheck)
+}
+
 // MintBiscuitToken generates a signed Biscuit token for a peer with policy rules based on JWT claims.
 // labels are control-plane-attested key=value claims (canonical, pre-validated); empty means no claims.
 func MintBiscuitToken(signingKey ed25519.PrivateKey, claims jwt.MapClaims, token *oidc.IDToken, remotePeer peer.ID, biscuitExpiry time.Time, roles []string, policyRoles []*api.PolicyRole, labels map[string]string) ([]byte, []string, error) {
@@ -253,14 +268,7 @@ func VerifyBiscuitAndGetKey(biscuitData []byte, expectedPeer peer.ID, trustedPub
 			continue
 		}
 
-		authorizer.AddFact(biscuit.Fact{
-			Predicate: biscuit.Predicate{
-				Name: api.FactTime,
-				IDs:  []biscuit.Term{biscuit.Date(time.Now())},
-			},
-		})
-
-		authorizer.AddCheck(api.ControlPlaneStaticTimeCheck)
+		EnforceExpiration(authorizer)
 		authorizer.AddPolicy(api.AllowIfTruePolicy)
 
 		if err := authorizer.Authorize(); err == nil {
