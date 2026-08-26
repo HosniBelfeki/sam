@@ -325,11 +325,16 @@ if [[ -z "${MESH_HELPERS_LOADED:-}" ]]; then
     export KUBERNETES_CLUSTER_NAME="sam-wi-test"
     export KUBECONTEXT="kind-${KUBERNETES_CLUSTER_NAME}"
 
-    if ! kind get clusters | grep -q "^${KUBERNETES_CLUSTER_NAME}$"; then
+    # Recreating is the default so a local run matches CI, which builds a cluster
+    # per run. Reuse carries over database PVCs, control plane signing keys and
+    # bootstrap tokens; E2E_REUSE_CLUSTER=1 trades that fidelity for a faster loop.
+    local reused_cluster=0
+    if [[ "${E2E_REUSE_CLUSTER:-0}" == "1" ]] && kind get clusters | grep -q "^${KUBERNETES_CLUSTER_NAME}$"; then
+      kind export kubeconfig --name "${KUBERNETES_CLUSTER_NAME}"
+      reused_cluster=1
+    else
       kind delete cluster --name "${KUBERNETES_CLUSTER_NAME}" >/dev/null 2>&1 || true
       kind create cluster --name "${KUBERNETES_CLUSTER_NAME}" --config=tests/e2e/fixtures/kind-cluster.yaml
-    else
-      kind export kubeconfig --name "${KUBERNETES_CLUSTER_NAME}"
     fi
 
     kind load docker-image sam-control-plane:local --name "${KUBERNETES_CLUSTER_NAME}"
@@ -380,6 +385,12 @@ if [[ -z "${MESH_HELPERS_LOADED:-}" ]]; then
     mesh_wait_for_rollout statefulset/sam-db
     mesh_wait_for_rollout deployment/sam-control-plane
     mesh_wait_for_job job/sam-bootstrap
+    # A router surviving a reinstall holds a biscuit no current control plane key
+    # verifies and a bootstrap token past its 24h default, so it can never lease
+    # again. Restarting re-enrolls it against the state this run just installed.
+    if [[ "${reused_cluster}" == "1" ]]; then
+      kubectl --context="${KUBECONTEXT}" rollout restart statefulset/sam-router
+    fi
     mesh_wait_for_rollout statefulset/sam-router
 
     local i
@@ -392,6 +403,22 @@ if [[ -z "${MESH_HELPERS_LOADED:-}" ]]; then
     local router_peer_id
     router_peer_id=$(kubectl --context="${KUBECONTEXT}" logs "sam-router-0" | grep -oE '12D3Koo[a-zA-Z0-9]+' | head -n 1 || true)
     [[ -n "${router_peer_id}" ]]
+
+    # The router pod reports Ready before its lease reaches the control plane, and
+    # a node's /register serves router addresses from that lease, so a node
+    # started in between enrolls against an empty list and exits.
+    local router_node_ip
+    router_node_ip=$(docker inspect -f "{{(index .NetworkSettings.Networks \"${MESH_NETWORK:-kind}\").IPAddress}}" \
+      "$(kubectl --context="${KUBECONTEXT}" get pod sam-router-0 -o jsonpath='{.spec.nodeName}')")
+    local lease_deadline=$((SECONDS + 60))
+    until docker run --rm --network "${MESH_NETWORK:-kind}" python:3.12 \
+        curl -sf --max-time 5 "http://${router_node_ip}:8080/info" 2>/dev/null | grep -qaF "${router_peer_id}"; do
+      if ((SECONDS >= lease_deadline)); then
+        echo "router lease did not reach the control plane within 60s" >&2
+        return 1
+      fi
+      sleep 1
+    done
 
     echo "${router_peer_id}" > "/tmp/sam-wi-test-router-peer-id"
     return 0
