@@ -62,6 +62,37 @@ func EnforceExpiration(authorizer biscuit.Authorizer) {
 	authorizer.AddCheck(api.ControlPlaneStaticTimeCheck)
 }
 
+// ExpirationOf reports the expiration() fact of an already-authorized token, for
+// callers that cache an admission decision and must later know when it lapses.
+func ExpirationOf(authorizer biscuit.Authorizer) (time.Time, error) {
+	facts, err := authorizer.Query(biscuit.Rule{
+		Head: biscuit.Predicate{Name: "get_exp", IDs: []biscuit.Term{biscuit.Variable("e")}},
+		Body: []biscuit.Predicate{{Name: api.FactExpiration, IDs: []biscuit.Term{biscuit.Variable("e")}}},
+	})
+	if err != nil {
+		return time.Time{}, fmt.Errorf("expiration query failed: %w", err)
+	}
+
+	// A token may carry several; the earliest is the one that binds.
+	var earliest time.Time
+	for _, fact := range facts {
+		if len(fact.IDs) != 1 {
+			continue
+		}
+		date, ok := fact.IDs[0].(biscuit.Date)
+		if !ok {
+			continue
+		}
+		if t := time.Time(date); earliest.IsZero() || t.Before(earliest) {
+			earliest = t
+		}
+	}
+	if earliest.IsZero() {
+		return time.Time{}, fmt.Errorf("no %s fact in token", api.FactExpiration)
+	}
+	return earliest, nil
+}
+
 // MintBiscuitToken generates a signed Biscuit token for a peer with policy rules based on JWT claims.
 // labels are control-plane-attested key=value claims (canonical, pre-validated); empty means no claims.
 func MintBiscuitToken(signingKey ed25519.PrivateKey, claims jwt.MapClaims, token *oidc.IDToken, remotePeer peer.ID, biscuitExpiry time.Time, roles []string, policyRoles []*api.PolicyRole, labels map[string]string) ([]byte, []string, error) {

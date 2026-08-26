@@ -180,10 +180,17 @@ func TestVerifyBiscuitRejectsExpiredToken(t *testing.T) {
 		BiscuitTimeout: 500 * time.Millisecond,
 	}
 
-	if _, err := node.verifyBiscuit(mint(time.Now().Add(time.Hour)), remotePeer); err != nil {
+	want := time.Now().Add(time.Hour)
+	_, expiry, err := node.verifyBiscuit(mint(want), remotePeer)
+	if err != nil {
 		t.Fatalf("valid token rejected: %v", err)
 	}
-	if _, err := node.verifyBiscuit(mint(time.Now().Add(-time.Hour)), remotePeer); err == nil {
+	// The admission is cached against this instant, so it has to be the token's.
+	if skew := expiry.Sub(want); skew < -time.Second || skew > time.Second {
+		t.Errorf("reported expiry %v, want ~%v", expiry, want)
+	}
+
+	if _, _, err := node.verifyBiscuit(mint(time.Now().Add(-time.Hour)), remotePeer); err == nil {
 		t.Fatal("expired token admitted on the peer-authentication path")
 	}
 }
