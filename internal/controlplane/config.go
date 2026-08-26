@@ -35,8 +35,8 @@ type Options struct {
 	InsecureSkipTLSVerify bool
 	BiscuitTimeout        time.Duration
 	BiscuitTTL            time.Duration // Lifespan minted into every issued Biscuit's expiration() fact; defaults to api.BiscuitTokenTTL
-	AdminToken            string // Optional: administrative bearer token for protecting policy and enrollment queue REST APIs
-	AutoApproveEnrollment bool   // If true, valid bootstrap token enrollment requests are immediately approved without administrative manual gate
+	AdminToken            string        // Optional: administrative bearer token for protecting policy and enrollment queue REST APIs
+	AutoApproveEnrollment bool          // If true, valid bootstrap token enrollment requests are immediately approved without administrative manual gate
 }
 
 // Default sets default values for control plane options.

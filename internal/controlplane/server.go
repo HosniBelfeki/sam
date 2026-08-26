@@ -691,7 +691,12 @@ func (s *Server) HandleRefresh(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var biscuitBytes []byte
+	// No live OIDC token is presented on refresh, so the session record is what
+	// vouches for this node. The biscuit must not outlive it.
 	biscuitExpiry := time.Now().Add(s.config.BiscuitTTL)
+	if !nodeRecord.ExpiresAt.IsZero() && nodeRecord.ExpiresAt.Before(biscuitExpiry) {
+		biscuitExpiry = nodeRecord.ExpiresAt
+	}
 
 	if nodeRecord.EnrollmentType == "OIDC" {
 		var claims jwt.MapClaims
