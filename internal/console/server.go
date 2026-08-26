@@ -339,6 +339,12 @@ func (s *Server) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, s.cfg.BasePath+"/", http.StatusFound)
 }
 
+// HandleSession reports whether a session cookie is present. It deliberately
+// does not return the cookie's value: the credential is stored HttpOnly so an
+// XSS in the console cannot exfiltrate mesh admin rights, and handing the raw
+// token back to any same-origin fetch would undo exactly that. The SPA never
+// needs it, since the reverse proxy injects the cookie as Authorization for
+// /api/ calls.
 func (s *Server) HandleSession(w http.ResponseWriter, r *http.Request) {
 	sessionCookie, err := r.Cookie("sam_session")
 	if err != nil || sessionCookie.Value == "" {
@@ -350,8 +356,8 @@ func (s *Server) HandleSession(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(map[string]string{
-		"token": sessionCookie.Value,
+	_ = json.NewEncoder(w).Encode(map[string]bool{
+		"authenticated": true,
 	})
 }
 
