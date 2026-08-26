@@ -18,6 +18,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/sam/api"
+	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/multiformats/go-multiaddr"
 )
@@ -63,5 +65,38 @@ func TestNodeRelayACL_AllowReserve(t *testing.T) {
 	node.authPeers.Store(peerID, struct{}{})
 	if !acl.AllowReserve(peerID, addr) {
 		t.Errorf("Expected AllowReserve to return true when peer is authenticated")
+	}
+}
+
+// TestBannedPeerLosesRelayRights covers a ban arriving after the peer was
+// already admitted: the relay ACL reads authPeers, so leaving a stale entry
+// there keeps granting reservations to a revoked peer.
+func TestBannedPeerLosesRelayRights(t *testing.T) {
+	revokedCache, err := lru.New[string, int64](10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	node := &SamNode{revokedPeers: revokedCache, BiscuitTimeout: 500 * time.Millisecond}
+	acl := &nodeRelayACL{node: node}
+
+	peerID, err := peer.Decode("12D3KooWAFv4iJst5G6MjwXhZ66K5zS1tP7A9vSg4vK8f1T7X8t9")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr, _ := multiaddr.NewMultiaddr("/ip4/127.0.0.1/tcp/1234")
+
+	node.authPeers.Store(peerID, struct{}{})
+	if !acl.AllowReserve(peerID, addr) {
+		t.Fatal("expected an admitted peer to hold relay rights")
+	}
+
+	node.handleBannedEvent(&api.MeshEvent{
+		Type:      api.MeshEvent_BANNED,
+		PeerId:    peerID.String(),
+		Timestamp: time.Now().UnixMilli(),
+	})
+
+	if acl.AllowReserve(peerID, addr) {
+		t.Error("banned peer still holds relay rights")
 	}
 }

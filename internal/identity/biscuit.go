@@ -369,9 +369,23 @@ func MintBootstrapBiscuitToken(signingKey ed25519.PrivateKey, remotePeer peer.ID
 	return mintBiscuit(signingKey, remotePeer, []string{role}, expiration, nil, policyRoles, labels)
 }
 
-// VerifyAndExtractPeerID checks that the biscuit is signed by one of the trusted keys and returns the peer ID.
-// This function does NOT perform time checks, making it suitable for token refresh flows.
+// VerifyExpiredAndExtractPeerID checks that the biscuit is signed by one of the
+// trusted keys and returns the peer ID, deliberately WITHOUT enforcing expiry.
+// Only the refresh flow may use it: a node refreshes precisely because its token
+// lapsed, so it has nothing unexpired to present. Callers must bound the request
+// some other way (the refresh handler gates on the session record and a signed
+// challenge). Everywhere else, use VerifyAndExtractPeerID.
+func VerifyExpiredAndExtractPeerID(trustedPublicKeys []ed25519.PublicKey, biscuitData []byte, timeout time.Duration) (peer.ID, error) {
+	return extractPeerID(trustedPublicKeys, biscuitData, timeout, false)
+}
+
+// VerifyAndExtractPeerID checks that the biscuit is signed by one of the trusted
+// keys and is unexpired, and returns the peer ID.
 func VerifyAndExtractPeerID(trustedPublicKeys []ed25519.PublicKey, biscuitData []byte, timeout time.Duration) (peer.ID, error) {
+	return extractPeerID(trustedPublicKeys, biscuitData, timeout, true)
+}
+
+func extractPeerID(trustedPublicKeys []ed25519.PublicKey, biscuitData []byte, timeout time.Duration, enforceExpiry bool) (peer.ID, error) {
 	b, err := biscuit.Unmarshal(biscuitData)
 	if err != nil {
 		return "", fmt.Errorf("malformed biscuit: %w", err)
@@ -389,6 +403,12 @@ func VerifyAndExtractPeerID(trustedPublicKeys []ed25519.PublicKey, biscuitData [
 			lastErr = err
 			continue
 		}
+		if enforceExpiry {
+			EnforceExpiration(auth)
+		}
+		// No policy is added, so a token that passes every check still reports
+		// ErrNoMatchingPolicy; that is success here. A failed check reports the
+		// check error instead, so expiry still rejects.
 		if err := auth.Authorize(); err == nil || errors.Is(err, biscuit.ErrNoMatchingPolicy) {
 			authorizer = auth
 			verified = true
@@ -437,7 +457,11 @@ func VerifyAndExtractPeerID(trustedPublicKeys []ed25519.PublicKey, biscuitData [
 }
 
 // VerifyBiscuitRole checks that the biscuit is signed by the control plane's public key
-// and contains the specified role fact.
+// and contains the specified role fact. It deliberately does NOT enforce expiry: its
+// callers either hold a token the control plane minted moments ago, or are deciding
+// whether an identity loaded from disk is worth starting with, where a lapsed token
+// should trigger a refresh rather than refuse to boot. Do not use it to admit a token
+// received from a peer.
 func VerifyBiscuitRole(biscuitData []byte, controlPlanePubKey ed25519.PublicKey, expectedRole string, timeout time.Duration) error {
 	b, err := biscuit.Unmarshal(biscuitData)
 	if err != nil {

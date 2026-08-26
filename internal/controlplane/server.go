@@ -626,8 +626,10 @@ func (s *Server) HandleRefresh(w http.ResponseWriter, r *http.Request) {
 		trustedKeys = append(trustedKeys, k.Public)
 	}
 
-	// Verify current biscuit signature and extract peer ID
-	pID, err := identity.VerifyAndExtractPeerID(trustedKeys, currentBiscuitBytes, s.config.BiscuitTimeout)
+	// Verify current biscuit signature and extract peer ID. Expiry is not
+	// enforced here: a node refreshes because its token lapsed. The session
+	// record and the signed challenge below are what bound this request.
+	pID, err := identity.VerifyExpiredAndExtractPeerID(trustedKeys, currentBiscuitBytes, s.config.BiscuitTimeout)
 	if err != nil {
 		logger.Warnw("Invalid biscuit presented for refresh", "error", err)
 		http.Error(w, "Invalid biscuit: "+err.Error(), http.StatusUnauthorized)

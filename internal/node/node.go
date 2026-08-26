@@ -1197,7 +1197,9 @@ func (n *SamNode) handleBannedEvent(event *api.MeshEvent) {
 	if n.revokedPeers != nil {
 		n.revokedPeers.Add(event.PeerId, event.Timestamp)
 	}
+	// Drop any prior admission, otherwise the relay ACL keeps honouring it.
 	if p, err := peer.Decode(event.PeerId); err == nil {
+		n.authPeers.Delete(p)
 		if n.Host != nil {
 			_ = n.Host.Network().ClosePeer(p)
 		}
@@ -1388,6 +1390,13 @@ func (n *SamNode) HandleAuthHandshake(s network.Stream) {
 		}
 	}()
 	remotePeer := s.Conn().RemotePeer()
+
+	if n.revokedPeers != nil {
+		if _, revoked := n.revokedPeers.Get(remotePeer.String()); revoked {
+			logger.Warnf("[AuthN] Peer %s is revoked", remotePeer)
+			return
+		}
+	}
 
 	reader := msgio.NewVarintReaderSize(s, 1024*64)
 	msg, err := reader.ReadMsg()

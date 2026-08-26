@@ -58,12 +58,12 @@ func biscuitExpiration(t *testing.T, tokenBytes []byte, cpPubKey ed25519.PublicK
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}
-	if len(facts) != 1 || len(facts[0].Predicate.IDs) != 1 {
+	if len(facts) != 1 || len(facts[0].IDs) != 1 {
 		t.Fatalf("expected exactly one expiration fact, got %v", facts)
 	}
-	date, ok := facts[0].Predicate.IDs[0].(biscuit.Date)
+	date, ok := facts[0].IDs[0].(biscuit.Date)
 	if !ok {
-		t.Fatalf("expiration term is %T, want biscuit.Date", facts[0].Predicate.IDs[0])
+		t.Fatalf("expiration term is %T, want biscuit.Date", facts[0].IDs[0])
 	}
 	return time.Time(date)
 }
