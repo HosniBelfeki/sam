@@ -648,14 +648,12 @@ func (s *Server) HandleRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if nodeRecord.Banned {
-		logger.Warnw("Banned node attempted refresh", "peer_id", pID.String())
-		http.Error(w, "Node is banned", http.StatusForbidden)
-		return
-	}
-
-	// Check session expiry (OIDC 90 days expiration)
-	if !nodeRecord.ExpiresAt.IsZero() && time.Now().After(nodeRecord.ExpiresAt) {
+	if err := nodeRecord.CheckAdmission(time.Now()); err != nil {
+		if errors.Is(err, storage.ErrNodeBanned) {
+			logger.Warnw("Banned node attempted refresh", "peer_id", pID.String())
+			http.Error(w, "Node is banned", http.StatusForbidden)
+			return
+		}
 		logger.Warnw("Session expired for node", "peer_id", pID.String(), "expires_at", nodeRecord.ExpiresAt)
 		http.Error(w, "Session expired, please re-enroll interactively", http.StatusUnauthorized)
 		return
@@ -944,7 +942,7 @@ func (s *Server) HandlePolicies(w http.ResponseWriter, r *http.Request) {
 						peerID, err := identity.VerifyAndExtractPeerID(trustedKeys, biscuitBytes, s.config.BiscuitTimeout)
 						if err == nil {
 							nodeRecord, nodeErr := s.store.GetNode(r.Context(), peerID.String())
-							if nodeErr == nil && nodeRecord != nil && !nodeRecord.Banned {
+							if nodeErr == nil && nodeRecord != nil && nodeRecord.CheckAdmission(time.Now()) == nil {
 								isNode = true
 							}
 						}
