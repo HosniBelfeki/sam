@@ -16,6 +16,8 @@ package node
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
@@ -48,7 +50,10 @@ func StartSidecarServer(node *SamNode, addr, socketPath, token, certFile, keyFil
 	// Public endpoints
 	mux.HandleFunc("/healthz", handleHealthz)
 	mux.HandleFunc("/readyz", handleReadyz)
-	mux.Handle("/metrics", promhttp.Handler())
+	// Gated like the rest: the labels carry peer IDs and per-peer request counts,
+	// and this mux is reachable by any local process over TCP. Socket callers are
+	// unaffected, which is how every scrape in this repo reads it.
+	mux.Handle("/metrics", withAuth(token, true, promhttp.Handler()))
 
 	// Protected endpoints. allowAuthorizationFallback=true is safe here: none of
 	// these ever forward the inbound Authorization header to another service.
@@ -403,7 +408,7 @@ func withAuth(token string, allowAuthorizationFallback bool, next http.Handler) 
 			return
 		}
 
-		if parts[1] != token {
+		if !constantTimeEqual(parts[1], token) {
 			http.Error(w, "Forbidden", http.StatusForbidden)
 			return
 		}
@@ -416,6 +421,16 @@ func withAuth(token string, allowAuthorizationFallback bool, next http.Handler) 
 
 		next.ServeHTTP(w, r)
 	})
+}
+
+// constantTimeEqual compares two secrets without leaking their contents through
+// timing. Hashing first keeps the comparison length-independent, so a mismatched
+// length is no more distinguishable than a mismatched byte. This mirrors how the
+// control plane checks its admin token.
+func constantTimeEqual(got, want string) bool {
+	gotHash := sha256.Sum256([]byte(got))
+	wantHash := sha256.Sum256([]byte(want))
+	return subtle.ConstantTimeCompare(gotHash[:], wantHash[:]) == 1
 }
 
 type ServiceRequest struct {
