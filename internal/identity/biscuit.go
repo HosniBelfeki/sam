@@ -240,16 +240,24 @@ func mintBiscuit(signingKey ed25519.PrivateKey, remotePeer peer.ID, roles []stri
 				allTargets = append(allTargets, pr.AllowedTargets...)
 			}
 
-			for _, customFact := range pr.CustomDatalog {
-				trimmed := strings.TrimRight(strings.TrimSpace(customFact), ";")
+			for _, customEntry := range pr.CustomDatalog {
+				trimmed := strings.TrimRight(strings.TrimSpace(customEntry), ";")
 				if trimmed == "" {
 					continue
 				}
 				fact, err := parser.FromStringFact(trimmed)
 				if err != nil {
-					errs = append(errs, fmt.Errorf("failed to parse custom Datalog fact %q for role %s: %w", customFact, role, err))
+					// custom_datalog holds facts and rules alike. A rule is
+					// node-side material, distributed to nodes and applied by
+					// their authorizer, and cannot be an authority fact — so
+					// skip it here rather than fail the token and lock every
+					// node resolving to this role out of enroll and refresh.
+					if _, ruleErr := parser.FromStringRule(trimmed); ruleErr == nil {
+						continue
+					}
+					errs = append(errs, fmt.Errorf("failed to parse custom Datalog entry %q for role %s as a fact or a rule: %w", customEntry, role, err))
 				} else if err := addFact(fact); err != nil {
-					errs = append(errs, fmt.Errorf("failed to add custom Datalog fact %q for role %s: %w", customFact, role, err))
+					errs = append(errs, fmt.Errorf("failed to add custom Datalog fact %q for role %s: %w", customEntry, role, err))
 				}
 			}
 		}
