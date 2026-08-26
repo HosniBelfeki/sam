@@ -591,56 +591,76 @@ func (n *SamNode) fetchRemoteToolCatalogue(ctx context.Context, targetPeer peer.
 			connectService = api.MCPServicePrefix + connectService
 		}
 
-		n.preparePeerAddrs(ctx, targetPeer)
-		session, cleanup, err := n.ConnectMCPSession(ctx, targetPeer, connectService, nil)
-		if err != nil {
-			if errors.Is(err, ErrAuthRejected) {
-				// Not authorized for this service: omit it entirely rather than
-				// leaking its existence ("what you see is what you can do", #176).
-				logger.Debugf("Hiding unauthorized service %s from discovery: %v", targetService, err)
-				continue
-			}
-			logger.Debugf("Failed to connect MCP session for service %s: %v", targetService, err)
-			if serviceNameFilter == "" || connectService == serviceNameFilter {
-				rows = append(rows, remoteToolRow{
-					PeerID:   targetPeer.String(),
-					ToolName: connectService,
-					Error:    fmt.Sprintf("failed to connect: %v", err),
-				})
-			}
-			continue
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
 
-		listRes, err := session.ListTools(ctx, nil)
-		if err == nil && listRes != nil {
-			for _, t := range listRes.Tools {
-				if t == nil {
-					continue
-				}
-				t.Name = connectService + "/" + t.Name
-				if serviceNameFilter != "" && !strings.HasPrefix(t.Name, serviceNameFilter+"/") {
-					continue
-				}
-				rows = append(rows, remoteToolRow{
-					PeerID:      targetPeer.String(),
-					ToolName:    t.Name,
-					Description: t.Description,
-				})
-			}
-		} else {
-			if serviceNameFilter == "" || connectService == serviceNameFilter {
-				rows = append(rows, remoteToolRow{
-					PeerID:   targetPeer.String(),
-					ToolName: targetService,
-					Error:    fmt.Sprintf("failed to list tools: %v", err),
-				})
-			}
-		}
-
-		cleanup()
+		rows = append(rows, n.fetchToolsForRemoteService(ctx, targetPeer, connectService, targetService, serviceNameFilter)...)
 	}
 
 	return rows, nil
+}
+
+// fetchToolsForRemoteService opens one MCP session to a single remote service,
+// lists its tools, and returns the matching rows. Per-service failures are
+// encoded as error rows (or omitted for AuthRejected); the session is always
+// closed when the function returns.
+func (n *SamNode) fetchToolsForRemoteService(
+	ctx context.Context,
+	targetPeer peer.ID,
+	connectService, targetService, serviceNameFilter string,
+) []remoteToolRow {
+	n.preparePeerAddrs(ctx, targetPeer)
+	session, cleanup, err := n.ConnectMCPSession(ctx, targetPeer, connectService, nil)
+	if err != nil {
+		if errors.Is(err, ErrAuthRejected) {
+			// Not authorized for this service: omit it entirely rather than
+			// leaking its existence ("what you see is what you can do", #176).
+			logger.Debugf("Hiding unauthorized service %s from discovery: %v", targetService, err)
+			return nil
+		}
+		logger.Debugf("Failed to connect MCP session for service %s: %v", targetService, err)
+		if serviceNameFilter == "" || connectService == serviceNameFilter {
+			return []remoteToolRow{{
+				PeerID:   targetPeer.String(),
+				ToolName: connectService,
+				Error:    fmt.Sprintf("failed to connect: %v", err),
+			}}
+		}
+		return nil
+	}
+	defer cleanup()
+
+	listRes, err := session.ListTools(ctx, nil)
+	if err != nil {
+		if serviceNameFilter == "" || connectService == serviceNameFilter {
+			return []remoteToolRow{{
+				PeerID:   targetPeer.String(),
+				ToolName: targetService,
+				Error:    fmt.Sprintf("failed to list tools: %v", err),
+			}}
+		}
+		return nil
+	}
+	if listRes == nil {
+		return nil
+	}
+	var rows []remoteToolRow
+	for _, t := range listRes.Tools {
+		if t == nil {
+			continue
+		}
+		t.Name = connectService + "/" + t.Name
+		if serviceNameFilter != "" && !strings.HasPrefix(t.Name, serviceNameFilter+"/") {
+			continue
+		}
+		rows = append(rows, remoteToolRow{
+			PeerID:      targetPeer.String(),
+			ToolName:    t.Name,
+			Description: t.Description,
+		})
+	}
+	return rows
 }
 
 // fanOutFetch queries each peer's tool catalogue concurrently with a
