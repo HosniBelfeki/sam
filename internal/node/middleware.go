@@ -213,13 +213,8 @@ func (n *SamNode) Authorize(rawToken []byte, req RequestContext, pubKey ed25519.
 		return err
 	}
 
-	// Verify that the token is bound to the connecting peer's ID
-	boundFact := biscuit.Fact{Predicate: biscuit.Predicate{
-		Name: "node",
-		IDs:  []biscuit.Term{biscuit.String(req.PeerID.String())},
-	}}
-	if _, err := b.GetBlockID(boundFact); err != nil {
-		return fmt.Errorf("token is not bound to peer %s", req.PeerID)
+	if err := identity.RequireAuthorityBinding(b, req.PeerID); err != nil {
+		return err
 	}
 
 	// Inject the current action context (Standard Vocabulary)

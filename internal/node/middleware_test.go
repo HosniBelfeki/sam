@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	cryptorand "crypto/rand"
 	"fmt"
 
 	"io"
@@ -245,6 +246,64 @@ func TestAuthorizeRejectsExpiredBiscuit(t *testing.T) {
 
 	if err := node.Authorize(tokenBytes, req, pub); err == nil {
 		t.Fatal("Authorize succeeded with an expired biscuit; expiration is not enforced on the node dataplane")
+	}
+}
+
+// TestAuthorizeRejectsAppendedPeerBinding covers the dataplane half of the
+// binding bypass. Appending a block needs no root key, so a peer holding any
+// valid token could append node(<its own peer id>) and connect under its own
+// libp2p key; the binding must only honour the authority block.
+func TestAuthorizeRejectsAppendedPeerBinding(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	victim := peer.ID("victim-peer")
+	attacker := peer.ID("attacker-peer")
+
+	builder := biscuit.NewBuilder(priv)
+	for _, f := range []biscuit.Fact{
+		{Predicate: biscuit.Predicate{Name: api.FactTargetUnrestricted}},
+		{Predicate: biscuit.Predicate{Name: api.FactNode, IDs: []biscuit.Term{biscuit.String(victim.String())}}},
+		{Predicate: biscuit.Predicate{Name: api.FactClientPeerID, IDs: []biscuit.Term{biscuit.String(attacker.String())}}},
+		{Predicate: biscuit.Predicate{Name: api.FactGrantedServiceExact, IDs: []biscuit.Term{biscuit.String(api.SystemNamespace), biscuit.String("/test/proto")}}},
+		{Predicate: biscuit.Predicate{Name: api.FactExpiration, IDs: []biscuit.Term{biscuit.Date(time.Now().Add(time.Hour))}}},
+	} {
+		if err := builder.AddAuthorityFact(f); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	b, err := builder.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	block := b.CreateBlock()
+	if err := block.AddFact(biscuit.Fact{Predicate: biscuit.Predicate{
+		Name: api.FactNode,
+		IDs:  []biscuit.Term{biscuit.String(attacker.String())},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	attenuated, err := b.Append(cryptorand.Reader, block.Build())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tokenBytes, err := attenuated.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	node := &SamNode{
+		trustedKeys:    []TrustedKey{{Key: pub, ReceivedAt: time.Now()}},
+		BiscuitTimeout: 500 * time.Millisecond,
+	}
+
+	req := RequestContext{PeerID: attacker, Protocol: "/test/proto"}
+	if err := node.Authorize(tokenBytes, req, pub); err == nil {
+		t.Fatal("Authorize accepted a token re-bound to the caller by an appended block")
 	}
 }
 

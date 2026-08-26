@@ -62,6 +62,35 @@ func EnforceExpiration(authorizer biscuit.Authorizer) {
 	authorizer.AddCheck(api.ControlPlaneStaticTimeCheck)
 }
 
+// authorityBlockID is the block index biscuit-go reports for a fact carried by
+// the root-signed authority block. Every other index is an appended attenuation
+// block, which any token holder can create without the root key.
+const authorityBlockID = 0
+
+// RequireAuthorityBinding checks that the token is bound to expectedPeer by an
+// api.FactNode fact in the authority block.
+//
+// The block matters. biscuit-go's GetBlockID searches appended attenuation
+// blocks too, and appending needs no root key, so a holder of anyone's token can
+// append node(<their own peer id>) offline and satisfy a binding that only tests
+// the error. Those facts are invisible to the Datalog authorizer (see
+// TestAttenuationBlockFactsAreInvisibleToTheAuthorizer), so this lookup is the
+// only place the distinction has to be made by hand.
+func RequireAuthorityBinding(b *biscuit.Biscuit, expectedPeer peer.ID) error {
+	boundFact := biscuit.Fact{Predicate: biscuit.Predicate{
+		Name: api.FactNode,
+		IDs:  []biscuit.Term{biscuit.String(expectedPeer.String())},
+	}}
+	blockID, err := b.GetBlockID(boundFact)
+	if err != nil {
+		return fmt.Errorf("token is not bound to peer %s: %w", expectedPeer, err)
+	}
+	if blockID != authorityBlockID {
+		return fmt.Errorf("token is not bound to peer %s: %s fact comes from appended block %d, not the authority block", expectedPeer, api.FactNode, blockID)
+	}
+	return nil
+}
+
 // ExpirationOf reports the expiration() fact of an already-authorized token, for
 // callers that cache an admission decision and must later know when it lapses.
 func ExpirationOf(authorizer biscuit.Authorizer) (time.Time, error) {
@@ -315,13 +344,8 @@ func VerifyBiscuitAndGetKey(biscuitData []byte, expectedPeer peer.ID, trustedPub
 		return nil, nil, fmt.Errorf("no valid key found for verification: %v", lastErr)
 	}
 
-	// Enforce hardware binding
-	boundFact := biscuit.Fact{Predicate: biscuit.Predicate{
-		Name: "node",
-		IDs:  []biscuit.Term{biscuit.String(expectedPeer.String())},
-	}}
-	if _, err := b.GetBlockID(boundFact); err != nil {
-		return nil, nil, fmt.Errorf("token is not bound to peer %s: %w", expectedPeer, err)
+	if err := RequireAuthorityBinding(b, expectedPeer); err != nil {
+		return nil, nil, err
 	}
 
 	return b, verifyingKey, nil
