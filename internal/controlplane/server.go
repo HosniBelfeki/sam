@@ -507,6 +507,14 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request) {
 	finalRoles := []string{req.RequestedRole}
 	finalRoles = append(finalRoles, customAccessRoles...)
 
+	// The node declared these labels itself, so they are only worth signing if
+	// a role it resolves to says it may carry them.
+	if err := api.LabelPatternsAllow(allowedLabelPatterns(finalRoles, policyRoles), req.Labels); err != nil {
+		logger.Warnw("Rejected undeclarable label at enrollment", "peer_id", req.PeerId, "error", err)
+		http.Error(w, "Label not permitted: "+err.Error(), http.StatusForbidden)
+		return
+	}
+
 	// Mint token. A biscuit must never outlive the OIDC token that vouched
 	// for it, so its expiration is capped at whichever comes first.
 	biscuitExpiry := time.Now().Add(s.config.BiscuitTTL)
@@ -1202,6 +1210,14 @@ func (s *Server) HandleEnroll(w http.ResponseWriter, r *http.Request) {
 		if err != nil && err != storage.ErrNotFound {
 			logger.Errorf("Failed to retrieve mesh policy: %v", err)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+		// Nobody reviews an auto-approved enrollment, so the role's
+		// allowed_labels is the only thing standing between a self-declared
+		// label and a signed one. Manual approval attests them separately.
+		if err := api.LabelPatternsAllow(allowedLabelPatterns([]string{tokenRecord.Role}, policyRoles), req.Labels); err != nil {
+			logger.Warnw("Rejected undeclarable label at bootstrap enrollment", "peer_id", req.PeerId, "error", err)
+			s.writeEnrollError(w, api.EnrollmentStatus_ENROLLMENT_STATUS_REJECTED, "Label not permitted: "+err.Error())
 			return
 		}
 		biscuitBytes, err := identity.MintBootstrapBiscuitToken(privKey, pID, tokenRecord.Role, time.Now().Add(s.config.BiscuitTTL), policyRoles, req.Labels)
@@ -1933,6 +1949,23 @@ func (s *Server) HandleUserRevoke(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte("Node revoked successfully"))
 }
 
+// allowedLabelPatterns collects the label grants of every role an identity
+// resolves to. A role that names none contributes none, so an identity with no
+// grant anywhere may declare no labels at all.
+func allowedLabelPatterns(roles []string, policyRoles []*api.PolicyRole) []string {
+	wanted := make(map[string]bool, len(roles))
+	for _, r := range roles {
+		wanted[r] = true
+	}
+	var patterns []string
+	for _, pr := range policyRoles {
+		if pr != nil && wanted[pr.Name] {
+			patterns = append(patterns, pr.AllowedLabels...)
+		}
+	}
+	return patterns
+}
+
 func resolveRoles(peerID string, claims jwt.MapClaims, bindings []*api.PolicyBinding) []string {
 	if claims == nil {
 		claims = make(jwt.MapClaims)
@@ -2053,6 +2086,11 @@ func validatePolicyConfig(req *api.PolicyConfigUpdateRequest) error {
 		for _, agent := range r.AllowedAgents {
 			if err := api.ValidateAgentPattern(agent); err != nil {
 				return fmt.Errorf("invalid allowed_agent %q in role %s: %w", agent, r.Name, err)
+			}
+		}
+		for _, label := range r.AllowedLabels {
+			if err := api.ValidateLabelPattern(label); err != nil {
+				return fmt.Errorf("in role %s: %w", r.Name, err)
 			}
 		}
 		for _, dl := range r.CustomDatalog {
