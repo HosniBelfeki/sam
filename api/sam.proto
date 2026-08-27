@@ -182,6 +182,10 @@ message PolicyRole {
   // control plane attested about that node. Distinct from allowed_targets:
   // being allowed to call an agent is not being allowed to impersonate it.
   repeated string allowed_agents = 5;
+  // Labels a node with this role may declare at enrollment, as "*", "key=*"
+  // or "key=value". A node declares its own labels, so this is what turns a
+  // declaration into something the control plane is willing to sign.
+  repeated string allowed_labels = 6;
 }
 
 message PolicyBinding {

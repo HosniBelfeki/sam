@@ -801,6 +801,16 @@ func (s *SQLStore) SaveMeshPolicy(ctx context.Context, roles []*api.PolicyRole, 
 				return err
 			}
 		}
+		for _, agent := range r.AllowedAgents {
+			if _, err := tx.ExecContext(ctx, s.rebind("INSERT INTO role_permissions (role_name, resource_type, resource_value) VALUES (?, 'agent', ?)"), r.Name, agent); err != nil {
+				return err
+			}
+		}
+		for _, label := range r.AllowedLabels {
+			if _, err := tx.ExecContext(ctx, s.rebind("INSERT INTO role_permissions (role_name, resource_type, resource_value) VALUES (?, 'label', ?)"), r.Name, label); err != nil {
+				return err
+			}
+		}
 	}
 
 	for _, b := range bindings {
@@ -860,6 +870,10 @@ func (s *SQLStore) GetMeshPolicy(ctx context.Context) ([]*api.PolicyRole, []*api
 				r.AllowedServices = append(r.AllowedServices, resValue)
 			case "custom_datalog":
 				r.CustomDatalog = append(r.CustomDatalog, resValue)
+			case "agent":
+				r.AllowedAgents = append(r.AllowedAgents, resValue)
+			case "label":
+				r.AllowedLabels = append(r.AllowedLabels, resValue)
 			}
 		}
 	}
