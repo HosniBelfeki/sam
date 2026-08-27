@@ -497,7 +497,7 @@ func BuildServiceDatalogFact(serviceStr string) biscuit.Fact {
 func BuildTargetDatalogFact(targetStr string) biscuit.Fact {
 	tFact, tVal := ParseServiceTarget(targetStr)
 	if tFact == "" {
-		tFact = "node"
+		tFact = FactNode
 	}
 	if tFact == "*" && tVal == "*" {
 		return biscuit.Fact{Predicate: biscuit.Predicate{
@@ -577,31 +577,23 @@ func LabelCheck(required map[string]string) (biscuit.Check, error) {
 
 // isExactService reports whether serviceStr resolves to a plain exact-match grant, as opposed to a
 // wildcard/prefix/suffix pattern which already collapses to a single, cheap fact via BuildServiceDatalogFact.
+// The classification is asked of BuildServiceDatalogFact rather than repeated here: a new wildcard shape
+// added to one and not the other would freeze a wildcard grant into a set, where only exact contains()
+// matches it, and it would silently grant nothing.
 func isExactService(serviceStr string) (svcType, svcName string, exact bool) {
 	svcType, svcName = ParseServiceTarget(serviceStr)
-	if svcType == "*" && svcName == "*" {
-		return svcType, svcName, false
-	}
-	if svcName == "*" || strings.HasPrefix(svcName, "*.") || strings.HasSuffix(svcName, ".*") {
-		return svcType, svcName, false
-	}
-	return svcType, svcName, true
+	return svcType, svcName, BuildServiceDatalogFact(serviceStr).Name == FactGrantedServiceExact
 }
 
 // isExactTarget reports whether targetStr resolves to a plain exact-match grant, as opposed to a
 // wildcard/prefix/suffix pattern which already collapses to a single, cheap fact via BuildTargetDatalogFact.
+// See isExactService for why the classification is asked of the builder instead of repeated.
 func isExactTarget(targetStr string) (tFact, tVal string, exact bool) {
 	tFact, tVal = ParseServiceTarget(targetStr)
 	if tFact == "" {
-		tFact = "node"
+		tFact = FactNode
 	}
-	if tFact == "*" && tVal == "*" {
-		return tFact, tVal, false
-	}
-	if tVal == "*" || strings.HasPrefix(tVal, "*.") || strings.HasSuffix(tVal, ".*") {
-		return tFact, tVal, false
-	}
-	return tFact, tVal, true
+	return tFact, tVal, BuildTargetDatalogFact(targetStr).Name == FactGrantedTargetExact
 }
 
 // BuildAgentDatalogFact translates one agent namespace pattern into a Datalog fact.
