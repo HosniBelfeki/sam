@@ -29,6 +29,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -1936,10 +1937,13 @@ func resolveRoles(peerID string, claims jwt.MapClaims, bindings []*api.PolicyBin
 	if claims == nil {
 		claims = make(jwt.MapClaims)
 	}
-	oidcRoles := toStringSlice(claims["roles"])
-	oidcGroups := toStringSlice(claims["groups"])
-	oidcSub, _ := claims["sub"].(string)
-	oidcEmail, _ := claims["email"].(string)
+
+	// Driven by the same claim->fact map that minting uses, so a claim added
+	// there resolves bindings here too instead of being silently ignored.
+	factValues := make(map[string][]string)
+	for claim, fact := range api.OIDCClaimToFact() {
+		factValues[fact] = append(factValues[fact], toStringSlice(claims[claim])...)
+	}
 
 	resolvedRoles := make(map[string]bool)
 	for _, b := range bindings {
@@ -1956,31 +1960,15 @@ func resolveRoles(peerID string, claims jwt.MapClaims, bindings []*api.PolicyBin
 				continue
 			}
 			prefix, value := parts[0], parts[1]
-			switch prefix {
-			case api.FactNode:
+			// node is the peer presenting the request, not an OIDC claim.
+			if prefix == api.FactNode {
 				if peerID == value {
 					resolvedRoles[b.Role] = true
 				}
-			case api.FactGroup:
-				for _, g := range oidcGroups {
-					if g == value {
-						resolvedRoles[b.Role] = true
-					}
-				}
-			case api.FactUser:
-				if oidcSub == value {
-					resolvedRoles[b.Role] = true
-				}
-			case api.FactEmail:
-				if oidcEmail == value {
-					resolvedRoles[b.Role] = true
-				}
-			case api.FactRole:
-				for _, r := range oidcRoles {
-					if r == value {
-						resolvedRoles[b.Role] = true
-					}
-				}
+				continue
+			}
+			if slices.Contains(factValues[prefix], value) {
+				resolvedRoles[b.Role] = true
 			}
 		}
 	}

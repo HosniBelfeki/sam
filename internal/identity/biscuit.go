@@ -384,30 +384,20 @@ func translateClaimsToFacts(addFact func(biscuit.Fact) error, claims map[string]
 		if !ok || val == nil {
 			continue
 		}
-		switch factName {
-		case api.FactUser, api.FactEmail:
-			if strVal, ok := val.(string); ok && strVal != "" {
-				if err := addFact(biscuit.Fact{Predicate: biscuit.Predicate{
-					Name: factName,
-					IDs:  []biscuit.Term{biscuit.String(strVal)},
-				}}); err != nil {
-					return fmt.Errorf("failed to add %s fact: %w", factName, err)
-				}
+		// Every claim is treated as a list; a scalar is a list of one. Special
+		// casing which facts are multi-valued would mean a claim added to the
+		// map but not to that list is silently dropped at mint time.
+		seen := make(map[string]bool)
+		for _, item := range toStringSlice(val) {
+			if seen[item] {
+				continue
 			}
-		case api.FactGroup, api.FactRole:
-			items := toStringSlice(val)
-			seen := make(map[string]bool)
-			for _, item := range items {
-				if seen[item] {
-					continue
-				}
-				seen[item] = true
-				if err := addFact(biscuit.Fact{Predicate: biscuit.Predicate{
-					Name: factName,
-					IDs:  []biscuit.Term{biscuit.String(item)},
-				}}); err != nil {
-					return fmt.Errorf("failed to add %s fact: %w", factName, err)
-				}
+			seen[item] = true
+			if err := addFact(biscuit.Fact{Predicate: biscuit.Predicate{
+				Name: factName,
+				IDs:  []biscuit.Term{biscuit.String(item)},
+			}}); err != nil {
+				return fmt.Errorf("failed to add %s fact: %w", factName, err)
 			}
 		}
 	}
