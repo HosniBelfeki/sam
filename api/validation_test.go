@@ -61,9 +61,15 @@ func TestValidateTargetFormat(t *testing.T) {
 		{"valid target", "group:backend", false},
 		{"valid email", "email:foo@bar.com", false},
 		{"valid wildcard", "*", false},
+		{"wildcard fact and value", "*:*", false},
+		{"wildcard value for one fact", "group:*", false},
 		{"invalid no colon", "group-backend", true},
 		{"invalid empty fact", ":backend", true},
 		{"invalid empty value", "group:", true},
+		// A fact nothing derives would mint a grant that never matches, so it
+		// is refused at config time rather than denying silently at runtime.
+		{"unknown fact", "banana:yellow", true},
+		{"agent is not a target", "agent:reviewer-7.prod.acme.example", true},
 	}
 
 	for _, tt := range tests {

@@ -121,7 +121,7 @@ func TestControlPlanePubSubEventIntegration(t *testing.T) {
 			{
 				Name:            "developer",
 				AllowedServices: []string{"mcp://api"},
-				AllowedTargets:  []string{"tcp://db:5432"},
+				AllowedTargets:  []string{"group:db-nodes"},
 			},
 		},
 		Bindings: []*api.PolicyBinding{
