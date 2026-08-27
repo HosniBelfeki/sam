@@ -177,6 +177,11 @@ message PolicyRole {
   repeated string allowed_targets = 2;
   repeated string allowed_services = 3;
   repeated string custom_datalog = 4;
+  // Agent namespaces the holder may speak for, e.g. "*.prod.acme.example".
+  // An agent claim is the calling node's word, so it is only worth what the
+  // control plane attested about that node. Distinct from allowed_targets:
+  // being allowed to call an agent is not being allowed to impersonate it.
+  repeated string allowed_agents = 5;
 }
 
 message PolicyBinding {

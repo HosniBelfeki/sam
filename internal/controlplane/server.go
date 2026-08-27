@@ -2062,6 +2062,11 @@ func validatePolicyConfig(req *api.PolicyConfigUpdateRequest) error {
 				return fmt.Errorf("invalid allowed_target %q in role %s: %w", target, r.Name, err)
 			}
 		}
+		for _, agent := range r.AllowedAgents {
+			if err := api.ValidateAgentPattern(agent); err != nil {
+				return fmt.Errorf("invalid allowed_agent %q in role %s: %w", agent, r.Name, err)
+			}
+		}
 		for _, dl := range r.CustomDatalog {
 			trimmed := strings.TrimRight(strings.TrimSpace(dl), ";")
 			if trimmed == "" {
@@ -2080,6 +2085,7 @@ func validatePolicyConfig(req *api.PolicyConfigUpdateRequest) error {
 		// which roles are mutually exclusive for a given identity.
 		factBudget += len(api.BuildServiceDatalogFacts(r.AllowedServices))
 		factBudget += len(api.BuildTargetDatalogFacts(r.AllowedTargets))
+		factBudget += len(api.BuildAgentDatalogFacts(r.AllowedAgents))
 		factBudget += len(r.CustomDatalog)
 	}
 

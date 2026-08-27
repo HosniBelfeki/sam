@@ -121,6 +121,18 @@ func BuildPolicyRules(roles []*api.PolicyRole, bindings []*api.PolicyBinding) []
 			})
 		}
 
+		for _, fact := range api.BuildAgentDatalogFacts(role.AllowedAgents) {
+			if fact.Name == api.FactGrantedAgentAll {
+				logger.Warnf("Role %s may speak for any agent; any peer holding it can name any agent identity in the mesh", roleName)
+			}
+			rules = append(rules, biscuit.Rule{
+				Head: fact.Predicate,
+				Body: []biscuit.Predicate{
+					{Name: api.FactRole, IDs: []biscuit.Term{biscuit.String(roleName)}},
+				},
+			})
+		}
+
 		for _, dl := range role.CustomDatalog {
 			trimmed := strings.TrimRight(strings.TrimSpace(dl), ";")
 			if trimmed == "" {

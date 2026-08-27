@@ -1300,8 +1300,13 @@ type PolicyRole struct {
 	AllowedTargets  []string               `protobuf:"bytes,2,rep,name=allowed_targets,json=allowedTargets,proto3" json:"allowed_targets,omitempty"`
 	AllowedServices []string               `protobuf:"bytes,3,rep,name=allowed_services,json=allowedServices,proto3" json:"allowed_services,omitempty"`
 	CustomDatalog   []string               `protobuf:"bytes,4,rep,name=custom_datalog,json=customDatalog,proto3" json:"custom_datalog,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Agent namespaces the holder may speak for, e.g. "*.prod.acme.example".
+	// An agent claim is the calling node's word, so it is only worth what the
+	// control plane attested about that node. Distinct from allowed_targets:
+	// being allowed to call an agent is not being allowed to impersonate it.
+	AllowedAgents []string `protobuf:"bytes,5,rep,name=allowed_agents,json=allowedAgents,proto3" json:"allowed_agents,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *PolicyRole) Reset() {
@@ -1358,6 +1363,13 @@ func (x *PolicyRole) GetAllowedServices() []string {
 func (x *PolicyRole) GetCustomDatalog() []string {
 	if x != nil {
 		return x.CustomDatalog
+	}
+	return nil
+}
+
+func (x *PolicyRole) GetAllowedAgents() []string {
+	if x != nil {
+		return x.AllowedAgents
 	}
 	return nil
 }
@@ -2749,13 +2761,14 @@ const file_api_sam_proto_rawDesc = "" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\x12\x1d\n" +
 	"\n" +
-	"expires_at\x18\x03 \x01(\x03R\texpiresAt\"\x9b\x01\n" +
+	"expires_at\x18\x03 \x01(\x03R\texpiresAt\"\xc2\x01\n" +
 	"\n" +
 	"PolicyRole\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12'\n" +
 	"\x0fallowed_targets\x18\x02 \x03(\tR\x0eallowedTargets\x12)\n" +
 	"\x10allowed_services\x18\x03 \x03(\tR\x0fallowedServices\x12%\n" +
-	"\x0ecustom_datalog\x18\x04 \x03(\tR\rcustomDatalog\"=\n" +
+	"\x0ecustom_datalog\x18\x04 \x03(\tR\rcustomDatalog\x12%\n" +
+	"\x0eallowed_agents\x18\x05 \x03(\tR\rallowedAgents\"=\n" +
 	"\rPolicyBinding\x12\x12\n" +
 	"\x04role\x18\x01 \x01(\tR\x04role\x12\x18\n" +
 	"\amembers\x18\x02 \x03(\tR\amembers\"\x18\n" +
