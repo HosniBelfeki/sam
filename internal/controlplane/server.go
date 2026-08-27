@@ -1571,8 +1571,17 @@ func (s *Server) HandleAdminEnrollmentAction(w http.ResponseWriter, r *http.Requ
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
 		}
-		// Admin approval is the attestation of the operator-declared labels
-		// recorded on the pending request.
+		// Approval attests that this identity may join, but the labels came
+		// from the node and nothing makes an admin read them before clicking
+		// approve. Bound them by the role's grant like the other two
+		// enrollment paths, so all three agree on what a node may claim.
+		if err := api.LabelPatternsAllow(allowedLabelPatterns([]string{tokenRecord.Role}, policyRoles), enrollReq.Labels); err != nil {
+			logger.Warnw("Refused to approve enrollment declaring an ungranted label",
+				"peer_id", enrollReq.PeerID, "role", tokenRecord.Role, "error", err)
+			http.Error(w, "Label not permitted: "+err.Error(), http.StatusForbidden)
+			return
+		}
+
 		biscuitBytes, err := identity.MintBootstrapBiscuitToken(privKey, pID, tokenRecord.Role, time.Now().Add(s.config.BiscuitTTL), policyRoles, enrollReq.Labels)
 		if err != nil {
 			logger.Errorf("Failed to mint bootstrap biscuit: %v", err)
