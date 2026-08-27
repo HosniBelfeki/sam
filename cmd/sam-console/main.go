@@ -35,6 +35,7 @@ func main() {
 		bindAddr        = flag.String("bind-addr", ":8081", "Address to bind the console server")
 		staticDir       = flag.String("static-dir", "public", "Directory containing static frontend files")
 		basePath        = flag.String("base-path", "", "Base path prefix for the console (e.g. /console)")
+		externalURL     = flag.String("external-url", "", "Origin browsers reach this console on, e.g. https://console.example. Sets the OIDC redirect_uri and cookie Secure flag instead of trusting the Host and X-Forwarded-Proto headers")
 	)
 	flag.Parse()
 
@@ -51,6 +52,7 @@ func main() {
 		AdminToken:      adminToken,
 		StaticDir:       *staticDir,
 		BasePath:        console.NormalizeBasePath(*basePath),
+		ExternalURL:     *externalURL,
 	})
 	if err != nil {
 		log.Fatalf("Failed to initialize console server: %v", err)
