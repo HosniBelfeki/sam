@@ -58,7 +58,7 @@ type a2aCardBaseURL struct{}
 // On refusal it writes the HTTP error itself and returns ok=false.
 func a2aEgressHook(node *SamNode, w http.ResponseWriter, r *http.Request) (*http.Request, bool) {
 	parts := strings.SplitN(r.URL.Path, "/", 6)
-	if len(parts) < 5 || parts[3] != api.ServiceTypeStringA2A {
+	if len(parts) < 5 || !strings.EqualFold(parts[3], api.ServiceTypeStringA2A) {
 		return r, true
 	}
 	if labelsHeader := r.Header.Get(api.HeaderSamRequiredLabels); labelsHeader != "" {

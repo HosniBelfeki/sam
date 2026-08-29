@@ -225,3 +225,19 @@ func TestRewriteA2AAgentCardSkipsContentEncoded(t *testing.T) {
 		t.Fatalf("content-encoded response was modified: %s", body)
 	}
 }
+
+func TestA2AEgressHookUppercaseTypeIsGated(t *testing.T) {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/sam/not-a-peer/A2A/agent/", nil)
+	req.Header.Set(api.HeaderSamRequiredLabels, "region=eu")
+	_, ok := a2aEgressHook(nil, rec, req)
+	if ok {
+		t.Fatal("uppercase A2A path must not bypass the labels gate")
+	}
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (invalid peer reached after gate engaged)", rec.Code)
+	}
+	if req.Header.Get(api.HeaderSamRequiredLabels) != "" {
+		t.Fatal("labels header must be stripped on a2a paths regardless of case")
+	}
+}
