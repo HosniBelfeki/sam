@@ -99,3 +99,20 @@ func TestParseServiceTarget(t *testing.T) {
 		})
 	}
 }
+
+func TestServiceTypeA2ARoundTrip(t *testing.T) {
+	st, err := ParseServiceType("a2a")
+	if err != nil {
+		t.Fatalf("ParseServiceType(a2a): %v", err)
+	}
+	if st != ServiceType_SERVICE_TYPE_A2A {
+		t.Fatalf("ParseServiceType(a2a) = %v, want SERVICE_TYPE_A2A", st)
+	}
+	s, err := ServiceTypeToString(st)
+	if err != nil {
+		t.Fatalf("ServiceTypeToString: %v", err)
+	}
+	if s != ServiceTypeStringA2A {
+		t.Fatalf("ServiceTypeToString = %q, want %q", s, ServiceTypeStringA2A)
+	}
+}
