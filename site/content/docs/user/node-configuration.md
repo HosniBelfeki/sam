@@ -99,7 +99,7 @@ Start the node with its operator-declared labels, a comma-separated `key=value` 
 sam-node run --labels region=us-east-1,team=platform ...
 ```
 
-Labels are declared at enrollment and **attested by the control plane**: for bootstrap enrollments the administrator sees the declared labels on the pending request and approving it attests the claims. The control plane then mints one signed `label(key, value)` fact per declared label into the node's Biscuit. Matching is exact and case-sensitive; an empty value means no claim for that key.
+Labels are declared at enrollment and **attested by the control plane**, but only the ones a role permits. Set `allowed_labels` on the node's role (see [control plane configuration](../control-plane-configuration/)); a role granting none means the node can declare none, and enrollment is refused if it tries. This applies to all three enrollment paths, including bootstrap requests an administrator approves by hand: approving says the identity may join, so the role grant is what says which labels it may carry. The control plane then mints one signed `label(key, value)` fact per declared label into the node's Biscuit. Matching is exact and case-sensitive; an empty value means no claim for that key.
 
 ### Requiring labels (consumer)
 

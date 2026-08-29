@@ -62,6 +62,35 @@ func EnforceExpiration(authorizer biscuit.Authorizer) {
 	authorizer.AddCheck(api.ControlPlaneStaticTimeCheck)
 }
 
+// authorityBlockID is the block index biscuit-go reports for a fact carried by
+// the root-signed authority block. Every other index is an appended attenuation
+// block, which any token holder can create without the root key.
+const authorityBlockID = 0
+
+// RequireAuthorityBinding checks that the token is bound to expectedPeer by an
+// api.FactNode fact in the authority block.
+//
+// The block matters. biscuit-go's GetBlockID searches appended attenuation
+// blocks too, and appending needs no root key, so a holder of anyone's token can
+// append node(<their own peer id>) offline and satisfy a binding that only tests
+// the error. Those facts are invisible to the Datalog authorizer (see
+// TestAttenuationBlockFactsAreInvisibleToTheAuthorizer), so this lookup is the
+// only place the distinction has to be made by hand.
+func RequireAuthorityBinding(b *biscuit.Biscuit, expectedPeer peer.ID) error {
+	boundFact := biscuit.Fact{Predicate: biscuit.Predicate{
+		Name: api.FactNode,
+		IDs:  []biscuit.Term{biscuit.String(expectedPeer.String())},
+	}}
+	blockID, err := b.GetBlockID(boundFact)
+	if err != nil {
+		return fmt.Errorf("token is not bound to peer %s: %w", expectedPeer, err)
+	}
+	if blockID != authorityBlockID {
+		return fmt.Errorf("token is not bound to peer %s: %s fact comes from appended block %d, not the authority block", expectedPeer, api.FactNode, blockID)
+	}
+	return nil
+}
+
 // ExpirationOf reports the expiration() fact of an already-authorized token, for
 // callers that cache an admission decision and must later know when it lapses.
 func ExpirationOf(authorizer biscuit.Authorizer) (time.Time, error) {
@@ -173,6 +202,10 @@ func mintBiscuit(signingKey ed25519.PrivateKey, remotePeer peer.ID, roles []stri
 	// stay siloed per role, and merging keeps fact counts flat regardless of how many roles match.
 	var allServices []string
 	var allTargets []string
+	// Agent namespaces this holder can act for. No grant means no agent claim
+	// is accepted, which is what stops an unconfigured mesh from letting any
+	// peer name any agent.
+	var allAgents []string
 	for _, role := range roles {
 		if err := addFact(biscuit.Fact{Predicate: biscuit.Predicate{
 			Name: api.FactRole,
@@ -211,16 +244,26 @@ func mintBiscuit(signingKey ed25519.PrivateKey, remotePeer peer.ID, roles []stri
 				allTargets = append(allTargets, pr.AllowedTargets...)
 			}
 
-			for _, customFact := range pr.CustomDatalog {
-				trimmed := strings.TrimRight(strings.TrimSpace(customFact), ";")
+			allAgents = append(allAgents, pr.AllowedAgents...)
+
+			for _, customEntry := range pr.CustomDatalog {
+				trimmed := strings.TrimRight(strings.TrimSpace(customEntry), ";")
 				if trimmed == "" {
 					continue
 				}
 				fact, err := parser.FromStringFact(trimmed)
 				if err != nil {
-					errs = append(errs, fmt.Errorf("failed to parse custom Datalog fact %q for role %s: %w", customFact, role, err))
+					// custom_datalog holds facts and rules alike. A rule is
+					// node-side material, distributed to nodes and applied by
+					// their authorizer, and cannot be an authority fact — so
+					// skip it here rather than fail the token and lock every
+					// node resolving to this role out of enroll and refresh.
+					if _, ruleErr := parser.FromStringRule(trimmed); ruleErr == nil {
+						continue
+					}
+					errs = append(errs, fmt.Errorf("failed to parse custom Datalog entry %q for role %s as a fact or a rule: %w", customEntry, role, err))
 				} else if err := addFact(fact); err != nil {
-					errs = append(errs, fmt.Errorf("failed to add custom Datalog fact %q for role %s: %w", customFact, role, err))
+					errs = append(errs, fmt.Errorf("failed to add custom Datalog fact %q for role %s: %w", customEntry, role, err))
 				}
 			}
 		}
@@ -234,6 +277,11 @@ func mintBiscuit(signingKey ed25519.PrivateKey, remotePeer peer.ID, roles []stri
 	for _, fact := range api.BuildTargetDatalogFacts(allTargets) {
 		if err := addFact(fact); err != nil {
 			errs = append(errs, fmt.Errorf("failed to add target fact: %w", err))
+		}
+	}
+	for _, fact := range api.BuildAgentDatalogFacts(allAgents) {
+		if err := addFact(fact); err != nil {
+			errs = append(errs, fmt.Errorf("failed to add agent namespace fact: %w", err))
 		}
 	}
 
@@ -315,13 +363,8 @@ func VerifyBiscuitAndGetKey(biscuitData []byte, expectedPeer peer.ID, trustedPub
 		return nil, nil, fmt.Errorf("no valid key found for verification: %v", lastErr)
 	}
 
-	// Enforce hardware binding
-	boundFact := biscuit.Fact{Predicate: biscuit.Predicate{
-		Name: "node",
-		IDs:  []biscuit.Term{biscuit.String(expectedPeer.String())},
-	}}
-	if _, err := b.GetBlockID(boundFact); err != nil {
-		return nil, nil, fmt.Errorf("token is not bound to peer %s: %w", expectedPeer, err)
+	if err := RequireAuthorityBinding(b, expectedPeer); err != nil {
+		return nil, nil, err
 	}
 
 	return b, verifyingKey, nil
@@ -341,30 +384,20 @@ func translateClaimsToFacts(addFact func(biscuit.Fact) error, claims map[string]
 		if !ok || val == nil {
 			continue
 		}
-		switch factName {
-		case api.FactUser, api.FactEmail:
-			if strVal, ok := val.(string); ok && strVal != "" {
-				if err := addFact(biscuit.Fact{Predicate: biscuit.Predicate{
-					Name: factName,
-					IDs:  []biscuit.Term{biscuit.String(strVal)},
-				}}); err != nil {
-					return fmt.Errorf("failed to add %s fact: %w", factName, err)
-				}
+		// Every claim is treated as a list; a scalar is a list of one. Special
+		// casing which facts are multi-valued would mean a claim added to the
+		// map but not to that list is silently dropped at mint time.
+		seen := make(map[string]bool)
+		for _, item := range toStringSlice(val) {
+			if seen[item] {
+				continue
 			}
-		case api.FactGroup, api.FactRole:
-			items := toStringSlice(val)
-			seen := make(map[string]bool)
-			for _, item := range items {
-				if seen[item] {
-					continue
-				}
-				seen[item] = true
-				if err := addFact(biscuit.Fact{Predicate: biscuit.Predicate{
-					Name: factName,
-					IDs:  []biscuit.Term{biscuit.String(item)},
-				}}); err != nil {
-					return fmt.Errorf("failed to add %s fact: %w", factName, err)
-				}
+			seen[item] = true
+			if err := addFact(biscuit.Fact{Predicate: biscuit.Predicate{
+				Name: factName,
+				IDs:  []biscuit.Term{biscuit.String(item)},
+			}}); err != nil {
+				return fmt.Errorf("failed to add %s fact: %w", factName, err)
 			}
 		}
 	}

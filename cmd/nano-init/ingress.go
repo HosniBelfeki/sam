@@ -21,6 +21,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -58,6 +59,13 @@ func serveIngress(ctx context.Context, socketPath string) error {
 	listener, err := net.Listen("unix", socketPath)
 	if err != nil {
 		return fmt.Errorf("listen on the ingress socket %s: %w", socketPath, err)
+	}
+	// This socket relays to any port inside the sandbox with no credential of
+	// its own, so its permissions are the credential. Failing closed rather
+	// than serving it world-writable, like the node and sam-box sockets.
+	if err := os.Chmod(socketPath, 0600); err != nil {
+		_ = listener.Close()
+		return fmt.Errorf("restrict access to the ingress socket %s: %w", socketPath, err)
 	}
 	go func() {
 		<-ctx.Done()

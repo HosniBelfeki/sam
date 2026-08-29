@@ -1,3 +1,17 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package node
 
 import (
@@ -99,6 +113,18 @@ func BuildPolicyRules(roles []*api.PolicyRole, bindings []*api.PolicyBinding) []
 			}
 		}
 		for _, fact := range api.BuildTargetDatalogFacts(nonWildcardTargets) {
+			rules = append(rules, biscuit.Rule{
+				Head: fact.Predicate,
+				Body: []biscuit.Predicate{
+					{Name: api.FactRole, IDs: []biscuit.Term{biscuit.String(roleName)}},
+				},
+			})
+		}
+
+		for _, fact := range api.BuildAgentDatalogFacts(role.AllowedAgents) {
+			if fact.Name == api.FactGrantedAgentAll {
+				logger.Warnf("Role %s may speak for any agent; any peer holding it can name any agent identity in the mesh", roleName)
+			}
 			rules = append(rules, biscuit.Rule{
 				Head: fact.Predicate,
 				Body: []biscuit.Predicate{

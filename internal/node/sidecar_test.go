@@ -404,6 +404,8 @@ func TestSidecarServerAuthEnforcement(t *testing.T) {
 	}{
 		{"healthz is public", "GET", "/healthz", http.StatusOK, false},
 		{"readyz is public", "GET", "/readyz", http.StatusOK, false},
+		// Liveness says nothing; metrics name peers and count their traffic.
+		{"metrics is protected", "GET", "/metrics", http.StatusUnauthorized, false},
 		{"register is protected", "POST", "/sam/service/register", http.StatusUnauthorized, false},
 		{"unregister is protected", "POST", "/sam/service/unregister", http.StatusUnauthorized, false},
 		{"discover is protected", "GET", "/sam/service/discover?type=mcp&name=test", http.StatusUnauthorized, false},
@@ -411,6 +413,7 @@ func TestSidecarServerAuthEnforcement(t *testing.T) {
 		{"mcp root is protected", "GET", "/mcp", http.StatusUnauthorized, false},
 
 		{"register with token (bad req)", "POST", "/sam/service/register", http.StatusServiceUnavailable, true},
+		{"metrics with token", "GET", "/metrics", http.StatusOK, true},
 		{"unregister with token (bad req)", "POST", "/sam/service/unregister", http.StatusServiceUnavailable, true},
 		// /sam/service/discover without mesh connection will return 503 instead of 400 since node is not connected,
 		// but as long as it gets past auth, that's what we want to verify.

@@ -1433,12 +1433,8 @@ func (n *SamNode) HandleAuthHandshake(s network.Stream) {
 	}
 
 	// 4. Enforce hardware binding: token must include node(<remotePeerID>)
-	boundFact := biscuit.Fact{Predicate: biscuit.Predicate{
-		Name: "node",
-		IDs:  []biscuit.Term{biscuit.String(remotePeer.String())},
-	}}
-	if _, err := b.GetBlockID(boundFact); err != nil {
-		logger.Warnf("[AuthN] Token is not bound to peer %s", remotePeer)
+	if err := identity.RequireAuthorityBinding(b, remotePeer); err != nil {
+		logger.Warnf("[AuthN] %v", err)
 		return
 	}
 

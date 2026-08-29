@@ -1,22 +1,48 @@
-version: 2
+version: "2"
 
 linters:
   enable:
+    - forbidigo
     - goheader
 
-linters-settings:
-  goheader:
-    template: |-
-      Copyright {{ YEAR }} Google LLC
+  settings:
+    forbidigo:
+      # Match the resolved symbol rather than the source text, so an import
+      # rename cannot slip past these.
+      analyze-types: true
+      forbid:
+        # GetBlockID searches appended attenuation blocks as well as the
+        # authority block, and appending needs no root key. A call site that
+        # only checks the returned error accepts a token any holder re-bound to
+        # themselves. identity.RequireAuthorityBinding is the one place allowed
+        # to make that distinction.
+        - pattern: ^biscuit\.Biscuit\.GetBlockID$
+          pkg: ^github\.com/biscuit-auth/biscuit-go/v2$
+          msg: Use identity.RequireAuthorityBinding; GetBlockID also matches forgeable appended blocks.
 
-      Licensed under the Apache License, Version 2.0 (the "License");
-      you may not use this file except in compliance with the License.
-      You may obtain a copy of the License at
+    goheader:
+      template: |-
+        Copyright {{ YEAR }} Google LLC
 
-          http://www.apache.org/licenses/LICENSE-2.0
+        Licensed under the Apache License, Version 2.0 (the "License");
+        you may not use this file except in compliance with the License.
+        You may obtain a copy of the License at
 
-      Unless required by applicable law or agreed to in writing, software
-      distributed under the License is distributed on an "AS IS" BASIS,
-      WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-      See the License for the specific language governing permissions and
-      limitations under the License.
+            http://www.apache.org/licenses/LICENSE-2.0
+
+        Unless required by applicable law or agreed to in writing, software
+        distributed under the License is distributed on an "AS IS" BASIS,
+        WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+        See the License for the specific language governing permissions and
+        limitations under the License.
+
+  exclusions:
+    rules:
+      # The one implementation of the authority-block check.
+      - path: internal/identity/biscuit\.go
+        linters:
+          - forbidigo
+      # Tests forge appended blocks on purpose to prove the check rejects them.
+      - path: _test\.go
+        linters:
+          - forbidigo

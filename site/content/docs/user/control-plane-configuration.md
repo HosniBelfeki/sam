@@ -56,6 +56,10 @@ The Control Plane dynamically issues permissions inside the Biscuit token based 
 The policy defines what endpoints and services agents are permitted to use:
 * **`allowed_targets`**: Restricts which logical endpoints the agent can route connections to. Use resolved Biscuit facts: `group:<name>`, `user:<sub-id>`, `email:<email>`, `role:<role-name>`, or `node:<peer-id>`.
 * **`allowed_services`**: Restricts the application-level services the agent can invoke. Services are prefixed by their protocol type and URI scheme (e.g., `mcp://local-shell-tools` or `inference://openrouter`). Wildcards are supported (e.g., `mcp://*`).
+* **`allowed_agents`**: The agent namespaces a node with this role can use. When a node forwards a request for a sandboxed agent, it sends the agent's name with it. The receiving node accepts that name only if it falls inside one of these namespaces. A node with no `allowed_agents` grant cannot name any agent. Accepted patterns are `*.prod.acme.example`, `acme.*`, an exact ID such as `reviewer-7.prod.acme.example`, or `*` for any agent.
+* **`allowed_labels`**: The labels a node with this role may declare when it enrolls, as `*`, `key=*` or `key=value`. A node sends its own labels in its enrollment request, so this is what decides which of them the control plane is willing to sign into `label()` facts. A role granting none means a node holding it can declare none. Peers gate on those facts with `required_labels`, so a node that could declare anything could satisfy any such requirement.
+
+> **`allowed_agents` and `allowed_targets` do different things.** `allowed_targets` controls which agents a node can send requests *to*. `allowed_agents` controls which agents a node can claim to be acting *for*. Setting `allowed_agents` to `*` lets any node with that role claim any agent identity in the mesh, so nodes log a warning when they receive such a grant.
 
 ### Seeding Policies via REST API
 Admins manage policies by sending a JSON payload to the `/policies` endpoint.
@@ -66,7 +70,8 @@ Admins manage policies by sending a JSON payload to the `/policies` endpoint.
     {
       "name": "developer-role",
       "allowed_targets": ["group:dev-nodes", "email:dev-lead@example.com", "user:auth0|123456", "node:12D3KooWSpecificDevNodeId"],
-      "allowed_services": ["mcp://local-shell-tools", "mcp://git-helper", "inference://openrouter"]
+      "allowed_services": ["mcp://local-shell-tools", "mcp://git-helper", "inference://openrouter"],
+      "allowed_agents": ["*.dev.example.com"]
     },
     {
       "name": "admin-role",

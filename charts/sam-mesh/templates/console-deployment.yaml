@@ -93,4 +93,7 @@ spec:
         args:
         - "--control-plane=http://{{ include "sam-mesh.fullname" . }}-control-plane:{{ .Values.controlPlane.service.port }}"
         - "--bind-addr=:8081"
-        - "--static-dir=/app/public"{{- end }}
+        - "--static-dir=/app/public"
+        {{- with .Values.console.externalUrl }}
+        - "--external-url={{ . }}"
+        {{- end }}{{- end }}

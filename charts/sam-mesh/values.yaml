@@ -143,6 +143,11 @@ router:
 console:
   enabled: true
   replicaCount: 1
+  # Origin browsers reach the console on, e.g. https://console.example. Set this
+  # when a proxy terminates TLS: without it the OIDC redirect_uri and the cookie
+  # Secure flag are derived from the Host and X-Forwarded-Proto headers, so a
+  # proxy that drops the header leaves session cookies without Secure.
+  externalUrl: ""
   image:
     repository: sam-console
     # Overrides global.imageTag for this image only.

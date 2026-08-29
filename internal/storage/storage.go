@@ -25,6 +25,11 @@ import (
 
 var (
 	ErrNotFound = errors.New("not found")
+
+	// ErrNodeBanned and ErrNodeSessionExpired are the two ways an enrolled node
+	// stops being servable. See EnrolledNode.CheckAdmission.
+	ErrNodeBanned         = errors.New("node is banned")
+	ErrNodeSessionExpired = errors.New("node session expired")
 )
 
 // KeyPair holds cryptographic key information.
@@ -67,6 +72,21 @@ type EnrolledNode struct {
 	EnrolledAt time.Time
 	ExpiresAt  time.Time
 	Banned     bool
+}
+
+// CheckAdmission reports whether the control plane may still serve this node.
+// Enrollment is bounded by two independent conditions, an explicit ban and the
+// end of the OIDC session, and every path that acts on an enrolled node has to
+// apply both: checking only Banned lets a node whose session lapsed keep
+// reading mesh state until someone bans it by hand.
+func (n *EnrolledNode) CheckAdmission(now time.Time) error {
+	if n.Banned {
+		return ErrNodeBanned
+	}
+	if !n.ExpiresAt.IsZero() && now.After(n.ExpiresAt) {
+		return ErrNodeSessionExpired
+	}
+	return nil
 }
 
 // BootstrapToken represents a pre-shared token for node enrollment.

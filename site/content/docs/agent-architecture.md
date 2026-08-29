@@ -208,10 +208,11 @@ component there verifies the same workload credential and asserts the same
 `agent:` name. Nothing downstream notices the move.
 
 The residual trust, stated plainly: an enrolled node asserts its own agents.
-Mesh policy bounds that by binding namespaces to node attestation — only nodes
-attested `cluster=c1.acme` may assert `agent:*.c1.acme` — which the existing
-target-fact machinery already expresses. Non-repudiation *by the agent itself*
-needs proof of possession, which stays an upgrade path (§8.6).
+Mesh policy limits this with a role's `allowed_agents`, which lists the
+namespaces a node is allowed to use. Only a node whose role grants `*.c1.acme`
+can claim an agent in that namespace, and a node with no grant cannot name any
+agent at all. Non-repudiation *by the agent itself* needs proof of possession,
+which stays an upgrade path (§8.6).
 
 ## 4. Where the gateway lives: `sam-box`, without a libp2p host
 
@@ -646,11 +647,26 @@ in-band afterwards:
 
 ### 8.6 The honest limit
 
-An enrolled node asserts its own agents, so a compromised node can assert any
-agent identity **within the namespaces its own attestation permits**. That bound
-is the mitigation, and it is enforced by the same policy machinery as everything
-else; without the namespace binding, a single compromised node could impersonate
-any agent anywhere, which is why it is not optional.
+An enrolled node asserts its own agents, so a compromised node can claim any
+agent identity inside the namespaces its role allows (`allowed_agents`, §3).
+That limit is the mitigation, and the same policy machinery enforces it. Without
+it, one compromised node could impersonate any agent anywhere. A node that holds
+no grant cannot name any agent.
+
+The grant is keyed on the node's **role**, not on its labels. Nodes declare
+their own labels at OIDC enrollment and the control plane only checks the
+syntax, so a namespace derived from a label would be one the node picked for
+itself. Roles are resolved from verified OIDC claims against bindings the admin
+wrote, so that chain holds all the way back.
+
+Two things follow:
+
+* How tight the limit is depends on the connector's naming (§8.8, property 5).
+  If a name has no label for the boundary it runs in, the only grant you can
+  write is a tenant-wide one.
+* `allowed_agents: ["*"]` goes back to the old, unlimited behaviour. It is
+  allowed because some meshes have a single tenant, and nodes log a warning so
+  it is never silent.
 
 Removing the residue entirely requires proof of possession: the agent holds a
 key and signs a per-request binding. That needs either a mesh-aware harness
@@ -706,6 +722,14 @@ worth writing down because "without losing capabilities" lives here:
 4. **Auditable** — the original identifier travels verbatim alongside the
    translated one. Where translation cannot round-trip, the verbatim value is
    what an auditor reads.
+5. **Bounded** — the name must include a label for the boundary where the
+   agent's workload credential stops being valid, usually the cluster or trust
+   domain. Node grants (`allowed_agents`, §8.6) are written against that label.
+   A mapping can satisfy properties 1–4 and still fail this one: a flat
+   `spiffe://acme.example/prod/reviewer-7` → `reviewer-7.prod.acme.example` has
+   no cluster label, so every node hosting these agents needs a tenant-wide
+   grant and the limit gets much weaker. The Kubernetes and Substrate rows
+   below keep the cluster in the name, so their grants stay tight.
 
 | foreign identity | mesh identifier |
 |---|---|

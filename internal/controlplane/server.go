@@ -29,6 +29,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -506,6 +507,14 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request) {
 	finalRoles := []string{req.RequestedRole}
 	finalRoles = append(finalRoles, customAccessRoles...)
 
+	// The node declared these labels itself, so they are only worth signing if
+	// a role it resolves to says it may carry them.
+	if err := api.LabelPatternsAllow(allowedLabelPatterns(finalRoles, policyRoles), req.Labels); err != nil {
+		logger.Warnw("Rejected undeclarable label at enrollment", "peer_id", req.PeerId, "error", err)
+		http.Error(w, "Label not permitted: "+err.Error(), http.StatusForbidden)
+		return
+	}
+
 	// Mint token. A biscuit must never outlive the OIDC token that vouched
 	// for it, so its expiration is capped at whichever comes first.
 	biscuitExpiry := time.Now().Add(s.config.BiscuitTTL)
@@ -648,14 +657,12 @@ func (s *Server) HandleRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if nodeRecord.Banned {
-		logger.Warnw("Banned node attempted refresh", "peer_id", pID.String())
-		http.Error(w, "Node is banned", http.StatusForbidden)
-		return
-	}
-
-	// Check session expiry (OIDC 90 days expiration)
-	if !nodeRecord.ExpiresAt.IsZero() && time.Now().After(nodeRecord.ExpiresAt) {
+	if err := nodeRecord.CheckAdmission(time.Now()); err != nil {
+		if errors.Is(err, storage.ErrNodeBanned) {
+			logger.Warnw("Banned node attempted refresh", "peer_id", pID.String())
+			http.Error(w, "Node is banned", http.StatusForbidden)
+			return
+		}
 		logger.Warnw("Session expired for node", "peer_id", pID.String(), "expires_at", nodeRecord.ExpiresAt)
 		http.Error(w, "Session expired, please re-enroll interactively", http.StatusUnauthorized)
 		return
@@ -944,7 +951,7 @@ func (s *Server) HandlePolicies(w http.ResponseWriter, r *http.Request) {
 						peerID, err := identity.VerifyAndExtractPeerID(trustedKeys, biscuitBytes, s.config.BiscuitTimeout)
 						if err == nil {
 							nodeRecord, nodeErr := s.store.GetNode(r.Context(), peerID.String())
-							if nodeErr == nil && nodeRecord != nil && !nodeRecord.Banned {
+							if nodeErr == nil && nodeRecord != nil && nodeRecord.CheckAdmission(time.Now()) == nil {
 								isNode = true
 							}
 						}
@@ -1203,6 +1210,14 @@ func (s *Server) HandleEnroll(w http.ResponseWriter, r *http.Request) {
 		if err != nil && err != storage.ErrNotFound {
 			logger.Errorf("Failed to retrieve mesh policy: %v", err)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+		// Nobody reviews an auto-approved enrollment, so the role's
+		// allowed_labels is the only thing standing between a self-declared
+		// label and a signed one. Manual approval attests them separately.
+		if err := api.LabelPatternsAllow(allowedLabelPatterns([]string{tokenRecord.Role}, policyRoles), req.Labels); err != nil {
+			logger.Warnw("Rejected undeclarable label at bootstrap enrollment", "peer_id", req.PeerId, "error", err)
+			s.writeEnrollError(w, api.EnrollmentStatus_ENROLLMENT_STATUS_REJECTED, "Label not permitted: "+err.Error())
 			return
 		}
 		biscuitBytes, err := identity.MintBootstrapBiscuitToken(privKey, pID, tokenRecord.Role, time.Now().Add(s.config.BiscuitTTL), policyRoles, req.Labels)
@@ -1556,8 +1571,17 @@ func (s *Server) HandleAdminEnrollmentAction(w http.ResponseWriter, r *http.Requ
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
 		}
-		// Admin approval is the attestation of the operator-declared labels
-		// recorded on the pending request.
+		// Approval attests that this identity may join, but the labels came
+		// from the node and nothing makes an admin read them before clicking
+		// approve. Bound them by the role's grant like the other two
+		// enrollment paths, so all three agree on what a node may claim.
+		if err := api.LabelPatternsAllow(allowedLabelPatterns([]string{tokenRecord.Role}, policyRoles), enrollReq.Labels); err != nil {
+			logger.Warnw("Refused to approve enrollment declaring an ungranted label",
+				"peer_id", enrollReq.PeerID, "role", tokenRecord.Role, "error", err)
+			http.Error(w, "Label not permitted: "+err.Error(), http.StatusForbidden)
+			return
+		}
+
 		biscuitBytes, err := identity.MintBootstrapBiscuitToken(privKey, pID, tokenRecord.Role, time.Now().Add(s.config.BiscuitTTL), policyRoles, enrollReq.Labels)
 		if err != nil {
 			logger.Errorf("Failed to mint bootstrap biscuit: %v", err)
@@ -1934,14 +1958,34 @@ func (s *Server) HandleUserRevoke(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte("Node revoked successfully"))
 }
 
+// allowedLabelPatterns collects the label grants of every role an identity
+// resolves to. A role that names none contributes none, so an identity with no
+// grant anywhere may declare no labels at all.
+func allowedLabelPatterns(roles []string, policyRoles []*api.PolicyRole) []string {
+	wanted := make(map[string]bool, len(roles))
+	for _, r := range roles {
+		wanted[r] = true
+	}
+	var patterns []string
+	for _, pr := range policyRoles {
+		if pr != nil && wanted[pr.Name] {
+			patterns = append(patterns, pr.AllowedLabels...)
+		}
+	}
+	return patterns
+}
+
 func resolveRoles(peerID string, claims jwt.MapClaims, bindings []*api.PolicyBinding) []string {
 	if claims == nil {
 		claims = make(jwt.MapClaims)
 	}
-	oidcRoles := toStringSlice(claims["roles"])
-	oidcGroups := toStringSlice(claims["groups"])
-	oidcSub, _ := claims["sub"].(string)
-	oidcEmail, _ := claims["email"].(string)
+
+	// Driven by the same claim->fact map that minting uses, so a claim added
+	// there resolves bindings here too instead of being silently ignored.
+	factValues := make(map[string][]string)
+	for claim, fact := range api.OIDCClaimToFact() {
+		factValues[fact] = append(factValues[fact], toStringSlice(claims[claim])...)
+	}
 
 	resolvedRoles := make(map[string]bool)
 	for _, b := range bindings {
@@ -1958,31 +2002,15 @@ func resolveRoles(peerID string, claims jwt.MapClaims, bindings []*api.PolicyBin
 				continue
 			}
 			prefix, value := parts[0], parts[1]
-			switch prefix {
-			case api.FactNode:
+			// node is the peer presenting the request, not an OIDC claim.
+			if prefix == api.FactNode {
 				if peerID == value {
 					resolvedRoles[b.Role] = true
 				}
-			case api.FactGroup:
-				for _, g := range oidcGroups {
-					if g == value {
-						resolvedRoles[b.Role] = true
-					}
-				}
-			case api.FactUser:
-				if oidcSub == value {
-					resolvedRoles[b.Role] = true
-				}
-			case api.FactEmail:
-				if oidcEmail == value {
-					resolvedRoles[b.Role] = true
-				}
-			case api.FactRole:
-				for _, r := range oidcRoles {
-					if r == value {
-						resolvedRoles[b.Role] = true
-					}
-				}
+				continue
+			}
+			if slices.Contains(factValues[prefix], value) {
+				resolvedRoles[b.Role] = true
 			}
 		}
 	}
@@ -2064,6 +2092,16 @@ func validatePolicyConfig(req *api.PolicyConfigUpdateRequest) error {
 				return fmt.Errorf("invalid allowed_target %q in role %s: %w", target, r.Name, err)
 			}
 		}
+		for _, agent := range r.AllowedAgents {
+			if err := api.ValidateAgentPattern(agent); err != nil {
+				return fmt.Errorf("invalid allowed_agent %q in role %s: %w", agent, r.Name, err)
+			}
+		}
+		for _, label := range r.AllowedLabels {
+			if err := api.ValidateLabelPattern(label); err != nil {
+				return fmt.Errorf("in role %s: %w", r.Name, err)
+			}
+		}
 		for _, dl := range r.CustomDatalog {
 			trimmed := strings.TrimRight(strings.TrimSpace(dl), ";")
 			if trimmed == "" {
@@ -2082,6 +2120,7 @@ func validatePolicyConfig(req *api.PolicyConfigUpdateRequest) error {
 		// which roles are mutually exclusive for a given identity.
 		factBudget += len(api.BuildServiceDatalogFacts(r.AllowedServices))
 		factBudget += len(api.BuildTargetDatalogFacts(r.AllowedTargets))
+		factBudget += len(api.BuildAgentDatalogFacts(r.AllowedAgents))
 		factBudget += len(r.CustomDatalog)
 	}
 

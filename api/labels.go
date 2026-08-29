@@ -86,3 +86,69 @@ func ValidateLabels(labels map[string]string) error {
 	}
 	return nil
 }
+
+// A node declares its own labels when it enrols, so on its own a label is a
+// claim rather than an attestation. A role's allowed_labels is what makes it
+// one: the control plane only signs a label the operator said that role may
+// carry. Without it a node could declare region="us-east-1" and satisfy every
+// peer that requires it.
+
+// ValidateLabelPattern checks one entry of a role's allowed_labels. The forms
+// are "*" for any label at all, "key=*" for any value of a key, and "key=value"
+// for one exact pair.
+func ValidateLabelPattern(pattern string) error {
+	if pattern == "*" {
+		return nil
+	}
+	key, value, found := strings.Cut(pattern, "=")
+	if !found {
+		return fmt.Errorf("invalid allowed_label %q: must be \"*\", \"key=*\" or \"key=value\"", pattern)
+	}
+	if err := ValidateLabelKey(key); err != nil {
+		return fmt.Errorf("invalid allowed_label %q: %w", pattern, err)
+	}
+	if value == "*" {
+		return nil
+	}
+	if err := ValidateLabelValue(value); err != nil {
+		return fmt.Errorf("invalid allowed_label %q: %w", pattern, err)
+	}
+	return nil
+}
+
+// LabelPatternsAllow reports whether patterns permit every declared label,
+// naming the first one they do not. Keys are visited in order so the error for
+// a given input is stable.
+func LabelPatternsAllow(patterns []string, labels map[string]string) error {
+	if len(labels) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(labels))
+	for k := range labels {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	for _, key := range keys {
+		if !labelAllowed(patterns, key, labels[key]) {
+			return fmt.Errorf("label %q=%q is not permitted by this identity's roles", key, labels[key])
+		}
+	}
+	return nil
+}
+
+func labelAllowed(patterns []string, key, value string) bool {
+	for _, p := range patterns {
+		if p == "*" {
+			return true
+		}
+		pKey, pValue, found := strings.Cut(p, "=")
+		if !found || pKey != key {
+			continue
+		}
+		if pValue == "*" || pValue == value {
+			return true
+		}
+	}
+	return false
+}

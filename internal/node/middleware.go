@@ -213,13 +213,8 @@ func (n *SamNode) Authorize(rawToken []byte, req RequestContext, pubKey ed25519.
 		return err
 	}
 
-	// Verify that the token is bound to the connecting peer's ID
-	boundFact := biscuit.Fact{Predicate: biscuit.Predicate{
-		Name: "node",
-		IDs:  []biscuit.Term{biscuit.String(req.PeerID.String())},
-	}}
-	if _, err := b.GetBlockID(boundFact); err != nil {
-		return fmt.Errorf("token is not bound to peer %s", req.PeerID)
+	if err := identity.RequireAuthorityBinding(b, req.PeerID); err != nil {
+		return err
 	}
 
 	// Inject the current action context (Standard Vocabulary)
@@ -250,6 +245,12 @@ func (n *SamNode) Authorize(rawToken []byte, req RequestContext, pubKey ed25519.
 	// The calling node's claim about which agent it speaks for. Injected here
 	// rather than trusted from the token, so it is visible to policy while
 	// staying plainly what it is: an assertion by the peer at the other end.
+	//
+	// The claim is limited to the agent namespaces the caller's own token
+	// grants. Without that limit any authenticated peer could name any agent
+	// and pick up whatever role an agent: binding gives it. The check runs only
+	// when a claim is present, because a node's own housekeeping acts for no
+	// agent and would otherwise be refused.
 	if req.Agent != "" {
 		authorizer.AddFact(biscuit.Fact{
 			Predicate: biscuit.Predicate{
@@ -257,6 +258,10 @@ func (n *SamNode) Authorize(rawToken []byte, req RequestContext, pubKey ed25519.
 				IDs:  []biscuit.Term{biscuit.String(req.Agent)},
 			},
 		})
+		for _, r := range api.BaselineAgentRules {
+			authorizer.AddRule(r)
+		}
+		authorizer.AddCheck(api.BaselineAgentCheck)
 	}
 
 	// Enforce client_peer_id matches connection_peer_id

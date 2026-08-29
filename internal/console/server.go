@@ -1,3 +1,17 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package console
 
 import (
@@ -28,6 +42,12 @@ type Config struct {
 	AdminToken      string
 	StaticDir       string
 	BasePath        string
+
+	// ExternalURL is the origin browsers reach this console on, e.g.
+	// "https://console.example". When set it decides the OIDC redirect_uri and
+	// whether session cookies are marked Secure, instead of the Host and
+	// X-Forwarded-Proto headers, which a client controls and a proxy may drop.
+	ExternalURL string
 }
 
 // NormalizeBasePath makes a base-path flag value safe to concatenate: no trailing
@@ -43,11 +63,43 @@ func NormalizeBasePath(p string) string {
 	return p
 }
 
+// origin returns the scheme and host to build absolute URLs with.
+//
+// A configured ExternalURL wins. Falling back to the request means trusting
+// Host and X-Forwarded-Proto, which the client sets: a proxy that terminates
+// TLS but drops the header leaves session cookies without Secure, and the
+// redirect_uri is only kept honest by the provider's own exact-match list.
+func (s *Server) origin(r *http.Request) (scheme, host string) {
+	if s.external != nil {
+		return s.external.Scheme, s.external.Host
+	}
+	scheme = "http"
+	if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
+		scheme = "https"
+	}
+	return scheme, r.Host
+}
+
+// redirectURI is the OIDC callback this console is reachable at. It must match
+// byte for byte between the authorization request and the token exchange.
+func (s *Server) redirectURI(r *http.Request) string {
+	scheme, host := s.origin(r)
+	return fmt.Sprintf("%s://%s%s/auth/callback", scheme, host, s.cfg.BasePath)
+}
+
+// secureCookies reports whether session cookies may carry the Secure attribute.
+func (s *Server) secureCookies(r *http.Request) bool {
+	scheme, _ := s.origin(r)
+	return scheme == "https"
+}
+
 type Server struct {
 	cfg      Config
 	mux      *http.ServeMux
 	provider *oidc.Provider
 	clientID string
+	// external is the parsed Config.ExternalURL, nil when unset.
+	external *url.URL
 }
 
 func NewServer(cfg Config) (*Server, error) {
@@ -58,6 +110,23 @@ func NewServer(cfg Config) (*Server, error) {
 	controlPlaneURL, err := url.Parse(cfg.ControlPlaneURL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid ControlPlaneURL: %w", err)
+	}
+
+	var external *url.URL
+	if cfg.ExternalURL != "" {
+		// Fail at startup: a redirect_uri built from a malformed value would be
+		// rejected by the provider on every login instead.
+		u, err := url.Parse(cfg.ExternalURL)
+		if err != nil {
+			return nil, fmt.Errorf("invalid ExternalURL: %w", err)
+		}
+		if u.Scheme != "http" && u.Scheme != "https" {
+			return nil, fmt.Errorf("invalid ExternalURL %q: scheme must be http or https", cfg.ExternalURL)
+		}
+		if u.Host == "" {
+			return nil, fmt.Errorf("invalid ExternalURL %q: missing host", cfg.ExternalURL)
+		}
+		external = u
 	}
 
 	var provider *oidc.Provider
@@ -101,6 +170,7 @@ func NewServer(cfg Config) (*Server, error) {
 		mux:      http.NewServeMux(),
 		provider: provider,
 		clientID: clientID,
+		external: external,
 	}
 	// Create reverse proxy to the control plane
 	proxy := &httputil.ReverseProxy{
@@ -207,11 +277,7 @@ func (s *Server) HandleLogout(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) HandleLogin(w http.ResponseWriter, r *http.Request) {
-	scheme := "http"
-	if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
-		scheme = "https"
-	}
-	redirectURI := fmt.Sprintf("%s://%s%s/auth/callback", scheme, r.Host, s.cfg.BasePath)
+	redirectURI := s.redirectURI(r)
 
 	verifier, challenge, err := generatePKCE()
 	if err != nil {
@@ -232,7 +298,7 @@ func (s *Server) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		Path:     s.cfg.BasePath + "/",
 		MaxAge:   300,
 		HttpOnly: true,
-		Secure:   scheme == "https",
+		Secure:   s.secureCookies(r),
 		SameSite: http.SameSiteLaxMode,
 	})
 
@@ -242,7 +308,7 @@ func (s *Server) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		Path:     s.cfg.BasePath + "/",
 		MaxAge:   300,
 		HttpOnly: true,
-		Secure:   scheme == "https",
+		Secure:   s.secureCookies(r),
 		SameSite: http.SameSiteLaxMode,
 	})
 
@@ -283,11 +349,8 @@ func (s *Server) HandleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	scheme := "http"
-	if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
-		scheme = "https"
-	}
-	redirectURI := fmt.Sprintf("%s://%s%s/auth/callback", scheme, r.Host, s.cfg.BasePath)
+	// Must match the value sent in HandleLogin byte for byte.
+	redirectURI := s.redirectURI(r)
 
 	oauth2Config := &oauth2.Config{
 		ClientID:    s.clientID,
@@ -318,13 +381,19 @@ func (s *Server) HandleCallback(w http.ResponseWriter, r *http.Request) {
 		Path:     s.cfg.BasePath + "/",
 		MaxAge:   24 * 3600,
 		HttpOnly: true,
-		Secure:   scheme == "https",
+		Secure:   s.secureCookies(r),
 		SameSite: http.SameSiteLaxMode,
 	})
 
 	http.Redirect(w, r, s.cfg.BasePath+"/", http.StatusFound)
 }
 
+// HandleSession reports whether a session cookie is present. It deliberately
+// does not return the cookie's value: the credential is stored HttpOnly so an
+// XSS in the console cannot exfiltrate mesh admin rights, and handing the raw
+// token back to any same-origin fetch would undo exactly that. The SPA never
+// needs it, since the reverse proxy injects the cookie as Authorization for
+// /api/ calls.
 func (s *Server) HandleSession(w http.ResponseWriter, r *http.Request) {
 	sessionCookie, err := r.Cookie("sam_session")
 	if err != nil || sessionCookie.Value == "" {
@@ -336,8 +405,8 @@ func (s *Server) HandleSession(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(map[string]string{
-		"token": sessionCookie.Value,
+	_ = json.NewEncoder(w).Encode(map[string]bool{
+		"authenticated": true,
 	})
 }
 
@@ -394,18 +463,13 @@ func (s *Server) HandleTokenLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	scheme := "http"
-	if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
-		scheme = "https"
-	}
-
 	http.SetCookie(w, &http.Cookie{
 		Name:     "sam_session",
 		Value:    token,
 		Path:     s.cfg.BasePath + "/",
 		MaxAge:   24 * 3600,
 		HttpOnly: true,
-		Secure:   scheme == "https",
+		Secure:   s.secureCookies(r),
 		SameSite: http.SameSiteLaxMode,
 	})
 	w.WriteHeader(http.StatusNoContent)

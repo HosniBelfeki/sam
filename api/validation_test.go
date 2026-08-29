@@ -1,3 +1,17 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package api
 
 import (
@@ -47,9 +61,15 @@ func TestValidateTargetFormat(t *testing.T) {
 		{"valid target", "group:backend", false},
 		{"valid email", "email:foo@bar.com", false},
 		{"valid wildcard", "*", false},
+		{"wildcard fact and value", "*:*", false},
+		{"wildcard value for one fact", "group:*", false},
 		{"invalid no colon", "group-backend", true},
 		{"invalid empty fact", ":backend", true},
 		{"invalid empty value", "group:", true},
+		// A fact nothing derives would mint a grant that never matches, so it
+		// is refused at config time rather than denying silently at runtime.
+		{"unknown fact", "banana:yellow", true},
+		{"agent is not a target", "agent:reviewer-7.prod.acme.example", true},
 	}
 
 	for _, tt := range tests {

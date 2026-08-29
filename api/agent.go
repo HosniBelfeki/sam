@@ -116,3 +116,52 @@ func AgentMember(id string) (string, error) {
 	}
 	return FactAgent + ":" + id, nil
 }
+
+// ValidateAgentPattern checks one entry of a role's allowed_agents: an agent
+// namespace the holder can act for. Unlike ValidateAgentID it allows the
+// wildcard forms, because a namespace grant is a pattern.
+//
+// A bare "*" is accepted and means any agent, which lets every holder of the
+// role name any agent in the mesh. Some meshes have a single tenant, so it
+// stays expressible, but callers should warn when they see it.
+func ValidateAgentPattern(pattern string) error {
+	p := strings.TrimPrefix(pattern, FactAgent+":")
+	if p == "" {
+		return fmt.Errorf("agent namespace cannot be empty")
+	}
+	if p == "*" {
+		return nil
+	}
+	switch {
+	case strings.HasPrefix(p, "*."):
+		// Validate the remaining labels, which must still be a real authority.
+		return validateAgentLabels(p[2:], pattern)
+	case strings.HasSuffix(p, ".*"):
+		return validateAgentLabels(p[:len(p)-2], pattern)
+	}
+	if strings.Contains(p, "*") {
+		return fmt.Errorf("agent namespace %q may only use a wildcard as a leading %q or trailing %q label", pattern, "*.", ".*")
+	}
+	return ValidateAgentID(p)
+}
+
+// validateAgentLabels applies the identifier's label rules to the non-wildcard
+// part of a pattern, so "*.PROD.acme" or "*..acme" is rejected at config time
+// rather than silently matching nothing.
+func validateAgentLabels(rest, pattern string) error {
+	if rest == "" {
+		return fmt.Errorf("agent namespace %q must keep at least one label beside the wildcard", pattern)
+	}
+	if rest != strings.ToLower(rest) {
+		return fmt.Errorf("agent namespace %q must be lowercase", pattern)
+	}
+	if strings.Contains(rest, "*") {
+		return fmt.Errorf("agent namespace %q may only use one wildcard", pattern)
+	}
+	for _, label := range strings.Split(rest, ".") {
+		if err := validateAgentLabel(label); err != nil {
+			return fmt.Errorf("agent namespace %q: %w", pattern, err)
+		}
+	}
+	return nil
+}

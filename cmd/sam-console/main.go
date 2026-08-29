@@ -1,3 +1,17 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package main
 
 import (
@@ -21,6 +35,7 @@ func main() {
 		bindAddr        = flag.String("bind-addr", ":8081", "Address to bind the console server")
 		staticDir       = flag.String("static-dir", "public", "Directory containing static frontend files")
 		basePath        = flag.String("base-path", "", "Base path prefix for the console (e.g. /console)")
+		externalURL     = flag.String("external-url", "", "Origin browsers reach this console on, e.g. https://console.example. Sets the OIDC redirect_uri and cookie Secure flag instead of trusting the Host and X-Forwarded-Proto headers")
 	)
 	flag.Parse()
 
@@ -37,6 +52,7 @@ func main() {
 		AdminToken:      adminToken,
 		StaticDir:       *staticDir,
 		BasePath:        console.NormalizeBasePath(*basePath),
+		ExternalURL:     *externalURL,
 	})
 	if err != nil {
 		log.Fatalf("Failed to initialize console server: %v", err)

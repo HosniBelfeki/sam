@@ -117,6 +117,20 @@ On every request the gateway asserts the agent to the node, overwriting
 anything the sandbox tried to set. Mesh policy can then be written about the
 agent rather than about the host it happens to run on.
 
+The agent ID in the bundle is not free-form. Every node has a set of agent
+namespaces it is allowed to use, set by its mesh role (`allowed_agents`, see
+[control plane configuration](../control-plane-configuration/)). The `agent.id`
+in the bundle has to fall inside one of them.
+
+For example, if the node is granted `*.c1.acme.example` and the bundle says
+`researcher-1.prod.acme.example`, other nodes reject the request, because the
+node is claiming an agent it has no grant for. A node with no grant cannot name
+any agent at all.
+
+The namespace belongs to the node and the identifier belongs to the agent. That
+is why an agent keeps its name when it moves: pause it, migrate it, resume it
+behind another node in the same namespace, and nothing downstream changes.
+
 ## The architecture
 
 ```mermaid

@@ -423,6 +423,15 @@ func createMockBiscuitToken(t *testing.T, peerID string, priv ed25519.PrivateKey
 		t.Fatalf("failed to add role fact: %v", err)
 	}
 
+	// The namespace this node may speak agents for, as a real control plane
+	// would mint from a role's allowed_agents. Every agent in these tests is
+	// under acme.example, so enforcement stays live: a claim outside it is
+	// still refused.
+	err = builder.AddAuthorityFact(api.BuildAgentDatalogFact("*.acme.example"))
+	if err != nil {
+		t.Fatalf("failed to add agent namespace fact: %v", err)
+	}
+
 	err = builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{
 		Name: "node",
 		IDs:  []biscuit.Term{biscuit.String(peerID)},
