@@ -60,7 +60,7 @@ The `services` array allows you to register endpoints that remote peers in the S
 | `description` | A human-readable description published to the mesh discovery catalogue. |
 | `command` | *(For MCP)* The executable command array to spawn as a local subprocess (e.g. `["node", "index.js"]`). |
 | `env` | *(For MCP)* Key-value environment variables passed to the subprocess. |
-| `target_url` | *(For HTTP/Inference)* The upstream local URL to proxy traffic to. |
+| `target_url` | *(For HTTP/Inference/A2A)* The upstream local URL to proxy traffic to. |
 
 ### Inference Service Path Standards & Proxy Routing
 
@@ -68,6 +68,13 @@ When configuring `target_url` for `type: inference` services (e.g. Ollama, vLLM,
 * **Root Target URL Standard**: Always register `target_url` using the base root URL (e.g. `http://localhost:11434` or `http://localhost:8000`), strictly omitting `/v1`.
 * **OpenAI Facade Access**: Clients connecting via the node's local OpenAI Facade (`http://localhost:8080/v1`) request paths like `/v1/chat/completions`. SAM automatically proxies these to the backend's root URL.
 * **Raw Proxy Access**: If bypassing the Facade and making requests directly via the local egress proxy (`/sam/{peer}/inference/{service}`), the request path must include the explicit `/v1` namespace suffix (e.g. `http://localhost:8080/sam/{peer}/inference/{service}/v1/chat/completions`).
+
+### A2A Service Routing
+
+When configuring `type: a2a` services (Agent2Agent protocol agents):
+* **URL backends only**: register the agent's local HTTP endpoint as `target_url`. `command` backends are rejected.
+* **Raw Proxy Access**: remote peers reach the agent at `http://localhost:8080/sam/{peer}/a2a/{service}/...`. The agent card served at `.../.well-known/agent-card.json` is rewritten in transit so its interface URLs point back at this mesh path; transports the mesh cannot carry (gRPC) are dropped and streaming is advertised off.
+* **Label-gated egress**: setting `X-Sam-Required-Labels: key=value[,key=value]` on a raw a2a request makes the caller's node verify the provider's control-plane-attested labels and refuse fail-closed (HTTP 403) before any data leaves the node. The header is stripped before forwarding.
 
 ---
 
