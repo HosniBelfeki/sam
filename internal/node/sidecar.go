@@ -692,7 +692,8 @@ func createEgressProxy(node *SamNode) http.Handler {
 			req.URL.RawPath = ""
 			logger.Debugf("[Proxy] Rewriting URL to libp2p://%s%s", req.URL.Host, req.URL.Path)
 		},
-		Transport: transport,
+		Transport:      transport,
+		ModifyResponse: rewriteA2AAgentCard,
 	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -705,6 +706,11 @@ func createEgressProxy(node *SamNode) http.Handler {
 		if biscuitBytes == nil {
 			logger.Errorf("[Proxy] Failed to load node identity for egress request, rejecting.")
 			http.Error(w, "Service Unavailable: Missing Node Identity", http.StatusServiceUnavailable)
+			return
+		}
+
+		r, ok := a2aEgressHook(node, w, r)
+		if !ok {
 			return
 		}
 
