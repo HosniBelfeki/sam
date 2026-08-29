@@ -172,3 +172,56 @@ func TestRewriteA2AAgentCardNoopWithoutTag(t *testing.T) {
 		t.Fatalf("untagged response was modified: %s", body)
 	}
 }
+
+func TestA2AEgressHookInvalidPeerID(t *testing.T) {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/sam/not-a-peer/a2a/agent/", nil)
+	req.Header.Set(api.HeaderSamRequiredLabels, "region=eu")
+	_, ok := a2aEgressHook(nil, rec, req)
+	if ok {
+		t.Fatal("invalid peer ID must be refused")
+	}
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestRewriteA2AAgentCardSkipsNon200(t *testing.T) {
+	orig := `{"name":"T","url":"http://localhost:9999"}`
+	base := "http://127.0.0.1:8080/sam/12D3KooWpeer/a2a/agent"
+	req := httptest.NewRequest("GET", "/sam/12D3KooWpeer/a2a/agent/.well-known/agent-card.json", nil)
+	req = req.WithContext(context.WithValue(req.Context(), a2aCardBaseURL{}, base))
+	resp := &http.Response{
+		StatusCode: http.StatusNotFound,
+		Header:     http.Header{},
+		Body:       io.NopCloser(strings.NewReader(orig)),
+		Request:    req,
+	}
+	if err := rewriteA2AAgentCard(resp); err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if string(body) != orig {
+		t.Fatalf("non-200 response was modified: %s", body)
+	}
+}
+
+func TestRewriteA2AAgentCardSkipsContentEncoded(t *testing.T) {
+	orig := `{"name":"T","url":"http://localhost:9999"}`
+	base := "http://127.0.0.1:8080/sam/12D3KooWpeer/a2a/agent"
+	req := httptest.NewRequest("GET", "/sam/12D3KooWpeer/a2a/agent/.well-known/agent-card.json", nil)
+	req = req.WithContext(context.WithValue(req.Context(), a2aCardBaseURL{}, base))
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Encoding": []string{"gzip"}},
+		Body:       io.NopCloser(strings.NewReader(orig)),
+		Request:    req,
+	}
+	if err := rewriteA2AAgentCard(resp); err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if string(body) != orig {
+		t.Fatalf("content-encoded response was modified: %s", body)
+	}
+}
