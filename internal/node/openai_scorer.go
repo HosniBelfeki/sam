@@ -15,13 +15,9 @@
 package node
 
 import (
-	"fmt"
 	"net/http"
 	"sort"
-	"strings"
 	"time"
-
-	"github.com/google/sam/api"
 )
 
 // providerBackoff is how long a provider is skipped after a retryable failure.
@@ -36,41 +32,6 @@ const (
 	reasonNoEligible       = "no_eligible_provider"
 	reasonAttemptsExceeded = "attempts_exceeded"
 )
-
-// parseRequiredLabels splits the X-Sam-Required-Labels header value
-// (comma-separated "key=value" pairs) into a label map; any malformed entry
-// rejects the whole request.
-func parseRequiredLabels(h string) (map[string]string, error) {
-	if h == "" {
-		return nil, nil
-	}
-	var out map[string]string
-	for _, part := range strings.Split(h, ",") {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-		k, v, ok := strings.Cut(part, "=")
-		if !ok {
-			return nil, fmt.Errorf("invalid label %q: expected key=value", part)
-		}
-		k, v = strings.TrimSpace(k), strings.TrimSpace(v)
-		if err := api.ValidateLabelKey(k); err != nil {
-			return nil, err
-		}
-		if err := api.ValidateLabelValue(v); err != nil {
-			return nil, err
-		}
-		if out == nil {
-			out = make(map[string]string)
-		}
-		if _, exists := out[k]; exists {
-			return nil, fmt.Errorf("duplicate label key %q", k)
-		}
-		out[k] = v
-	}
-	return out, nil
-}
 
 // labelsAllowed reports whether a provider's claimed labels satisfy any
 // required key=value pair (exact match).
