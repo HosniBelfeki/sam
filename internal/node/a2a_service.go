@@ -28,6 +28,13 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
+func init() {
+	registerEgressMiddleware(api.ServiceTypeStringA2A, egressMiddleware{
+		gateRequest:    a2aEgressGate,
+		modifyResponse: rewriteA2AAgentCard,
+	})
+}
+
 // A2AService proxies Agent2Agent (A2A) JSON-RPC/REST traffic to a local
 // agent process. URL backends only: a command backend would wire the A2A
 // route to an MCP stdio bridge no A2A client can talk to.
@@ -47,13 +54,6 @@ func (s *A2AService) Init(ctx context.Context) error {
 		return fmt.Errorf("unsupported backend type %T for A2AService", s.backend)
 	}
 	return nil
-}
-
-func init() {
-	registerEgressMiddleware(api.ServiceTypeStringA2A, egressMiddleware{
-		gateRequest:    a2aEgressGate,
-		modifyResponse: rewriteA2AAgentCard,
-	})
 }
 
 // a2aCardBaseURL is the context key carrying the caller-facing mesh base URL
@@ -91,7 +91,7 @@ func a2aEgressGate(node *SamNode, w http.ResponseWriter, r *http.Request, route 
 
 // rewriteA2AAgentCard makes a proxied agent card usable by stock A2A clients:
 // interface URLs point back at the mesh path, transports the mesh cannot
-// carry are dropped, and streaming is advertised off until verified.
+// carry (gRPC) are dropped, and streaming is advertised off until verified.
 func rewriteA2AAgentCard(resp *http.Response) error {
 	base, ok := resp.Request.Context().Value(a2aCardBaseURL{}).(string)
 	if !ok || resp.StatusCode != http.StatusOK {
