@@ -1,6 +1,7 @@
 import asyncio
 import os
 from typing import Any, Dict, List, Optional
+import httpx
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
@@ -19,12 +20,16 @@ class SamClient:
 
     async def connect(self):
         """Connects to the SAM node via Streamable HTTP."""
-        import httpx
         headers = {"Accept": "application/json, text/event-stream"}
         if self.token:
             headers["X-Sam-Authentication"] = f"Bearer {self.token}"
-        
-        self._http_client = httpx.AsyncClient(headers=headers)
+
+        self._http_client = httpx.AsyncClient(
+            headers=headers,
+            follow_redirects=True,
+            # The SDK's SSE-friendly defaults; httpx's default 5s read timeout drops the stream.
+            timeout=httpx.Timeout(30.0, read=300.0),
+        )
         try:
             self._sh_cm = streamable_http_client(self.server_url, http_client=self._http_client)
             res = await self._sh_cm.__aenter__()
