@@ -78,7 +78,7 @@ func TestIdentityEvidenceOperatorFlow(t *testing.T) {
 	if providerPeerID == "" {
 		t.Fatalf("provider address %q has no PeerID", providerAddr)
 	}
-	callMCP(t, ownerAPI, "connect_peer", map[string]any{"peer_addr": providerAddr})
+	connectPeer(t, ownerAPI, providerAddr)
 
 	client := identityEvidenceSocketClient(ownerSocket)
 	waitForIdentityEvidenceSocket(t, client)

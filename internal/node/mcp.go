@@ -46,6 +46,8 @@ To use these remote services and their tools, the client can use the following f
 
 Other useful tools: discover_remote_services browses services by type (e.g. 'MCP' or 'Inference'), get_mesh_info reports connected peers and mesh state, list_local_services shows what this node hosts.
 
+Node diagnostics (logs, connectivity, network/token info, connecting to a peer by address) are NOT MCP tools. When asked to diagnose this node, run 'sam-node debug --help' in a shell to discover the available diagnostics, then invoke the matching subcommand. They talk to the node over its Unix socket, so no token is involved.
+
 Tools on remote services are identified via the format 'scheme://service-name/tool-name' (where 'scheme://service-name' represents the well-known local address of the service, and 'tool-name' is the individual tool to execute on it. Tool names themselves can contain any characters).
 
 Inference services ('inference://...') are NOT called via call_remote_tool — they are plain OpenAI-compatible HTTP endpoints. Use discover_remote_services with type 'inference' to get each one's local_proxy_url, then send a normal HTTP request (e.g. POST <local_proxy_url>/chat/completions) directly to that URL.
@@ -111,12 +113,6 @@ func NewMCPServer(node *SamNode) *mcp.Server {
 		Description: "Call an MCP tool on a remote agent",
 	}, node.handleCallRemoteTool)
 
-	// Add the connect_peer tool.
-	mcp.AddTool(mcpServer, &mcp.Tool{
-		Name:        "connect_peer",
-		Description: "Connect to a peer in the mesh",
-	}, node.handleConnectPeer)
-
 	// Add the find_remote_tools tool.
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "find_remote_tools",
@@ -128,30 +124,6 @@ func NewMCPServer(node *SamNode) *mcp.Server {
 		Name:        "describe_remote_tool",
 		Description: "Return the description, input schema, and output schema for a specific aggregated tool on a specific peer. peer_id and tool_name are both required; tool_name must be a namespaced 'scheme://service/tool' name as returned by find_remote_tools.",
 	}, node.handleDescribeRemoteTool)
-
-	// Add the check_connectivity tool.
-	mcp.AddTool(mcpServer, &mcp.Tool{
-		Name:        "check_connectivity",
-		Description: "Diagnose the node's ability to communicate with the SAM routers and the broader mesh network.",
-	}, node.handleCheckConnectivity)
-
-	// Add the get_token_info tool.
-	mcp.AddTool(mcpServer, &mcp.Tool{
-		Name:        "get_token_info",
-		Description: "Inspects the local auth token, returns its expiration time and status.",
-	}, node.handleGetTokenInfo)
-
-	// Add the get_network_info tool.
-	mcp.AddTool(mcpServer, &mcp.Tool{
-		Name:        "get_network_info",
-		Description: "Returns local network interfaces and listener addresses.",
-	}, node.handleGetNetworkInfo)
-
-	// Add the get_recent_logs tool.
-	mcp.AddTool(mcpServer, &mcp.Tool{
-		Name:        "get_recent_logs",
-		Description: "Returns the last few lines of the node's log output.",
-	}, node.handleGetRecentLogs)
 
 	return mcpServer
 }

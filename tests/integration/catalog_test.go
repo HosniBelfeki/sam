@@ -215,8 +215,8 @@ func TestCatalogRoutingAndFailover(t *testing.T) {
 	addrC := waitForPeerInfoInLog(t, filepath.Join(homeC, "node.log"))
 
 	// Force Node A to connect to Node B and Node C
-	callMCP(t, mcpAddrA, "connect_peer", map[string]any{"peer_addr": addrB})
-	callMCP(t, mcpAddrA, "connect_peer", map[string]any{"peer_addr": addrC})
+	connectPeer(t, mcpAddrA, addrB)
+	connectPeer(t, mcpAddrA, addrC)
 
 	// Wait for them to discover each other and publish catalog by polling get_mesh_info
 	t.Log("Polling for discovery...")

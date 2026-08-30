@@ -15,8 +15,11 @@
 package integration_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,7 +28,57 @@ import (
 	"github.com/google/sam/api"
 )
 
-func TestMCPLocalTools(t *testing.T) {
+// connectPeerWithToken dials POST /debug/connect-peer, the REST endpoint that
+// replaced the connect_peer MCP tool (#318).
+func connectPeerWithToken(t *testing.T, apiAddr, token, peerAddr string) {
+	t.Helper()
+	body, err := json.Marshal(map[string]string{"peer_addr": peerAddr})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequest(http.MethodPost, "http://"+apiAddr+"/debug/connect-peer", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set(api.HeaderSamAuthentication, "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("connect-peer request failed: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("connect-peer returned %s: %s", resp.Status, respBody)
+	}
+}
+
+func connectPeer(t *testing.T, apiAddr, peerAddr string) {
+	t.Helper()
+	connectPeerWithToken(t, apiAddr, "test-token", peerAddr)
+}
+
+// debugGet fetches one GET /debug endpoint and returns its JSON body.
+func debugGet(t *testing.T, apiAddr, path string) string {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, "http://"+apiAddr+path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set(api.HeaderSamAuthentication, "Bearer test-token")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET %s failed: %v", path, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET %s returned %s: %s", path, resp.Status, respBody)
+	}
+	return string(respBody)
+}
+
+func TestDebugEndpoints(t *testing.T) {
 	nodeBin := buildBinary(t, "./cmd/sam-node")
 
 	tmpDir := t.TempDir()
@@ -76,7 +129,7 @@ roles: []
 		"--jwt", nodeJWT,
 	)
 
-	// Resolve actual MCP address from log
+	// Resolve actual local API address from log
 	actualApiAddrA := waitForMCPAddr(t, filepath.Join(homeA, "node.log"))
 	actualApiAddrB := waitForMCPAddr(t, filepath.Join(homeB, "node.log"))
 
@@ -87,11 +140,25 @@ roles: []
 	// Resolve Peer addresses
 	addrA := waitForPeerInfoInLog(t, filepath.Join(homeA, "node.log"))
 
-	// Connect Node B to Node A directly
-	callMCP(t, actualApiAddrB, "connect_peer", map[string]any{"peer_addr": addrA})
+	// Connect Node B to Node A directly; exercises POST /debug/connect-peer
+	connectPeer(t, actualApiAddrB, addrA)
 
-	t.Run("get_token_info", func(t *testing.T) {
-		resp := callMCP(t, actualApiAddrA, "get_token_info", map[string]any{})
+	t.Run("mesh-info", func(t *testing.T) {
+		resp := debugGet(t, actualApiAddrA, "/debug/mesh-info")
+		var info map[string]any
+		if err := json.Unmarshal([]byte(resp), &info); err != nil {
+			t.Fatalf("failed to unmarshal JSON: %v", err)
+		}
+		if _, ok := info["connected_peers"]; !ok {
+			t.Errorf("expected connected_peers, got %v", info)
+		}
+		if routerPeerID, ok := info["router_peer_id"].(string); !ok || routerPeerID == "" {
+			t.Errorf("expected router_peer_id, got %v", info)
+		}
+	})
+
+	t.Run("token-info", func(t *testing.T) {
+		resp := debugGet(t, actualApiAddrA, "/debug/token-info")
 		var info map[string]any
 		if err := json.Unmarshal([]byte(resp), &info); err != nil {
 			t.Fatalf("failed to unmarshal JSON: %v", err)
@@ -104,8 +171,8 @@ roles: []
 		}
 	})
 
-	t.Run("get_network_info", func(t *testing.T) {
-		resp := callMCP(t, actualApiAddrA, "get_network_info", map[string]any{})
+	t.Run("network-info", func(t *testing.T) {
+		resp := debugGet(t, actualApiAddrA, "/debug/network-info")
 		var info map[string]any
 		if err := json.Unmarshal([]byte(resp), &info); err != nil {
 			t.Fatalf("failed to unmarshal JSON: %v", err)
@@ -115,8 +182,8 @@ roles: []
 		}
 	})
 
-	t.Run("check_connectivity", func(t *testing.T) {
-		resp := callMCP(t, actualApiAddrA, "check_connectivity", map[string]any{})
+	t.Run("connectivity", func(t *testing.T) {
+		resp := debugGet(t, actualApiAddrA, "/debug/connectivity")
 		var info map[string]any
 		if err := json.Unmarshal([]byte(resp), &info); err != nil {
 			t.Fatalf("failed to unmarshal JSON: %v", err)
@@ -131,8 +198,8 @@ roles: []
 		}
 	})
 
-	t.Run("get_recent_logs", func(t *testing.T) {
-		resp := callMCP(t, actualApiAddrA, "get_recent_logs", map[string]any{})
+	t.Run("logs", func(t *testing.T) {
+		resp := debugGet(t, actualApiAddrA, "/debug/logs")
 		if !strings.Contains(resp, "Starting MCP server") && !strings.Contains(resp, "SAM Node Online") {
 			t.Errorf("expected logs to contain startup messages, got: %v", resp)
 		}

@@ -72,7 +72,7 @@ func TestIntegrationStdioDatapath(t *testing.T) {
 	peerIDA := getPeerIDFromAddr(addrA)
 
 	// Connect Node B to Node A
-	callMCP(t, actualApiAddrB, "connect_peer", map[string]any{"peer_addr": addrA})
+	connectPeer(t, actualApiAddrB, addrA)
 
 	// Register Stdio service on Node A
 	serviceName := "stdio-tool"
@@ -199,7 +199,7 @@ func TestIntegrationHTTPDatapath(t *testing.T) {
 	peerIDB := getPeerIDFromAddr(addrB)
 
 	// Connect Node B to Node A
-	callMCP(t, actualApiAddrB, "connect_peer", map[string]any{"peer_addr": addrA})
+	connectPeer(t, actualApiAddrB, addrA)
 
 	// Start a dummy HTTP server on Node A's host (simulating local service).
 	// It captures the headers it receives so we can assert what actually

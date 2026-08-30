@@ -73,7 +73,7 @@ func TestServiceDiscovery(t *testing.T) {
 
 	// Connect Node B to Node A (to ensure they are in same network)
 	// We use the multiplexed HTTP address for MCP calls too!
-	callMCP(t, actualApiAddrB, "connect_peer", map[string]any{"peer_addr": addrA})
+	connectPeer(t, actualApiAddrB, addrA)
 
 	// Wait for DHT to have peers on Node A
 	t.Log("Waiting for DHT to have peers on Node A...")
@@ -176,7 +176,7 @@ func TestServiceDiscoveryStreaming(t *testing.T) {
 	addrA := waitForPeerInfoInLog(t, filepath.Join(homeA, "node.log"))
 
 	// Connect Node B to Node A
-	callMCP(t, actualApiAddrB, "connect_peer", map[string]any{"peer_addr": addrA})
+	connectPeer(t, actualApiAddrB, addrA)
 
 	// Wait for DHT to have peers on Node A
 	t.Log("Waiting for DHT to have peers on Node A...")

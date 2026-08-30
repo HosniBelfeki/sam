@@ -77,7 +77,7 @@ func TestSandboxBoundaryCUJ(t *testing.T) {
 
 	addrA := waitForPeerInfoInLog(t, filepath.Join(homeA, "node.log"))
 	peerA := extractPeerID(addrA)
-	callMCP(t, apiAddrB, "connect_peer", map[string]any{"peer_addr": addrA})
+	connectPeer(t, apiAddrB, addrA)
 	waitForDHTPeers(t, apiAddrA)
 
 	inference := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

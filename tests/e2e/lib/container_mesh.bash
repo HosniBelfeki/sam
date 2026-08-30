@@ -196,6 +196,19 @@ if [[ -z "${MESH_HELPERS_LOADED:-}" ]]; then
     return 1
   }
 
+  # POST /debug/connect-peer on node <idx>; the REST endpoint that replaced
+  # the connect_peer MCP tool (#318). Nonzero exit on any non-2xx response.
+  mesh_connect_peer() {
+    local idx="$1"
+    local peer_addr="$2"
+    docker run --rm --network "${MESH_NETWORK}" python:3.12 \
+      curl -sf -X POST --max-time 30 \
+      -H "Content-Type: application/json" \
+      -H "X-Sam-Authentication: Bearer secret-token" \
+      -d "{\"peer_addr\":\"${peer_addr}\"}" \
+      "http://${MESH_PREFIX}-node-${idx}:8080/debug/connect-peer"
+  }
+
   mesh_get_node_count_via_mcp() {
     local idx="$1"
     local output
