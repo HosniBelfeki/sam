@@ -67,7 +67,7 @@ func TestA2AEgressHookNonA2APassthrough(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/sam/12D3KooWpeer/mcp/svc/foo", nil)
 	req.Header.Set(api.HeaderSamRequiredLabels, "region=eu")
-	_, ok := a2aEgressHook(nil, rec, req)
+	_, ok := applyEgressMiddleware(nil, rec, req)
 	if !ok {
 		t.Fatal("non-a2a path must pass through")
 	}
@@ -80,7 +80,7 @@ func TestA2AEgressHookMalformedLabels(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("POST", "/sam/12D3KooWpeer/a2a/agent/", nil)
 	req.Header.Set(api.HeaderSamRequiredLabels, "not-a-label")
-	_, ok := a2aEgressHook(nil, rec, req)
+	_, ok := applyEgressMiddleware(nil, rec, req)
 	if ok {
 		t.Fatal("malformed labels must be refused")
 	}
@@ -93,7 +93,7 @@ func TestA2AEgressHookTagsCardFetch(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/sam/12D3KooWpeer/a2a/agent/.well-known/agent-card.json", nil)
 	req.Host = "127.0.0.1:8080"
-	r2, ok := a2aEgressHook(nil, rec, req)
+	r2, ok := applyEgressMiddleware(nil, rec, req)
 	if !ok {
 		t.Fatal("card fetch must pass through")
 	}
@@ -177,7 +177,7 @@ func TestA2AEgressHookInvalidPeerID(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/sam/not-a-peer/a2a/agent/", nil)
 	req.Header.Set(api.HeaderSamRequiredLabels, "region=eu")
-	_, ok := a2aEgressHook(nil, rec, req)
+	_, ok := applyEgressMiddleware(nil, rec, req)
 	if ok {
 		t.Fatal("invalid peer ID must be refused")
 	}
@@ -230,7 +230,7 @@ func TestA2AEgressHookUppercaseTypeIsGated(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("POST", "/sam/not-a-peer/A2A/agent/", nil)
 	req.Header.Set(api.HeaderSamRequiredLabels, "region=eu")
-	_, ok := a2aEgressHook(nil, rec, req)
+	_, ok := applyEgressMiddleware(nil, rec, req)
 	if ok {
 		t.Fatal("uppercase A2A path must not bypass the labels gate")
 	}

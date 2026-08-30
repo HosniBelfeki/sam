@@ -653,6 +653,61 @@ func handleDiscoverService(node *SamNode, w http.ResponseWriter, r *http.Request
 	}
 }
 
+// egressMiddleware lets a service type hook raw egress traffic without the
+// proxy knowing the type exists. Types self-register from init().
+type egressMiddleware struct {
+	// gateRequest may refuse the request (writing the HTTP error itself,
+	// returning false) or return a derived request to forward.
+	gateRequest func(node *SamNode, w http.ResponseWriter, r *http.Request, route egressRoute) (*http.Request, bool)
+	// modifyResponse edits the proxied response; nil means no hook.
+	modifyResponse func(*http.Response) error
+}
+
+// egressRoute is the parsed /sam/{peer}/{type}/{svc}/{upstream} egress path,
+// with the service type lowercased to match how the remote ingress parses it.
+type egressRoute struct {
+	peerID       string
+	serviceType  string
+	serviceName  string
+	upstreamPath string
+}
+
+// Keyed by lowercase service-type string; written only during init().
+var egressMiddlewares = map[string]egressMiddleware{}
+
+func registerEgressMiddleware(serviceType string, mw egressMiddleware) {
+	egressMiddlewares[strings.ToLower(serviceType)] = mw
+}
+
+// applyEgressMiddleware routes a raw egress request through the middleware
+// registered for its service type, if any.
+func applyEgressMiddleware(node *SamNode, w http.ResponseWriter, r *http.Request) (*http.Request, bool) {
+	parts := strings.SplitN(r.URL.Path, "/", 6)
+	if len(parts) < 5 {
+		return r, true
+	}
+	route := egressRoute{peerID: parts[2], serviceType: strings.ToLower(parts[3]), serviceName: parts[4]}
+	if len(parts) > 5 {
+		route.upstreamPath = parts[5]
+	}
+	mw, ok := egressMiddlewares[route.serviceType]
+	if !ok || mw.gateRequest == nil {
+		return r, true
+	}
+	return mw.gateRequest(node, w, r, route)
+}
+
+// egressModifyResponse dispatches to the middleware of the service type in
+// the rewritten path (/{type}/{svc}/...); types without a hook pass through.
+func egressModifyResponse(resp *http.Response) error {
+	parts := strings.SplitN(strings.TrimPrefix(resp.Request.URL.Path, "/"), "/", 2)
+	mw, ok := egressMiddlewares[strings.ToLower(parts[0])]
+	if !ok || mw.modifyResponse == nil {
+		return nil
+	}
+	return mw.modifyResponse(resp)
+}
+
 func createEgressProxy(node *SamNode) http.Handler {
 	transport := libp2phttp.NewTransport(node.Host)
 
@@ -693,7 +748,7 @@ func createEgressProxy(node *SamNode) http.Handler {
 			logger.Debugf("[Proxy] Rewriting URL to libp2p://%s%s", req.URL.Host, req.URL.Path)
 		},
 		Transport:      transport,
-		ModifyResponse: rewriteA2AAgentCard,
+		ModifyResponse: egressModifyResponse,
 	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -709,7 +764,7 @@ func createEgressProxy(node *SamNode) http.Handler {
 			return
 		}
 
-		r, ok := a2aEgressHook(node, w, r)
+		r, ok := applyEgressMiddleware(node, w, r)
 		if !ok {
 			return
 		}

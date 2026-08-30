@@ -49,18 +49,21 @@ func (s *A2AService) Init(ctx context.Context) error {
 	return nil
 }
 
+func init() {
+	registerEgressMiddleware(api.ServiceTypeStringA2A, egressMiddleware{
+		gateRequest:    a2aEgressGate,
+		modifyResponse: rewriteA2AAgentCard,
+	})
+}
+
 // a2aCardBaseURL is the context key carrying the caller-facing mesh base URL
-// of an agent-card fetch, set by a2aEgressHook and consumed by the rewrite.
+// of an agent-card fetch, set by a2aEgressGate and consumed by the rewrite.
 type a2aCardBaseURL struct{}
 
-// a2aEgressHook runs the caller-side A2A checks on a raw egress request:
+// a2aEgressGate runs the caller-side A2A checks on a raw egress request:
 // the fail-closed labels gate and tagging agent-card fetches for rewrite.
 // On refusal it writes the HTTP error itself and returns ok=false.
-func a2aEgressHook(node *SamNode, w http.ResponseWriter, r *http.Request) (*http.Request, bool) {
-	parts := strings.SplitN(r.URL.Path, "/", 6)
-	if len(parts) < 5 || !strings.EqualFold(parts[3], api.ServiceTypeStringA2A) {
-		return r, true
-	}
+func a2aEgressGate(node *SamNode, w http.ResponseWriter, r *http.Request, route egressRoute) (*http.Request, bool) {
 	if labelsHeader := r.Header.Get(api.HeaderSamRequiredLabels); labelsHeader != "" {
 		r.Header.Del(api.HeaderSamRequiredLabels)
 		required, err := parseRequiredLabels(labelsHeader)
@@ -68,19 +71,19 @@ func a2aEgressHook(node *SamNode, w http.ResponseWriter, r *http.Request) (*http
 			http.Error(w, fmt.Sprintf("Invalid %s header: %v", api.HeaderSamRequiredLabels, err), http.StatusBadRequest)
 			return r, false
 		}
-		pid, err := peer.Decode(parts[2])
+		pid, err := peer.Decode(route.peerID)
 		if err != nil {
 			http.Error(w, "Invalid peer ID", http.StatusBadRequest)
 			return r, false
 		}
 		if err := node.VerifyPeerLabels(r.Context(), pid, required); err != nil {
-			logger.Warnf("[A2A] label gate refused egress to %s: %v", parts[2], err)
+			logger.Warnf("[A2A] label gate refused egress to %s: %v", route.peerID, err)
 			http.Error(w, "Required labels not attested by provider", http.StatusForbidden)
 			return r, false
 		}
 	}
 	if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/.well-known/agent-card.json") {
-		base := fmt.Sprintf("http://%s/sam/%s/%s/%s", r.Host, parts[2], parts[3], parts[4])
+		base := fmt.Sprintf("http://%s/sam/%s/%s/%s", r.Host, route.peerID, route.serviceType, route.serviceName)
 		r = r.WithContext(context.WithValue(r.Context(), a2aCardBaseURL{}, base))
 	}
 	return r, true
