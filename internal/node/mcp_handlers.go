@@ -218,6 +218,7 @@ func (n *SamNode) handleGetMeshInfo(ctx context.Context, req *mcp.CallToolReques
 	dhtSize := n.DHT.RoutingTable().Size()
 
 	resData := map[string]any{
+		"peer_id":         n.Host.ID().String(),
 		"connected_peers": connectedPeers,
 		"dht_size":        dhtSize,
 		"router_peer_id":  n.RouterPeerID.String(),
