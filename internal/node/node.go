@@ -1115,6 +1115,15 @@ func (n *SamNode) renewWithRefreshToken(ctx context.Context, clientSecret string
 	return newJWT, nil
 }
 
+const (
+	meshEventRateLimitDrop   = "rate_limit_drop"
+	meshEventSpoofingAttempt = "spoofing_attempt"
+	meshEventStaleEvent      = "stale_event"
+	meshEventPolicyUpdate    = "policy_update"
+	meshEventBanned          = "banned"
+	meshEventKeyRotation     = "key_rotation"
+)
+
 // listenForControlPlaneEvents listens to the topic established by the control plane
 func (n *SamNode) listenForControlPlaneEvents(ctx context.Context) {
 	topic, err := n.PubSub.Join(api.GossipEvents)
@@ -1136,7 +1145,7 @@ func (n *SamNode) listenForControlPlaneEvents(ctx context.Context) {
 		}
 
 		if !n.rateLimiter.Allow(msg.ReceivedFrom.String()) {
-			logger.Warnf("[Mesh Event] Rate limit exceeded for %s, dropping message", msg.ReceivedFrom)
+			logger.Warnw("[Mesh Event] rate limit exceeded, dropping message", "event", meshEventRateLimitDrop, "peer", msg.ReceivedFrom.String())
 			continue
 		}
 
@@ -1153,14 +1162,14 @@ func (n *SamNode) listenForControlPlaneEvents(ctx context.Context) {
 		// each with its own PeerID.
 
 		if !n.verifyEvent(&event) {
-			logger.Warnf("[Mesh Event] Potential spoofing attempt: invalid signature on event from %s", msg.ReceivedFrom)
+			logger.Warnw("[Mesh Event] potential spoofing attempt: invalid event signature", "event", meshEventSpoofingAttempt, "peer", msg.ReceivedFrom.String())
 			continue
 		}
 
 		// Freshness check: reject events older than the threshold to prevent replay attacks
 		eventTime := time.UnixMilli(event.Timestamp)
 		if time.Since(eventTime) > FreshnessThreshold || time.Until(eventTime) > FreshnessThreshold {
-			logger.Warnf("[Mesh Event] Dropping stale or future event from %s (timestamp: %d)", msg.ReceivedFrom, event.Timestamp)
+			logger.Warnw("[Mesh Event] dropping stale or future event", "event", meshEventStaleEvent, "peer", msg.ReceivedFrom.String(), "timestamp", event.Timestamp)
 			continue
 		}
 
@@ -1170,7 +1179,7 @@ func (n *SamNode) listenForControlPlaneEvents(ctx context.Context) {
 		case api.MeshEvent_KEY_ROTATION:
 			n.handleKeyRotationEvent(&event)
 		case api.MeshEvent_POLICY_UPDATE:
-			logger.Infof("[Mesh Event] Received POLICY_UPDATE event from %s, triggering sync", msg.ReceivedFrom)
+			logger.Infow("[Mesh Event] policy update received, triggering sync", "event", meshEventPolicyUpdate, "peer", msg.ReceivedFrom.String())
 			go func() {
 				maxJitter := n.config.PolicySyncJitter
 				if maxJitter <= 0 {
@@ -1206,7 +1215,7 @@ func (n *SamNode) handleBannedEvent(event *api.MeshEvent) {
 
 	n.mu.Unlock()
 
-	logger.Infof("[Mesh Event] Peer banned: %s", event.PeerId)
+	logger.Infow("[Mesh Event] peer banned", "event", meshEventBanned, "peer", event.PeerId)
 
 	if n.revokedPeers != nil {
 		n.revokedPeers.Add(event.PeerId, event.Timestamp)
@@ -1225,7 +1234,7 @@ func (n *SamNode) handleKeyRotationEvent(event *api.MeshEvent) {
 		logger.Errorf("[Mesh Event] Key rotation failed: invalid public key size %d, expected %d", len(event.NewPublicKey), ed25519.PublicKeySize)
 		return
 	}
-	logger.Infof("[Mesh Event] Key rotation received")
+	logger.Infow("[Mesh Event] key rotation received", "event", meshEventKeyRotation, "key", fmt.Sprintf("%x", event.NewPublicKey))
 	n.keysMu.Lock()
 	defer n.keysMu.Unlock()
 	for _, tk := range n.trustedKeys {
