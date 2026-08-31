@@ -15,7 +15,9 @@
 package node
 
 import (
+	"bytes"
 	"context"
+	"crypto/ed25519"
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -67,6 +69,69 @@ func FetchControlPlaneInfo(ctx context.Context, controlPlaneURL string) (*api.Co
 	return &info, nil
 }
 
+// FetchControlPlaneKeys retrieves the full set of currently valid control
+// plane public keys from the /keys endpoint — the same catch-up path routers
+// use. Enrollment only hands out the newest key, so this is how a node
+// learns keys still in their rotation grace period, or rotations it missed
+// while offline.
+func FetchControlPlaneKeys(ctx context.Context, controlPlaneURL string) ([]ed25519.PublicKey, error) {
+	if !strings.HasPrefix(controlPlaneURL, "http://") && !strings.HasPrefix(controlPlaneURL, "https://") {
+		controlPlaneURL = "https://" + controlPlaneURL
+	}
+	controlPlaneURL = strings.TrimSuffix(controlPlaneURL, "/")
+
+	req, err := http.NewRequestWithContext(ctx, "GET", controlPlaneURL+"/keys", nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create HTTP request: %w", err)
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("HTTP request failed: %w", err)
+	}
+	defer resp.Body.Close() //nolint:errcheck
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("control plane returned status %s: %s", resp.Status, string(body))
+	}
+
+	var keysResp api.KeysResponse
+	if err := proto.Unmarshal(body, &keysResp); err != nil {
+		return nil, fmt.Errorf("failed to decode /keys response: %w", err)
+	}
+
+	var keys []ed25519.PublicKey
+	for _, kb := range keysResp.PublicKeys {
+		if len(kb) == ed25519.PublicKeySize {
+			keys = append(keys, ed25519.PublicKey(kb))
+		}
+	}
+	return keys, nil
+}
+
+// mergeTrustedKeys replaces the stored trust set with the authoritative set
+// from /keys, preserving ReceivedAt for keys already known so local grace
+// pruning keeps working across syncs.
+func mergeTrustedKeys(existing []TrustedKey, fetched []ed25519.PublicKey, now time.Time) []TrustedKey {
+	merged := make([]TrustedKey, 0, len(fetched))
+	for _, key := range fetched {
+		tk := TrustedKey{Key: key, ReceivedAt: now}
+		for _, old := range existing {
+			if bytes.Equal(old.Key, key) {
+				tk.ReceivedAt = old.ReceivedAt
+				break
+			}
+		}
+		merged = append(merged, tk)
+	}
+	return merged
+}
+
 // SyncMeshConfig loads the mesh configuration from the store, attempts to refresh it
 // via HTTP from the control plane, and updates the store if successful.
 // It returns the control plane public key and the latest multiaddresses.
@@ -116,6 +181,20 @@ func SyncMeshConfig(ctx context.Context, s *Store) ([]byte, []multiaddr.Multiadd
 						logger.Errorf("Failed to save updated mesh config to store: %v", saveErr)
 					}
 				}
+			}
+		}
+
+		// Catch up on the valid key set: an empty result would wipe the trust
+		// set, so it is ignored like any fetch failure.
+		if keys, keysErr := FetchControlPlaneKeys(ctx, controlPlaneURL); keysErr != nil {
+			logger.Warnf("Failed to fetch control plane keys via HTTP (using cached): %v", keysErr)
+		} else if len(keys) > 0 {
+			existing, loadErr := s.LoadTrustedKeys()
+			if loadErr != nil {
+				logger.Warnf("Failed to load stored trusted keys, replacing: %v", loadErr)
+			}
+			if saveErr := s.SaveTrustedKeys(mergeTrustedKeys(existing, keys, time.Now())); saveErr != nil {
+				logger.Errorf("Failed to save trusted keys to store: %v", saveErr)
 			}
 		}
 	}

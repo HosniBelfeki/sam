@@ -302,10 +302,29 @@ func NewSamNode(cfg Options) (*SamNode, error) {
 // Start initializes the libp2p host, DHT, connects to the routers, and starts runtime components.
 func (n *SamNode) Start(ctx context.Context) error {
 	if biscuitBytes := n.GetIdentity(); len(biscuitBytes) > 0 {
-		controlPlanePubKeyBytes, _, err := n.Store.LoadMeshConfig()
-		if err == nil && len(controlPlanePubKeyBytes) > 0 {
-			if err := identity.VerifyBiscuitRole(biscuitBytes, ed25519.PublicKey(controlPlanePubKeyBytes), n.config.RequiredRole, n.BiscuitTimeout); err != nil {
-				return fmt.Errorf("loaded identity fails role requirement %q: %w", n.config.RequiredRole, err)
+		// The identity may be signed by any currently valid control plane
+		// key, not only the newest: after a rotation the biscuit's key can
+		// legitimately be in its grace period.
+		n.keysMu.RLock()
+		candidates := make([]ed25519.PublicKey, 0, len(n.trustedKeys))
+		for _, tk := range n.trustedKeys {
+			candidates = append(candidates, tk.Key)
+		}
+		n.keysMu.RUnlock()
+		if len(candidates) == 0 {
+			if pubKeyBytes, _, err := n.Store.LoadMeshConfig(); err == nil && len(pubKeyBytes) > 0 {
+				candidates = append(candidates, ed25519.PublicKey(pubKeyBytes))
+			}
+		}
+		if len(candidates) > 0 {
+			var roleErr error
+			for _, key := range candidates {
+				if roleErr = identity.VerifyBiscuitRole(biscuitBytes, key, n.config.RequiredRole, n.BiscuitTimeout); roleErr == nil {
+					break
+				}
+			}
+			if roleErr != nil {
+				return fmt.Errorf("loaded identity fails role requirement %q: %w", n.config.RequiredRole, roleErr)
 			}
 		}
 	}
