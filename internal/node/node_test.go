@@ -145,6 +145,49 @@ func TestHandleKeyRotationEvent(t *testing.T) {
 	}
 }
 
+// TestKeyRotationEventSurvivesRestart covers the offline/restart half of
+// #325: a key learned from a rotation event must outlive the process, or a
+// restarted node falls back to its stale enrollment-time key.
+func TestKeyRotationEventSurvivesRestart(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	enrollKey, _, _ := ed25519.GenerateKey(nil)
+	rotatedKey, _, _ := ed25519.GenerateKey(nil)
+
+	node := &SamNode{Store: store, trustedKeys: []TrustedKey{{Key: enrollKey, ReceivedAt: time.Now()}}}
+	node.handleKeyRotationEvent(&api.MeshEvent{
+		Type:         api.MeshEvent_KEY_ROTATION,
+		NewPublicKey: rotatedKey,
+		Timestamp:    time.Now().UnixMilli(),
+	})
+	// Duplicate event must not grow the persisted set
+	node.handleKeyRotationEvent(&api.MeshEvent{
+		Type:         api.MeshEvent_KEY_ROTATION,
+		NewPublicKey: rotatedKey,
+		Timestamp:    time.Now().UnixMilli(),
+	})
+
+	// "Restart": a fresh node built from the same store must trust the rotated key
+	priv, _, _ := crypto.GenerateKeyPair(crypto.Ed25519, -1)
+	restarted, err := NewSamNode(Options{PrivKey: priv, Store: store, ControlPlanePubKey: enrollKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(restarted.trustedKeys) != 2 {
+		t.Fatalf("expected 2 trusted keys after restart, got %d", len(restarted.trustedKeys))
+	}
+	if !containsTrustedKey(restarted.trustedKeys, rotatedKey) {
+		t.Error("rotated key lost across restart")
+	}
+	if !containsTrustedKey(restarted.trustedKeys, enrollKey) {
+		t.Error("enrollment key missing after restart")
+	}
+}
+
 // TestPruneTrustedKeys covers the trust-set floor: a node that runs past the
 // grace period without witnessing a rotation must not age out its only key.
 func TestPruneTrustedKeys(t *testing.T) {

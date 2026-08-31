@@ -255,8 +255,15 @@ func NewSamNode(cfg Options) (*SamNode, error) {
 	}
 
 	var trustedKeys []TrustedKey
-	if len(cfg.ControlPlanePubKey) > 0 {
-		trustedKeys = []TrustedKey{{Key: cfg.ControlPlanePubKey, ReceivedAt: time.Now()}}
+	if cfg.Store != nil {
+		if stored, err := cfg.Store.LoadTrustedKeys(); err != nil {
+			logger.Warnf("Failed to load persisted trusted keys: %v", err)
+		} else {
+			trustedKeys = stored
+		}
+	}
+	if len(cfg.ControlPlanePubKey) > 0 && !containsTrustedKey(trustedKeys, cfg.ControlPlanePubKey) {
+		trustedKeys = append(trustedKeys, TrustedKey{Key: cfg.ControlPlanePubKey, ReceivedAt: time.Now()})
 	}
 
 	node := &SamNode{
@@ -1230,20 +1237,45 @@ func (n *SamNode) handleBannedEvent(event *api.MeshEvent) {
 	}
 }
 
+func containsTrustedKey(keys []TrustedKey, key ed25519.PublicKey) bool {
+	for _, tk := range keys {
+		if bytes.Equal(tk.Key, key) {
+			return true
+		}
+	}
+	return false
+}
+
+// addTrustedKey appends a control plane public key to the trust set (no-op
+// on duplicates) and persists the updated set so it survives restarts.
+func (n *SamNode) addTrustedKey(key ed25519.PublicKey) {
+	n.keysMu.Lock()
+	if containsTrustedKey(n.trustedKeys, key) {
+		n.keysMu.Unlock()
+		return
+	}
+	n.trustedKeys = append(n.trustedKeys, TrustedKey{Key: key, ReceivedAt: time.Now()})
+	snapshot := append([]TrustedKey(nil), n.trustedKeys...)
+	n.keysMu.Unlock()
+	n.persistTrustedKeys(snapshot)
+}
+
+func (n *SamNode) persistTrustedKeys(keys []TrustedKey) {
+	if n.Store == nil {
+		return
+	}
+	if err := n.Store.SaveTrustedKeys(keys); err != nil {
+		logger.Errorf("Failed to persist trusted keys: %v", err)
+	}
+}
+
 func (n *SamNode) handleKeyRotationEvent(event *api.MeshEvent) {
 	if len(event.NewPublicKey) != ed25519.PublicKeySize {
 		logger.Errorf("[Mesh Event] Key rotation failed: invalid public key size %d, expected %d", len(event.NewPublicKey), ed25519.PublicKeySize)
 		return
 	}
 	logger.Infow("[Mesh Event] key rotation received", "event", meshEventKeyRotation, "key", fmt.Sprintf("%x", event.NewPublicKey))
-	n.keysMu.Lock()
-	defer n.keysMu.Unlock()
-	for _, tk := range n.trustedKeys {
-		if bytes.Equal(tk.Key, event.NewPublicKey) {
-			return // Ignore duplicate
-		}
-	}
-	n.trustedKeys = append(n.trustedKeys, TrustedKey{Key: ed25519.PublicKey(event.NewPublicKey), ReceivedAt: time.Now()})
+	n.addTrustedKey(ed25519.PublicKey(event.NewPublicKey))
 }
 
 // pruneTrustedKeys drops keys older than gracePeriod but always keeps the
@@ -1281,8 +1313,14 @@ func (n *SamNode) startKeyPruning(ctx context.Context, gracePeriod time.Duration
 			case <-ticker.C:
 				logger.Info("[KeyPruning] Pruning expired keys...")
 				n.keysMu.Lock()
-				n.trustedKeys = pruneTrustedKeys(n.trustedKeys, time.Now(), gracePeriod)
+				pruned := pruneTrustedKeys(n.trustedKeys, time.Now(), gracePeriod)
+				changed := len(pruned) != len(n.trustedKeys)
+				n.trustedKeys = pruned
+				snapshot := append([]TrustedKey(nil), pruned...)
 				n.keysMu.Unlock()
+				if changed {
+					n.persistTrustedKeys(snapshot)
+				}
 			case <-ctx.Done():
 				return
 			}

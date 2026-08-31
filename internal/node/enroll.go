@@ -154,9 +154,7 @@ func (n *SamNode) processEnrollResponse(resp *http.Response) (*api.EnrollRespons
 		return nil, fmt.Errorf("failed to save mesh config: %v", err)
 	}
 
-	n.keysMu.Lock()
-	n.trustedKeys = append(n.trustedKeys, TrustedKey{Key: ed25519.PublicKey(enrollResp.ControlPlanePublicKey), ReceivedAt: time.Now()})
-	n.keysMu.Unlock()
+	n.addTrustedKey(ed25519.PublicKey(enrollResp.ControlPlanePublicKey))
 
 	return &enrollResp, nil
 }
@@ -335,9 +333,7 @@ func (n *SamNode) EnrollBootstrap(ctx context.Context, controlPlaneURL string, b
 		return fmt.Errorf("failed to save mesh config: %v", err)
 	}
 
-	n.keysMu.Lock()
-	n.trustedKeys = append(n.trustedKeys, TrustedKey{Key: ed25519.PublicKey(enrollResp.ControlPlanePublicKey), ReceivedAt: time.Now()})
-	n.keysMu.Unlock()
+	n.addTrustedKey(ed25519.PublicKey(enrollResp.ControlPlanePublicKey))
 
 	// Connect and Auth to router after enrollment to join the mesh
 	if len(enrollResp.RouterAddresses) == 0 {
