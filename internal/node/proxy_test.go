@@ -682,13 +682,23 @@ func TestDatapathHeadersAndRoutingTable(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// We will record the HTTP request headers and URL received by the backend dummy service.
-	var lastReceivedHeaders http.Header
-	var lastReceivedPath string
+	// Capture observed requests on a channel. Network I/O is not a
+	// happens-before edge, so a plain variable written in the handler
+	// and read in the test is a data race under -race.
+	type capturedRequest struct {
+		headers http.Header
+		path    string
+	}
+	received := make(chan capturedRequest, 8)
 
 	dummyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		lastReceivedHeaders = r.Header.Clone()
-		lastReceivedPath = r.URL.Path
+		// MCP aggregation probes POST initialize; the datapath cases are GET.
+		if r.Method == http.MethodGet {
+			select {
+			case received <- capturedRequest{headers: r.Header.Clone(), path: r.URL.Path}:
+			case <-r.Context().Done():
+			}
+		}
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer dummyServer.Close()
@@ -776,9 +786,6 @@ func TestDatapathHeadersAndRoutingTable(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			lastReceivedHeaders = nil
-			lastReceivedPath = ""
-
 			url := fmt.Sprintf("%s/sam/%s/mcp/%s%s", proxyServer.URL, nodeA.Host.ID().String(), serviceName, tt.pathSuffix)
 			req, err := http.NewRequest("GET", url, nil)
 			if err != nil {
@@ -798,16 +805,21 @@ func TestDatapathHeadersAndRoutingTable(t *testing.T) {
 				t.Fatalf("Expected 200 OK, got %d", resp.StatusCode)
 			}
 
-			// Verify received path
-			if lastReceivedPath != tt.wantReceivedPathSuffix {
-				t.Errorf("Expected received path to be %q, got %q", tt.wantReceivedPathSuffix, lastReceivedPath)
+			var got capturedRequest
+			select {
+			case got = <-received:
+			case <-ctx.Done():
+				t.Fatal("timed out waiting for backend to observe the proxied request")
 			}
 
-			// Verify received headers
+			if got.path != tt.wantReceivedPathSuffix {
+				t.Errorf("Expected received path to be %q, got %q", tt.wantReceivedPathSuffix, got.path)
+			}
+
 			for k, expectedVal := range tt.wantReceivedHeaders {
-				actualVal := lastReceivedHeaders.Get(k)
+				actualVal := got.headers.Get(k)
 				if expectedVal == "" {
-					if _, present := lastReceivedHeaders[k]; present {
+					if _, present := got.headers[k]; present {
 						t.Errorf("Expected header %q to be absent, but got %q", k, actualVal)
 					}
 				} else {
