@@ -615,18 +615,29 @@ func waitForControlPlane(t *testing.T, port int) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
+	var lastErr error
+	var lastStatus int
+	client := &http.Client{Timeout: 2 * time.Second}
 	for {
-		resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/info", port))
+		resp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/info", port))
 		if err == nil {
+			lastStatus = resp.StatusCode
 			_ = resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
 				return
 			}
+			lastErr = nil
+		} else {
+			lastErr = err
+			lastStatus = 0
 		}
 
 		select {
 		case <-ctx.Done():
-			t.Fatalf("timed out waiting for control plane: %v", err)
+			if lastErr != nil {
+				t.Fatalf("timed out waiting for control plane /info: last error: %v", lastErr)
+			}
+			t.Fatalf("timed out waiting for control plane /info: last HTTP status %d", lastStatus)
 		case <-time.After(100 * time.Millisecond):
 		}
 	}

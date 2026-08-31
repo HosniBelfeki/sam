@@ -30,6 +30,7 @@ import (
 	"github.com/biscuit-auth/biscuit-go/v2"
 	"github.com/biscuit-auth/biscuit-go/v2/parser"
 	"github.com/google/sam/api"
+	"github.com/google/sam/internal/identity"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"google.golang.org/protobuf/proto"
@@ -271,7 +272,7 @@ func authorizeToken(t *testing.T, tokenBytes []byte, pub ed25519.PublicKey) bisc
 	if err != nil {
 		t.Fatalf("unmarshal biscuit: %v", err)
 	}
-	authorizer, err := b.Authorizer(pub)
+	authorizer, err := b.Authorizer(pub, identity.AuthorizerOptions(5*time.Second)...)
 	if err != nil {
 		t.Fatalf("authorizer: %v", err)
 	}

@@ -333,7 +333,7 @@ func TestControlPlaneStaticTimeCheck(t *testing.T) {
 			}})
 
 			tok, _ := builder.Build()
-			authorizer, _ := tok.Authorizer(pub)
+			authorizer, _ := tok.Authorizer(pub, biscuit.WithWorldOptions(datalog.WithMaxDuration(5*time.Second)))
 
 			authorizer.AddFact(biscuit.Fact{Predicate: biscuit.Predicate{
 				Name: FactTime,

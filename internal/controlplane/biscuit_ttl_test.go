@@ -28,6 +28,7 @@ import (
 	"github.com/biscuit-auth/biscuit-go/v2"
 	"github.com/biscuit-auth/biscuit-go/v2/parser"
 	"github.com/google/sam/api"
+	"github.com/google/sam/internal/identity"
 	"github.com/google/sam/internal/storage"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -35,14 +36,14 @@ import (
 )
 
 // biscuitExpiration reads the expiration() authority fact out of a minted token.
-func biscuitExpiration(t *testing.T, tokenBytes []byte, cpPubKey ed25519.PublicKey) time.Time {
+func biscuitExpiration(t *testing.T, tokenBytes []byte, cpPubKey ed25519.PublicKey, timeout time.Duration) time.Time {
 	t.Helper()
 
 	b, err := biscuit.Unmarshal(tokenBytes)
 	if err != nil {
 		t.Fatalf("malformed biscuit: %v", err)
 	}
-	authorizer, err := b.Authorizer(cpPubKey)
+	authorizer, err := b.Authorizer(cpPubKey, identity.AuthorizerOptions(timeout)...)
 	if err != nil {
 		t.Fatalf("authorizer: %v", err)
 	}
@@ -185,6 +186,7 @@ func TestBiscuitExpiryIsCappedByItsVoucher(t *testing.T) {
 		t.Helper()
 		srv, store, cpURL := setupTestServer(t, issuer, func(o *Options) {
 			o.BiscuitTTL = ttl
+			o.BiscuitTimeout = 5 * time.Second
 		})
 		t.Cleanup(func() {
 			_ = srv.Close()
@@ -199,29 +201,29 @@ func TestBiscuitExpiryIsCappedByItsVoucher(t *testing.T) {
 	}
 
 	t.Run("register clamps to the OIDC token when it expires first", func(t *testing.T) {
-		_, _, cpURL := start(t, 24*time.Hour)
+		srv, _, cpURL := start(t, 24*time.Hour)
 		oidcExpiry := time.Now().Add(10 * time.Minute)
 
 		_, _, resp := registerNode(t, cpURL, newJWT(10*time.Minute))
 		cpPubKey := ed25519.PublicKey(resp.ControlPlanePublicKey)
 
-		assertNear(t, "biscuit expiration()", biscuitExpiration(t, resp.BiscuitToken, cpPubKey), oidcExpiry)
+		assertNear(t, "biscuit expiration()", biscuitExpiration(t, resp.BiscuitToken, cpPubKey, srv.config.BiscuitTimeout), oidcExpiry)
 		assertNear(t, "EnrollResponse.Expiration", time.Unix(resp.Expiration, 0), oidcExpiry)
 	})
 
 	t.Run("register uses the configured TTL when it expires first", func(t *testing.T) {
-		_, _, cpURL := start(t, 5*time.Minute)
+		srv, _, cpURL := start(t, 5*time.Minute)
 		want := time.Now().Add(5 * time.Minute)
 
 		_, _, resp := registerNode(t, cpURL, newJWT(time.Hour))
 		cpPubKey := ed25519.PublicKey(resp.ControlPlanePublicKey)
 
-		assertNear(t, "biscuit expiration()", biscuitExpiration(t, resp.BiscuitToken, cpPubKey), want)
+		assertNear(t, "biscuit expiration()", biscuitExpiration(t, resp.BiscuitToken, cpPubKey, srv.config.BiscuitTimeout), want)
 		assertNear(t, "EnrollResponse.Expiration", time.Unix(resp.Expiration, 0), want)
 	})
 
 	t.Run("refresh clamps to the end of the OIDC session", func(t *testing.T) {
-		_, store, cpURL := start(t, 24*time.Hour)
+		srv, store, cpURL := start(t, 24*time.Hour)
 		priv, peerID, resp := registerNode(t, cpURL, newJWT(time.Hour))
 		cpPubKey := ed25519.PublicKey(resp.ControlPlanePublicKey)
 
@@ -237,12 +239,12 @@ func TestBiscuitExpiryIsCappedByItsVoucher(t *testing.T) {
 		}
 
 		refreshed := refreshNode(t, cpURL, priv, resp.BiscuitToken)
-		assertNear(t, "refreshed biscuit expiration()", biscuitExpiration(t, refreshed.BiscuitToken, cpPubKey), sessionEnd)
+		assertNear(t, "refreshed biscuit expiration()", biscuitExpiration(t, refreshed.BiscuitToken, cpPubKey, srv.config.BiscuitTimeout), sessionEnd)
 		assertNear(t, "TokenRefreshResponse.ExpiresAt", time.Unix(refreshed.ExpiresAt, 0), sessionEnd)
 	})
 
 	t.Run("refresh uses the configured TTL when the session never expires", func(t *testing.T) {
-		_, store, cpURL := start(t, 30*time.Minute)
+		srv, store, cpURL := start(t, 30*time.Minute)
 		priv, peerID, resp := registerNode(t, cpURL, newJWT(time.Hour))
 		cpPubKey := ed25519.PublicKey(resp.ControlPlanePublicKey)
 
@@ -258,6 +260,6 @@ func TestBiscuitExpiryIsCappedByItsVoucher(t *testing.T) {
 
 		want := time.Now().Add(30 * time.Minute)
 		refreshed := refreshNode(t, cpURL, priv, resp.BiscuitToken)
-		assertNear(t, "refreshed biscuit expiration()", biscuitExpiration(t, refreshed.BiscuitToken, cpPubKey), want)
+		assertNear(t, "refreshed biscuit expiration()", biscuitExpiration(t, refreshed.BiscuitToken, cpPubKey, srv.config.BiscuitTimeout), want)
 	})
 }
