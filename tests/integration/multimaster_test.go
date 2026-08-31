@@ -147,7 +147,7 @@ roles: []
 	defer func() { _ = cmdRouterA.Process.Kill(); _ = cmdRouterA.Wait() }()
 
 	// Wait for Router A to renew lease and register in CP A
-	time.Sleep(3 * time.Second)
+	waitForActiveRouters(t, portA, 1, 5*time.Second)
 
 	// 5. Start Control Plane B (sharing CP A's keys)
 	cmdCP_B := exec.Command(cpBin,
@@ -185,7 +185,10 @@ roles: []
 	defer func() { _ = cmdRouterB.Process.Kill(); _ = cmdRouterB.Wait() }()
 
 	// Wait for Router B to renew lease and register in CP B
-	time.Sleep(3 * time.Second)
+	peerInfoListB := waitForActiveRouters(t, portB, 1, 5*time.Second)
+	if len(peerInfoListB) != 1 {
+		t.Fatalf("expected 1 router registered on CP B, got %d", len(peerInfoListB))
+	}
 
 	// 6. Fetch router peer IDs
 	peerInfoListA := fetchActiveRouters(t, portA)
@@ -193,11 +196,6 @@ roles: []
 		t.Fatalf("expected 1 router registered on CP A, got %d", len(peerInfoListA))
 	}
 	peerIDA := peerInfoListA[0]
-
-	peerInfoListB := fetchActiveRouters(t, portB)
-	if len(peerInfoListB) != 1 {
-		t.Fatalf("expected 1 router registered on CP B, got %d", len(peerInfoListB))
-	}
 	peerIDB := peerInfoListB[0]
 
 	// ASSERT: Router A and Router B have unique Peer IDs
