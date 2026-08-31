@@ -24,6 +24,7 @@ import (
 
 	"github.com/biscuit-auth/biscuit-go/v2"
 	"github.com/google/sam/api"
+	"github.com/google/sam/internal/identity"
 	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -286,6 +287,39 @@ func TestNewSamNode_Validation(t *testing.T) {
 		})
 		if err == nil || err.Error() != "store is required" {
 			t.Errorf("expected 'store is required' error, got: %v", err)
+		}
+	})
+}
+
+func TestNewSamNode_BiscuitTimeout(t *testing.T) {
+	priv, _, _ := crypto.GenerateKeyPair(crypto.Ed25519, -1)
+	store, _ := NewStore(t.TempDir())
+	defer func() { _ = store.Close() }()
+
+	t.Run("defaults when unset", func(t *testing.T) {
+		node, err := NewSamNode(Options{
+			PrivKey: priv,
+			Store:   store,
+		})
+		if err != nil {
+			t.Fatalf("NewSamNode: %v", err)
+		}
+		if node.BiscuitTimeout != identity.DefaultAuthorizerTimeout {
+			t.Errorf("BiscuitTimeout = %v, want default %v", node.BiscuitTimeout, identity.DefaultAuthorizerTimeout)
+		}
+	})
+
+	t.Run("explicit value respected", func(t *testing.T) {
+		node, err := NewSamNode(Options{
+			PrivKey:        priv,
+			Store:          store,
+			BiscuitTimeout: 10 * time.Second,
+		})
+		if err != nil {
+			t.Fatalf("NewSamNode: %v", err)
+		}
+		if node.BiscuitTimeout != 10*time.Second {
+			t.Errorf("BiscuitTimeout = %v, want 10s", node.BiscuitTimeout)
 		}
 	})
 }

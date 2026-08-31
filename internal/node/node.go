@@ -271,6 +271,7 @@ func NewSamNode(cfg Options) (*SamNode, error) {
 		AllowLoopback:        cfg.AllowLoopback,
 		authSuccess:          make(chan struct{}),
 		reprovideTrigger:     make(chan struct{}, 1),
+		BiscuitTimeout:       cfg.BiscuitTimeout,
 		logger:               golog.Logger("sam-node"),
 	}
 

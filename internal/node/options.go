@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/google/sam/api"
+	"github.com/google/sam/internal/identity"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/multiformats/go-multiaddr"
 )
@@ -58,6 +59,8 @@ type Options struct {
 	AutoRelayBackoff     time.Duration
 	// RouterConnectTimeout bounds each router address's dial (connect + stream open).
 	RouterConnectTimeout time.Duration
+	// BiscuitTimeout bounds Datalog evaluation when verifying biscuit tokens.
+	BiscuitTimeout time.Duration
 	// DHT Options
 	DHTProviderAddrTTL   time.Duration
 	DHTMaxRecordAge      time.Duration
@@ -100,6 +103,9 @@ func (o *Options) Default() {
 	}
 	if o.RouterConnectTimeout == 0 {
 		o.RouterConnectTimeout = DefaultRouterConnectTimeout
+	}
+	if o.BiscuitTimeout <= 0 {
+		o.BiscuitTimeout = identity.DefaultAuthorizerTimeout
 	}
 	if o.DHTLookupLimit <= 0 {
 		o.DHTLookupLimit = 20
