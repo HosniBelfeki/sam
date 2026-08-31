@@ -445,7 +445,7 @@ func (f *openAIFacade) serveLocal(w http.ResponseWriter, r *http.Request, servic
 		}
 		// Attribute locally served tokens to this node in usage metrics.
 		if id := f.localPeerID(); id != "" {
-			r.Header.Set("X-Peer-Id", id)
+			r.Header.Set(api.HeaderPeerID, id)
 		}
 		svc.Handler().ServeHTTP(w, r)
 		return

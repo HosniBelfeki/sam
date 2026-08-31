@@ -87,6 +87,13 @@ const (
 	// are forwarded to backend services.
 	HeaderSamBiscuit = "X-Sam-Biscuit"
 
+	// HeaderPeerID carries the authenticated libp2p peer ID of the caller.
+	// The mesh ingress handler stamps it after authorization succeeds,
+	// overwriting any inbound value, so backend services get verified caller
+	// attribution without parsing biscuits. The inference facade sets it the
+	// same way for locally served requests.
+	HeaderPeerID = "X-Peer-Id"
+
 	// HeaderSamAgent names the agent a request is made on behalf of, as a
 	// canonical agent identifier (see api/agent.go). It is set by the sandbox
 	// gateway on the node's local API socket, and honoured by the node only

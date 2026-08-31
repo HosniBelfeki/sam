@@ -748,10 +748,23 @@ func TestDatapathHeadersAndRoutingTable(t *testing.T) {
 			},
 			wantReceivedHeaders: map[string]string{
 				"Authorization":              "Bearer upstream-token",
-				api.HeaderSamAuthentication:  "", // Must be stripped, local-only
-				api.HeaderSamBiscuit:         "", // Must be stripped
-				api.HeaderSamNoTrailingSlash: "", // Must be stripped
+				api.HeaderSamAuthentication:  "",                       // Must be stripped, local-only
+				api.HeaderSamBiscuit:         "",                       // Must be stripped
+				api.HeaderSamNoTrailingSlash: "",                       // Must be stripped
+				api.HeaderPeerID:             nodeB.Host.ID().String(), // Verified caller stamped by ingress
 				"X-Test-Request":             "yes",
+			},
+			wantReceivedPathSuffix: "/api/v1/test",
+		},
+		{
+			name:       "Inbound X-Peer-Id is overwritten with the verified caller",
+			pathSuffix: "/api/v1/test",
+			requestHeaders: map[string]string{
+				api.HeaderSamAuthentication: "Bearer local-token",
+				api.HeaderPeerID:            "spoofed-peer-id",
+			},
+			wantReceivedHeaders: map[string]string{
+				api.HeaderPeerID: nodeB.Host.ID().String(),
 			},
 			wantReceivedPathSuffix: "/api/v1/test",
 		},

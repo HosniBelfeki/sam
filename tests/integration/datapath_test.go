@@ -23,6 +23,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -194,13 +195,26 @@ func TestIntegrationHTTPDatapath(t *testing.T) {
 
 	addrA := waitForPeerInfoInLog(t, filepath.Join(homeA, "node.log"))
 	peerIDA := getPeerIDFromAddr(addrA)
+	addrB := waitForPeerInfoInLog(t, filepath.Join(homeB, "node.log"))
+	peerIDB := getPeerIDFromAddr(addrB)
 
 	// Connect Node B to Node A
 	callMCP(t, actualApiAddrB, "connect_peer", map[string]any{"peer_addr": addrA})
 
-	// Start a dummy HTTP server on Node A's host (simulating local service)
+	// Start a dummy HTTP server on Node A's host (simulating local service).
+	// It captures the headers it receives so we can assert what actually
+	// crosses the mesh: verified caller identity in, biscuit stripped.
 	expectedBody := `{"status":"success"}`
+	var (
+		hdrMu      sync.Mutex
+		gotPeerID  string
+		gotBiscuit string
+	)
 	dummyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hdrMu.Lock()
+		gotPeerID = r.Header.Get(api.HeaderPeerID)
+		gotBiscuit = r.Header.Get(api.HeaderSamBiscuit)
+		hdrMu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(expectedBody))
@@ -246,6 +260,8 @@ func TestIntegrationHTTPDatapath(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		req, _ := http.NewRequest("GET", url, nil)
 		req.Header.Set(api.HeaderSamAuthentication, "Bearer "+apiToken)
+		// Spoof attempt: the backend must see the verified peer id, not this.
+		req.Header.Set(api.HeaderPeerID, "spoofed-peer")
 		req.Close = true // Force close the connection so the libp2p stream terminates and flushed accounting logs
 		httpResp, err = client.Do(req)
 		if err == nil && httpResp.StatusCode == http.StatusOK {
@@ -272,6 +288,15 @@ func TestIntegrationHTTPDatapath(t *testing.T) {
 	if string(bodyBytes) != expectedBody {
 		t.Fatalf("Expected body %s, got %s", expectedBody, string(bodyBytes))
 	}
+
+	hdrMu.Lock()
+	if gotPeerID != peerIDB.String() {
+		t.Errorf("backend %s: got %q, want verified caller %q (spoofed inbound value must be overwritten)", api.HeaderPeerID, gotPeerID, peerIDB)
+	}
+	if gotBiscuit != "" {
+		t.Errorf("%s leaked to backend: %q", api.HeaderSamBiscuit, gotBiscuit)
+	}
+	hdrMu.Unlock()
 
 	// Verify Audit Traceability and Stream Accounting logs were emitted
 	assertLogInFile(t, filepath.Join(homeA, "node.log"), "Audit Traceability")

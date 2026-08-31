@@ -1937,6 +1937,9 @@ func (n *SamNode) StartIngressServer(ctx context.Context) error {
 			// The agent is for policy, not for the backend, which has no way to
 			// judge it.
 			r.Header.Del(api.HeaderSamAgent)
+			// Set, not Add: an inbound value is a spoof attempt, only the
+			// transport-verified identity may reach the backend.
+			r.Header.Set(api.HeaderPeerID, remotePeer.String())
 
 			svc, ok := n.services.Get(serviceName)
 			if !ok {
