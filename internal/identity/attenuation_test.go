@@ -77,7 +77,7 @@ func TestAttenuationBlockFactsAreInvisibleToTheAuthorizer(t *testing.T) {
 		t.Fatalf("appended block count = %d, want 1", attenuated.BlockCount())
 	}
 
-	authorizer, err := attenuated.Authorizer(pub)
+	authorizer, err := attenuated.Authorizer(pub, AuthorizerOptions(5*time.Second)...)
 	if err != nil {
 		t.Fatalf("Authorizer: %v", err)
 	}

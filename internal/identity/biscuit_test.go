@@ -360,7 +360,7 @@ func TestMintBiscuitToken_VariousClaimsTypes(t *testing.T) {
 				t.Fatalf("Unmarshal biscuit failed: %v", err)
 			}
 
-			authorizer, err := b.Authorizer(pub)
+			authorizer, err := b.Authorizer(pub, AuthorizerOptions(5*time.Second)...)
 			if err != nil {
 				t.Fatalf("Authorizer failed: %v", err)
 			}
@@ -439,7 +439,7 @@ func TestMintBiscuitToken_WithPolicyRoles(t *testing.T) {
 			t.Fatalf("Unmarshal biscuit failed: %v", err)
 		}
 
-		authorizer, err := b.Authorizer(pub)
+		authorizer, err := b.Authorizer(pub, AuthorizerOptions(5*time.Second)...)
 		if err != nil {
 			t.Fatalf("Authorizer failed: %v", err)
 		}
@@ -468,7 +468,7 @@ func TestMintBiscuitToken_WithPolicyRoles(t *testing.T) {
 			t.Fatalf("Unmarshal biscuit failed: %v", err)
 		}
 
-		authorizer, err := b.Authorizer(pub)
+		authorizer, err := b.Authorizer(pub, AuthorizerOptions(5*time.Second)...)
 		if err != nil {
 			t.Fatalf("Authorizer failed: %v", err)
 		}
@@ -504,7 +504,7 @@ func TestMintBiscuitToken_LabelFacts(t *testing.T) {
 
 	// Every declared label is present as its own fact.
 	for k, v := range labels {
-		authorizer, err := b.Authorizer(pub)
+		authorizer, err := b.Authorizer(pub, AuthorizerOptions(5*time.Second)...)
 		if err != nil {
 			t.Fatalf("Authorizer failed: %v", err)
 		}
@@ -526,7 +526,7 @@ func TestMintBiscuitToken_LabelFacts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Unmarshal biscuit failed: %v", err)
 	}
-	authorizer, err := b2.Authorizer(pub)
+	authorizer, err := b2.Authorizer(pub, AuthorizerOptions(5*time.Second)...)
 	if err != nil {
 		t.Fatalf("Authorizer failed: %v", err)
 	}
