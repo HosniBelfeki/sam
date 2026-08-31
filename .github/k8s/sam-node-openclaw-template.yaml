@@ -51,7 +51,7 @@ spec:
       serviceAccountName: sam-node-sa
       containers:
       - name: openclaw
-        image: ghcr.io/openclaw/openclaw:latest
+        image: ghcr.io/openclaw/openclaw:2026.8.1
         ports:
         - containerPort: 18789
           name: http-gateway
