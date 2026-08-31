@@ -30,10 +30,52 @@ import (
 	"github.com/biscuit-auth/biscuit-go/v2"
 	"github.com/google/sam/api"
 	"github.com/google/sam/internal/identity"
+	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/crypto"
+	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-msgio"
 	"google.golang.org/protobuf/proto"
 )
+
+// startMockRouterWithKey runs a minimal router whose auth response biscuit is
+// signed by the given CP key, so nodes trusting that key can authenticate.
+func startMockRouterWithKey(t *testing.T, cpPriv ed25519.PrivateKey, role string) string {
+	t.Helper()
+	h, err := libp2p.New(libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"))
+	if err != nil {
+		t.Fatalf("failed to create mock router host: %v", err)
+	}
+	t.Cleanup(func() { _ = h.Close() })
+
+	builder := biscuit.NewBuilder(cpPriv)
+	for _, f := range []biscuit.Fact{
+		{Predicate: biscuit.Predicate{Name: api.FactNode, IDs: []biscuit.Term{biscuit.String(h.ID().String())}}},
+		{Predicate: biscuit.Predicate{Name: api.FactRole, IDs: []biscuit.Term{biscuit.String(role)}}},
+		{Predicate: biscuit.Predicate{Name: api.FactExpiration, IDs: []biscuit.Term{biscuit.Date(time.Now().Add(24 * time.Hour))}}},
+		{Predicate: biscuit.Predicate{Name: api.FactTargetUnrestricted}},
+	} {
+		if err := builder.AddAuthorityFact(f); err != nil {
+			t.Fatalf("failed to add router fact: %v", err)
+		}
+	}
+	tok, err := builder.Build()
+	if err != nil {
+		t.Fatalf("failed to build router biscuit: %v", err)
+	}
+	routerBiscuit, err := tok.Serialize()
+	if err != nil {
+		t.Fatalf("failed to serialize router biscuit: %v", err)
+	}
+
+	h.SetStreamHandler(api.AuthProtocolID, func(s network.Stream) {
+		defer func() { _ = s.Close() }()
+		data, _ := proto.Marshal(&api.AuthResponse{Success: true, Biscuit: routerBiscuit})
+		_ = msgio.NewVarintWriter(s).WriteMsg(data)
+	})
+
+	return h.Addrs()[0].String() + "/p2p/" + h.ID().String()
+}
 
 // TestStartRecoversStaleIdentityViaRefreshToken covers #321: a stored
 // identity signed by a fully rotated-out key must heal at startup through
@@ -41,6 +83,8 @@ import (
 func TestStartRecoversStaleIdentityViaRefreshToken(t *testing.T) {
 	cpPub, cpPriv, _ := ed25519.GenerateKey(nil)
 	_, stalePriv, _ := ed25519.GenerateKey(nil)
+
+	routerAddr := startMockRouterWithKey(t, cpPriv, api.RoleRouter)
 
 	store, err := NewStore(t.TempDir())
 	if err != nil {
@@ -125,7 +169,7 @@ func TestStartRecoversStaleIdentityViaRefreshToken(t *testing.T) {
 		resp := &api.EnrollResponse{
 			BiscuitToken:          mint(cpPriv, req.PeerId),
 			ControlPlanePublicKey: cpPub,
-			RouterAddresses:       []string{"/ip4/127.0.0.1/tcp/1"},
+			RouterAddresses:       []string{routerAddr},
 			Expiration:            time.Now().Add(24 * time.Hour).Unix(),
 		}
 		data, _ := proto.Marshal(resp)
@@ -172,6 +216,12 @@ func TestStartRecoversStaleIdentityViaRefreshToken(t *testing.T) {
 
 	if err := identity.VerifyBiscuitRole(node.GetIdentity(), cpPub, api.RoleNode, time.Second); err != nil {
 		t.Errorf("recovered identity does not verify under the current CP key: %v", err)
+	}
+
+	// The router addresses from the re-enrollment must be adopted in-memory,
+	// not only persisted: the static relay setup runs right after recovery.
+	if len(node.config.RouterAddrs) != 1 || node.config.RouterAddrs[0].String() != routerAddr {
+		t.Errorf("recovered router addresses not adopted: got %v, want %s", node.config.RouterAddrs, routerAddr)
 	}
 }
 

@@ -188,6 +188,31 @@ func TestKeyRotationEventSurvivesRestart(t *testing.T) {
 	}
 }
 
+func TestNewSamNodeIgnoresCorruptPersistedKeys(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	goodKey, _, _ := ed25519.GenerateKey(nil)
+	if err := store.SaveTrustedKeys([]TrustedKey{
+		{Key: []byte("corrupt"), ReceivedAt: time.Now()},
+		{Key: goodKey, ReceivedAt: time.Now()},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	priv, _, _ := crypto.GenerateKeyPair(crypto.Ed25519, -1)
+	node, err := NewSamNode(Options{PrivKey: priv, Store: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(node.trustedKeys) != 1 || !node.trustedKeys[0].Key.Equal(goodKey) {
+		t.Fatalf("expected only the valid key to survive loading, got %d keys", len(node.trustedKeys))
+	}
+}
+
 // TestPruneTrustedKeys covers the trust-set floor: a node that runs past the
 // grace period without witnessing a rotation must not age out its only key.
 func TestPruneTrustedKeys(t *testing.T) {

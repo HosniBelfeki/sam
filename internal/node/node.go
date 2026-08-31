@@ -259,7 +259,15 @@ func NewSamNode(cfg Options) (*SamNode, error) {
 		if stored, err := cfg.Store.LoadTrustedKeys(); err != nil {
 			logger.Warnf("Failed to load persisted trusted keys: %v", err)
 		} else {
-			trustedKeys = stored
+			for _, tk := range stored {
+				// A corrupt entry must not reach ed25519 verification (panics
+				// on wrong-size keys).
+				if len(tk.Key) == ed25519.PublicKeySize {
+					trustedKeys = append(trustedKeys, tk)
+				} else {
+					logger.Warnf("Ignoring persisted trusted key with invalid size %d", len(tk.Key))
+				}
+			}
 		}
 	}
 	if len(cfg.ControlPlanePubKey) > 0 && !containsTrustedKey(trustedKeys, cfg.ControlPlanePubKey) {
@@ -312,7 +320,7 @@ func (n *SamNode) Start(ctx context.Context) error {
 		}
 		n.keysMu.RUnlock()
 		if len(candidates) == 0 {
-			if pubKeyBytes, _, err := n.Store.LoadMeshConfig(); err == nil && len(pubKeyBytes) > 0 {
+			if pubKeyBytes, _, err := n.Store.LoadMeshConfig(); err == nil && len(pubKeyBytes) == ed25519.PublicKeySize {
 				candidates = append(candidates, ed25519.PublicKey(pubKeyBytes))
 			}
 		}
@@ -332,6 +340,19 @@ func (n *SamNode) Start(ctx context.Context) error {
 					return fmt.Errorf("loaded identity fails role requirement %q (refresh-token recovery failed: %v): %w", n.config.RequiredRole, recErr, roleErr)
 				}
 				logger.Info("Identity recovered via refresh-token re-enrollment.")
+				// Re-enrollment persisted the response's router addresses; adopt
+				// them so the static relay setup below doesn't use stale ones.
+				if _, storedAddrs, loadErr := n.Store.LoadMeshConfig(); loadErr == nil {
+					var addrs []multiaddr.Multiaddr
+					for _, addrStr := range storedAddrs {
+						if ma, parseErr := multiaddr.NewMultiaddr(addrStr); parseErr == nil {
+							addrs = append(addrs, ma)
+						}
+					}
+					if len(addrs) > 0 {
+						n.config.RouterAddrs = addrs
+					}
+				}
 			}
 		}
 	}
