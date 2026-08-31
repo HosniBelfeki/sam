@@ -177,7 +177,7 @@ func getPeerID(r *http.Request) string {
 			}
 			// Only trust X-Peer-Id if request comes from local loopback / trusted localhost source
 			if host == "127.0.0.1" || host == "::1" || host == "localhost" {
-				if peerHeader := r.Header.Get("X-Peer-Id"); peerHeader != "" {
+				if peerHeader := r.Header.Get(api.HeaderPeerID); peerHeader != "" {
 					return peerHeader
 				}
 			}
