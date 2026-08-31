@@ -166,7 +166,7 @@ func verifyBiscuitForApplication(encodedBiscuit []byte, expectedPeer peer.ID, tr
 			Name: api.FactNode,
 			IDs:  []biscuit.Term{biscuit.String(expectedPeer.String())},
 		}}
-		if _, err := parsed.GetBlockID(boundPeer); err == nil {
+		if blockID, err := parsed.GetBlockID(boundPeer); err == nil && blockID == 0 {
 			return parsed, nil
 		}
 	}
