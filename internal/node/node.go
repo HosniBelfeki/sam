@@ -903,13 +903,15 @@ func (n *SamNode) performRouterAuthHandshake(s network.Stream, biscuitBytes []by
 	}
 
 	// Verify the router's biscuit using the control plane keys
-	b, err := identity.VerifyBiscuit(resp.Biscuit, expectedRouter, trustedKeys, n.BiscuitTimeout)
+	b, verifiedKey, err := identity.VerifyBiscuitAndGetKey(resp.Biscuit, expectedRouter, trustedKeys, n.BiscuitTimeout)
 	if err != nil {
 		return false, fmt.Errorf("%w: failed to verify router biscuit: %w", ErrFatalAuth, err)
 	}
 
-	// Enforce role("router") inside the biscuit
-	authorizer, err := b.Authorizer(trustedKeys[0], identity.AuthorizerOptions(n.BiscuitTimeout)...)
+	// Enforce role("router") inside the biscuit, under the key that verified:
+	// with several valid keys loaded (rotation grace) the first is not
+	// necessarily the signer.
+	authorizer, err := b.Authorizer(verifiedKey, identity.AuthorizerOptions(n.BiscuitTimeout)...)
 	if err != nil {
 		return false, fmt.Errorf("authorizer instantiation failed: %w", err)
 	}

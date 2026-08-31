@@ -189,6 +189,15 @@ func TestStartRecoversStaleIdentityViaRefreshToken(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// A decoy key ahead of the real one: the router handshake must build its
+	// authorizer from the key that verified, not from trustedKeys[0].
+	decoyKey, _, _ := ed25519.GenerateKey(nil)
+	if err := store.SaveTrustedKeys([]TrustedKey{
+		{Key: decoyKey, ReceivedAt: time.Now()},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
 	node, err := NewSamNode(Options{
 		PrivKey:            privKey,
 		Store:              store,
