@@ -145,6 +145,51 @@ func TestHandleKeyRotationEvent(t *testing.T) {
 	}
 }
 
+// TestPruneTrustedKeys covers the trust-set floor: a node that runs past the
+// grace period without witnessing a rotation must not age out its only key.
+func TestPruneTrustedKeys(t *testing.T) {
+	now := time.Now()
+	grace := 24 * time.Hour
+	k := func(age time.Duration) TrustedKey {
+		pub, _, err := ed25519.GenerateKey(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return TrustedKey{Key: pub, ReceivedAt: now.Add(-age)}
+	}
+
+	stale := k(48 * time.Hour)
+	staler := k(72 * time.Hour)
+	fresh := k(time.Hour)
+
+	tests := []struct {
+		name string
+		in   []TrustedKey
+		want []TrustedKey
+	}{
+		{"sole stale key survives", []TrustedKey{stale}, []TrustedKey{stale}},
+		{"stale dropped when fresher exists", []TrustedKey{staler, fresh}, []TrustedKey{fresh}},
+		{"newest of two stale keys survives", []TrustedKey{staler, stale}, []TrustedKey{stale}},
+		{"fresh keys all kept", []TrustedKey{fresh, k(2 * time.Hour)}, nil}, // want computed below
+		{"empty", nil, nil},
+	}
+	tests[3].want = tests[3].in
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := pruneTrustedKeys(tt.in, now, grace)
+			if len(got) != len(tt.want) {
+				t.Fatalf("got %d keys, want %d", len(got), len(tt.want))
+			}
+			for i := range got {
+				if !got[i].Key.Equal(tt.want[i].Key) {
+					t.Errorf("key %d: got %x, want %x", i, got[i].Key, tt.want[i].Key)
+				}
+			}
+		})
+	}
+}
+
 // TestVerifyBiscuitRejectsExpiredToken covers the peer-admission half of #296:
 // HandleAuthHandshake admits a peer into authPeers, which the relay ACL then
 // trusts, so it must reject an expired token exactly like the dataplane does.

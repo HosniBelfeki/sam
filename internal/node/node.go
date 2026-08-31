@@ -1246,6 +1246,29 @@ func (n *SamNode) handleKeyRotationEvent(event *api.MeshEvent) {
 	n.trustedKeys = append(n.trustedKeys, TrustedKey{Key: ed25519.PublicKey(event.NewPublicKey), ReceivedAt: time.Now()})
 }
 
+// pruneTrustedKeys drops keys older than gracePeriod but always keeps the
+// most recently received one: the current signing key has no successor until
+// a rotation event arrives, so ageing it out would empty the trust set and
+// leave the node unable to verify any peer or router.
+func pruneTrustedKeys(keys []TrustedKey, now time.Time, gracePeriod time.Duration) []TrustedKey {
+	if len(keys) == 0 {
+		return keys
+	}
+	newest := 0
+	for i, tk := range keys {
+		if tk.ReceivedAt.After(keys[newest].ReceivedAt) {
+			newest = i
+		}
+	}
+	var active []TrustedKey
+	for i, tk := range keys {
+		if i == newest || now.Sub(tk.ReceivedAt) <= gracePeriod {
+			active = append(active, tk)
+		}
+	}
+	return active
+}
+
 func (n *SamNode) startKeyPruning(ctx context.Context, gracePeriod time.Duration) {
 	if gracePeriod <= 0 {
 		return
@@ -1258,14 +1281,7 @@ func (n *SamNode) startKeyPruning(ctx context.Context, gracePeriod time.Duration
 			case <-ticker.C:
 				logger.Info("[KeyPruning] Pruning expired keys...")
 				n.keysMu.Lock()
-				now := time.Now()
-				var activeKeys []TrustedKey
-				for _, tk := range n.trustedKeys {
-					if now.Sub(tk.ReceivedAt) <= gracePeriod {
-						activeKeys = append(activeKeys, tk)
-					}
-				}
-				n.trustedKeys = activeKeys
+				n.trustedKeys = pruneTrustedKeys(n.trustedKeys, time.Now(), gracePeriod)
 				n.keysMu.Unlock()
 			case <-ctx.Done():
 				return
