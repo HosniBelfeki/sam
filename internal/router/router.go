@@ -940,13 +940,13 @@ func (r *Router) performMutualAuth(s network.Stream) error {
 	}
 
 	// Verify remote biscuit
-	b, err := identity.VerifyBiscuit(resp.Biscuit, remotePeer, trustedKeys, r.config.BiscuitTimeout)
+	b, verifyingKey, err := identity.VerifyBiscuitAndGetKey(resp.Biscuit, remotePeer, trustedKeys, r.config.BiscuitTimeout)
 	if err != nil {
 		return fmt.Errorf("failed to verify peer router biscuit: %w", err)
 	}
 
 	// Enforce required role inside the biscuit
-	authorizer, err := b.Authorizer(trustedKeys[0], identity.AuthorizerOptions(r.config.BiscuitTimeout)...)
+	authorizer, err := b.Authorizer(verifyingKey, identity.AuthorizerOptions(r.config.BiscuitTimeout)...)
 	if err != nil {
 		return fmt.Errorf("authorizer instantiation failed: %w", err)
 	}
