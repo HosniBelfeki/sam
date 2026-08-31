@@ -90,11 +90,9 @@ func findSelectedKey(snapshots []trustedKeySnapshot, selected ed25519.PublicKey)
 }
 
 func (n *SamNode) stillTrustsKey(selected trustedKeySnapshot) bool {
-	current, err := n.trustedKeySnapshot()
-	if err != nil {
-		return false
-	}
-	for _, candidate := range current {
+	n.keysMu.RLock()
+	defer n.keysMu.RUnlock()
+	for _, candidate := range n.trustedKeys {
 		if candidate.Key.Equal(selected.Key) {
 			return true
 		}
@@ -143,7 +141,11 @@ func handleIdentityEvidence(n *SamNode, w http.ResponseWriter, r *http.Request) 
 		writeEvidenceError(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
 	}
-	if n != nil && n.Host != nil && n.peerIsRevoked(n.Host.ID()) {
+	if n == nil || n.Host == nil {
+		writeEvidenceError(w, http.StatusServiceUnavailable, "Node is unavailable")
+		return
+	}
+	if n.peerIsRevoked(n.Host.ID()) {
 		writeEvidenceError(w, http.StatusForbidden, "Local identity is revoked")
 		return
 	}
@@ -160,6 +162,10 @@ func handlePeerEvidence(n *SamNode, w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
 		writeEvidenceError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	if n == nil || n.Host == nil {
+		writeEvidenceError(w, http.StatusServiceUnavailable, "Node is unavailable")
 		return
 	}
 	const prefix = "/sam/peer/"

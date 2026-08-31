@@ -70,6 +70,58 @@ func TestIdentityEvidenceTrailingSlashReturnsNotFound(t *testing.T) {
 	}
 }
 
+func TestIdentityEvidenceHandlersRejectUnavailableNode(t *testing.T) {
+	tests := []struct {
+		name    string
+		handler func(*SamNode, http.ResponseWriter, *http.Request)
+		node    *SamNode
+		path    string
+	}{
+		{
+			name:    "identity nil node",
+			handler: handleIdentityEvidence,
+			path:    "/sam/identity",
+		},
+		{
+			name:    "identity nil host",
+			handler: handleIdentityEvidence,
+			node:    &SamNode{},
+			path:    "/sam/identity",
+		},
+		{
+			name:    "peer nil node",
+			handler: handlePeerEvidence,
+			path:    "/sam/peer/unavailable/evidence",
+		},
+		{
+			name:    "peer nil host",
+			handler: handlePeerEvidence,
+			node:    &SamNode{},
+			path:    "/sam/peer/unavailable/evidence",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			tc.handler(tc.node, recorder, httptest.NewRequest(http.MethodGet, tc.path, nil))
+
+			if recorder.Code != http.StatusServiceUnavailable {
+				t.Fatalf("status = %d, body = %q, want %d", recorder.Code, recorder.Body.String(), http.StatusServiceUnavailable)
+			}
+			if got := strings.TrimSpace(recorder.Body.String()); got != "Node is unavailable" {
+				t.Fatalf("body = %q, want %q", got, "Node is unavailable")
+			}
+			if got := recorder.Header().Get("Cache-Control"); got != "no-store" {
+				t.Fatalf("Cache-Control = %q, want %q", got, "no-store")
+			}
+			if got := recorder.Header().Get("Content-Type"); got != "text/plain; charset=utf-8" {
+				t.Fatalf("Content-Type = %q, want text/plain", got)
+			}
+		})
+	}
+}
+
 func TestHandleIdentityEvidenceRejectsRevokedLocalPeer(t *testing.T) {
 	node, _, _ := newIdentityEvidenceTestNode(t, nil)
 	node.revokedPeers.Add(node.Host.ID().String(), time.Now().Unix())
