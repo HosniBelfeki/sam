@@ -617,8 +617,9 @@ func waitForControlPlane(t *testing.T, port int) {
 
 	var lastErr error
 	var lastStatus int
+	client := &http.Client{Timeout: 2 * time.Second}
 	for {
-		resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/info", port))
+		resp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/info", port))
 		if err == nil {
 			lastStatus = resp.StatusCode
 			_ = resp.Body.Close()
