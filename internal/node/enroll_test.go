@@ -17,17 +17,213 @@ package node
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/biscuit-auth/biscuit-go/v2"
 	"github.com/google/sam/api"
+	"github.com/google/sam/internal/identity"
 	"github.com/libp2p/go-libp2p/core/crypto"
+	"github.com/libp2p/go-libp2p/core/peer"
 	"google.golang.org/protobuf/proto"
 )
+
+// TestStartRecoversStaleIdentityViaRefreshToken covers #321: a stored
+// identity signed by a fully rotated-out key must heal at startup through
+// refresh grant + HTTP re-enrollment, keeping the PeerID, instead of fataling.
+func TestStartRecoversStaleIdentityViaRefreshToken(t *testing.T) {
+	cpPub, cpPriv, _ := ed25519.GenerateKey(nil)
+	_, stalePriv, _ := ed25519.GenerateKey(nil)
+
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	// Fix the node keypair up front so the mock CP can assert PeerID is kept
+	privKey := GetOrGenerateKey(store)
+	wantPeerID, err := peer.IDFromPublicKey(privKey.GetPublic())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mint := func(priv ed25519.PrivateKey, peerID string) []byte {
+		builder := biscuit.NewBuilder(priv)
+		for _, f := range []biscuit.Fact{
+			{Predicate: biscuit.Predicate{Name: api.FactNode, IDs: []biscuit.Term{biscuit.String(peerID)}}},
+			{Predicate: biscuit.Predicate{Name: api.FactRole, IDs: []biscuit.Term{biscuit.String(api.RoleNode)}}},
+			{Predicate: biscuit.Predicate{Name: api.FactExpiration, IDs: []biscuit.Term{biscuit.Date(time.Now().Add(24 * time.Hour))}}},
+		} {
+			if err := builder.AddAuthorityFact(f); err != nil {
+				t.Fatalf("failed to add fact: %v", err)
+			}
+		}
+		tok, err := builder.Build()
+		if err != nil {
+			t.Fatalf("failed to build biscuit: %v", err)
+		}
+		b, err := tok.Serialize()
+		if err != nil {
+			t.Fatalf("failed to serialize biscuit: %v", err)
+		}
+		return b
+	}
+
+	// Stored identity is signed by a key the node no longer trusts
+	if err := store.SaveIdentity(mint(stalePriv, wantPeerID.String())); err != nil {
+		t.Fatal(err)
+	}
+
+	// Mock OIDC issuer honouring the refresh grant
+	oidcMux := http.NewServeMux()
+	oidcMux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"issuer":                 "http://" + r.Host,
+			"token_endpoint":         "http://" + r.Host + "/token",
+			"authorization_endpoint": "http://" + r.Host + "/auth",
+		})
+	})
+	oidcMux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		if r.FormValue("grant_type") != "refresh_token" || r.FormValue("refresh_token") != "stored_refresh" {
+			http.Error(w, "invalid grant", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"access_token":  "unused",
+			"id_token":      "recovered_jwt",
+			"refresh_token": "rotated_refresh",
+		})
+	})
+	oidcSrv := httptest.NewServer(oidcMux)
+	defer oidcSrv.Close()
+
+	// Mock control plane: re-enrolls the peer with a freshly signed biscuit
+	var mu sync.Mutex
+	var gotPeerID, gotJWT string
+	cpMux := http.NewServeMux()
+	cpMux.HandleFunc("/register", func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req api.EnrollRequest
+		if err := proto.Unmarshal(body, &req); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		mu.Lock()
+		gotPeerID, gotJWT = req.PeerId, req.Jwt
+		mu.Unlock()
+		resp := &api.EnrollResponse{
+			BiscuitToken:          mint(cpPriv, req.PeerId),
+			ControlPlanePublicKey: cpPub,
+			RouterAddresses:       []string{"/ip4/127.0.0.1/tcp/1"},
+			Expiration:            time.Now().Add(24 * time.Hour).Unix(),
+		}
+		data, _ := proto.Marshal(resp)
+		w.Header().Set("Content-Type", "application/x-protobuf")
+		_, _ = w.Write(data)
+	})
+	cpSrv := httptest.NewServer(cpMux)
+	defer cpSrv.Close()
+
+	if err := store.SaveOIDCConfig(oidcSrv.URL, "client_id_test", "sam"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveRefreshToken("stored_refresh"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveControlPlaneURL(cpSrv.URL); err != nil {
+		t.Fatal(err)
+	}
+
+	node, err := NewSamNode(Options{
+		PrivKey:            privKey,
+		Store:              store,
+		ControlPlanePubKey: cpPub,
+		ListenAddrs:        []string{"/ip4/127.0.0.1/tcp/0"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := node.Start(ctx); err != nil {
+		t.Fatalf("Start should have recovered the stale identity, got: %v", err)
+	}
+
+	mu.Lock()
+	if gotPeerID != wantPeerID.String() {
+		t.Errorf("re-enrollment peer id: got %q, want %q (PeerID must survive recovery)", gotPeerID, wantPeerID)
+	}
+	if gotJWT != "recovered_jwt" {
+		t.Errorf("re-enrollment JWT: got %q, want refresh-grant token", gotJWT)
+	}
+	mu.Unlock()
+
+	if err := identity.VerifyBiscuitRole(node.GetIdentity(), cpPub, api.RoleNode, time.Second); err != nil {
+		t.Errorf("recovered identity does not verify under the current CP key: %v", err)
+	}
+}
+
+// Without a refresh token the startup failure must stay fatal.
+func TestStartStaleIdentityWithoutRefreshTokenFails(t *testing.T) {
+	cpPub, _, _ := ed25519.GenerateKey(nil)
+	_, stalePriv, _ := ed25519.GenerateKey(nil)
+
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	privKey := GetOrGenerateKey(store)
+	peerID, _ := peer.IDFromPublicKey(privKey.GetPublic())
+
+	builder := biscuit.NewBuilder(stalePriv)
+	_ = builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{Name: api.FactNode, IDs: []biscuit.Term{biscuit.String(peerID.String())}}})
+	_ = builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{Name: api.FactRole, IDs: []biscuit.Term{biscuit.String(api.RoleNode)}}})
+	tok, err := builder.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	staleBiscuit, err := tok.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveIdentity(staleBiscuit); err != nil {
+		t.Fatal(err)
+	}
+
+	node, err := NewSamNode(Options{
+		PrivKey:            privKey,
+		Store:              store,
+		ControlPlanePubKey: cpPub,
+		ListenAddrs:        []string{"/ip4/127.0.0.1/tcp/0"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err = node.Start(ctx)
+	if err == nil {
+		t.Fatal("Start should fail when recovery is impossible")
+	}
+	if !strings.Contains(err.Error(), "fails role requirement") {
+		t.Errorf("error should keep the role-requirement guidance, got: %v", err)
+	}
+}
 
 func TestGetOrGenerateKey(t *testing.T) {
 	dir := t.TempDir()

@@ -324,7 +324,14 @@ func (n *SamNode) Start(ctx context.Context) error {
 				}
 			}
 			if roleErr != nil {
-				return fmt.Errorf("loaded identity fails role requirement %q: %w", n.config.RequiredRole, roleErr)
+				// Stale identity (e.g. signing key rotated past its grace
+				// period while offline): try silent re-enrollment with the
+				// stored refresh token before giving up.
+				logger.Warnf("Loaded identity fails role requirement %q: %v; attempting recovery via stored refresh token", n.config.RequiredRole, roleErr)
+				if recErr := n.recoverStaleIdentity(ctx); recErr != nil {
+					return fmt.Errorf("loaded identity fails role requirement %q (refresh-token recovery failed: %v): %w", n.config.RequiredRole, recErr, roleErr)
+				}
+				logger.Info("Identity recovered via refresh-token re-enrollment.")
 			}
 		}
 	}
