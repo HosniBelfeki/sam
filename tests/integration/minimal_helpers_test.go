@@ -211,6 +211,11 @@ func runCommandWithCallback(
 }
 
 func startMockRouter(t *testing.T) (peer.ID, string) {
+	routerID, controlPlaneURL, _ := startMockRouterWithControlPlaneKey(t)
+	return routerID, controlPlaneURL
+}
+
+func startMockRouterWithControlPlaneKey(t *testing.T) (peer.ID, string, ed25519.PublicKey) {
 	t.Helper()
 
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
@@ -288,7 +293,7 @@ func startMockRouter(t *testing.T) (peer.ID, string) {
 		_ = h.Close()
 	})
 
-	return h.ID(), httpServer.URL
+	return h.ID(), httpServer.URL, pub
 }
 
 func startMockRouterWithOIDC(t *testing.T, oidcIssuerURL string) (peer.ID, string) {
