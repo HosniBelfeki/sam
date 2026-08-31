@@ -28,6 +28,7 @@ import (
 	"github.com/biscuit-auth/biscuit-go/v2"
 	"github.com/biscuit-auth/biscuit-go/v2/parser"
 	"github.com/google/sam/api"
+	"github.com/google/sam/internal/storage"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"google.golang.org/protobuf/proto"
@@ -168,18 +169,6 @@ func assertNear(t *testing.T, what string, got, want time.Time) {
 // The configured --biscuit-ttl is a ceiling, never a floor.
 func TestBiscuitExpiryIsCappedByItsVoucher(t *testing.T) {
 	issuer, mintToken := startCustomMockOIDC(t)
-	srv, store, cpURL := setupTestServer(t, issuer)
-	defer func() {
-		_ = srv.Close()
-		_ = store.Close()
-	}()
-
-	ctx := context.Background()
-	if err := store.SaveMeshPolicy(ctx, []*api.PolicyRole{}, []*api.PolicyBinding{
-		{Role: api.RoleNode, Members: []string{"group:users"}},
-	}); err != nil {
-		t.Fatal(err)
-	}
 
 	newJWT := func(oidcTTL time.Duration) string {
 		return mintToken(map[string]interface{}{
@@ -189,8 +178,28 @@ func TestBiscuitExpiryIsCappedByItsVoucher(t *testing.T) {
 		})
 	}
 
+	// Each case gets its own server with BiscuitTTL set before Start(). Sharing
+	// one server and mutating config after Serve() races with HandleRegister
+	// and lets a previous subtest's TTL leak into the next.
+	start := func(t *testing.T, ttl time.Duration) (*Server, storage.Store, string) {
+		t.Helper()
+		srv, store, cpURL := setupTestServer(t, issuer, func(o *Options) {
+			o.BiscuitTTL = ttl
+		})
+		t.Cleanup(func() {
+			_ = srv.Close()
+			_ = store.Close()
+		})
+		if err := store.SaveMeshPolicy(context.Background(), []*api.PolicyRole{}, []*api.PolicyBinding{
+			{Role: api.RoleNode, Members: []string{"group:users"}},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return srv, store, cpURL
+	}
+
 	t.Run("register clamps to the OIDC token when it expires first", func(t *testing.T) {
-		srv.config.BiscuitTTL = 24 * time.Hour
+		_, _, cpURL := start(t, 24*time.Hour)
 		oidcExpiry := time.Now().Add(10 * time.Minute)
 
 		_, _, resp := registerNode(t, cpURL, newJWT(10*time.Minute))
@@ -201,7 +210,7 @@ func TestBiscuitExpiryIsCappedByItsVoucher(t *testing.T) {
 	})
 
 	t.Run("register uses the configured TTL when it expires first", func(t *testing.T) {
-		srv.config.BiscuitTTL = 5 * time.Minute
+		_, _, cpURL := start(t, 5*time.Minute)
 		want := time.Now().Add(5 * time.Minute)
 
 		_, _, resp := registerNode(t, cpURL, newJWT(time.Hour))
@@ -212,18 +221,18 @@ func TestBiscuitExpiryIsCappedByItsVoucher(t *testing.T) {
 	})
 
 	t.Run("refresh clamps to the end of the OIDC session", func(t *testing.T) {
-		srv.config.BiscuitTTL = 24 * time.Hour
+		_, store, cpURL := start(t, 24*time.Hour)
 		priv, peerID, resp := registerNode(t, cpURL, newJWT(time.Hour))
 		cpPubKey := ed25519.PublicKey(resp.ControlPlanePublicKey)
 
 		// Wind the 90-day session down to its last 10 minutes.
 		sessionEnd := time.Now().Add(10 * time.Minute)
-		record, err := store.GetNode(ctx, peerID.String())
+		record, err := store.GetNode(context.Background(), peerID.String())
 		if err != nil {
 			t.Fatal(err)
 		}
 		record.ExpiresAt = sessionEnd
-		if err := store.EnrollNode(ctx, record); err != nil {
+		if err := store.EnrollNode(context.Background(), record); err != nil {
 			t.Fatal(err)
 		}
 
@@ -233,17 +242,17 @@ func TestBiscuitExpiryIsCappedByItsVoucher(t *testing.T) {
 	})
 
 	t.Run("refresh uses the configured TTL when the session never expires", func(t *testing.T) {
-		srv.config.BiscuitTTL = 30 * time.Minute
+		_, store, cpURL := start(t, 30*time.Minute)
 		priv, peerID, resp := registerNode(t, cpURL, newJWT(time.Hour))
 		cpPubKey := ed25519.PublicKey(resp.ControlPlanePublicKey)
 
 		// Bootstrap-style record: no session deadline at all.
-		record, err := store.GetNode(ctx, peerID.String())
+		record, err := store.GetNode(context.Background(), peerID.String())
 		if err != nil {
 			t.Fatal(err)
 		}
 		record.ExpiresAt = time.Time{}
-		if err := store.EnrollNode(ctx, record); err != nil {
+		if err := store.EnrollNode(context.Background(), record); err != nil {
 			t.Fatal(err)
 		}
 

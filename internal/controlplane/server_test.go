@@ -104,7 +104,7 @@ func startCustomMockOIDC(t *testing.T) (string, func(claims map[string]interface
 	return issuer, mintToken
 }
 
-func setupTestServer(t *testing.T, oidcIssuer string) (*Server, storage.Store, string) {
+func setupTestServer(t *testing.T, oidcIssuer string, overrides ...func(*Options)) (*Server, storage.Store, string) {
 	t.Helper()
 
 	tempDir, err := os.MkdirTemp("", "sam-cp-test-*")
@@ -132,6 +132,9 @@ func setupTestServer(t *testing.T, oidcIssuer string) (*Server, storage.Store, s
 		KeyGracePeriod:        10 * time.Minute,
 		InsecureSkipTLSVerify: true,
 		BiscuitTimeout:        10 * time.Second,
+	}
+	for _, fn := range overrides {
+		fn(&opts)
 	}
 
 	srv, err := NewServer(opts, store)
