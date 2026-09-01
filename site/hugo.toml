@@ -67,7 +67,6 @@ sectionPagesMenu = "main"
     weight = 5
 
 [params]
-  privacy_policy = "https://policies.google.com/privacy"
   github_repo = "https://github.com/google/sam"
   github_subdir = "docs"
   github_branch = "main"
@@ -79,7 +78,3 @@ sectionPagesMenu = "main"
     ul_show = 1
 
   # Logo & branding colors will be customized via project styles
-
-[services]
-  [services.googleAnalytics]
-    id = "G-F9G8NX0SBT"

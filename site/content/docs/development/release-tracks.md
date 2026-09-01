@@ -6,24 +6,27 @@ Sovereign Agent Mesh (SAM) is deployed to public endpoints using automated envir
 
 ---
 
-## 1. Release Tracks
+## 1. Public Developer Testnets
 
-The public deployment has two isolated release tracks:
+> [!NOTE]
+> **Developer Testnets Disclaimer:**
+> Both public endpoints (`bananas.sam-mesh.dev` and `hub.sam-mesh.dev`) are **developer testnets created using community resources**. They are provided solely for testing, continuous integration, and rapid experimentation with the open-source codebase. They carry **no guarantees, no uptime commitments, and zero SLA**, and are not sovereign. For production workloads or strict data sovereignty, operators should deploy a dedicated mesh with customer-held keys using the [Helm chart](https://github.com/google/sam/tree/main/charts/sam-mesh) or [Kubernetes deployment guide](../user/kubernetes-deployment/). See [Digital & Data Sovereignty](../sovereignty/) for full architectural details.
 
-### A. Testnet Track (Bananas)
+The public developer deployment maintains two isolated testnet tracks:
+
+### A. Bleeding-Edge Testnet Track (Bananas)
 *   **Domain Name:** `bananas.sam-mesh.dev`
 *   **Source Branch:** Tracks the `main` branch.
 *   **Deployment Trigger:** Automatically deployed on every new push/commit to the `main` branch.
 *   **Target Tag:** The deployment is tagged with the Git commit SHA (`github.sha`).
-*   **Purpose:** Serves as the staging/testing playground for the latest features and continuous integration.
+*   **Purpose:** Serves as the continuous integration and staging testbed for the latest unreleased features.
 
-### B. Production Track (Hub)
+### B. Release-Tagged Testnet Track (Hub)
 *   **Domain Name:** `hub.sam-mesh.dev`
 *   **Source Branch:** Tracks semantic version tags matching `v*.*.*`.
 *   **Deployment Trigger:** Automatically deployed whenever a new version tag is pushed to GitHub.
 *   **Target Tag:** The deployment is tagged with the exact Git release tag (e.g. `v1.0.0`).
-*   **Purpose:** Stable, audited release track for production workloads.
-
+*   **Purpose:** Public testbed running tagged releases for developer interoperability testing.
 ---
 
 ## 2. Autoupdate Mechanism

@@ -124,5 +124,7 @@ Because every enrolled node's token carries its attested label facts, a provider
 attenuation:
   checks:
     - 'check if label("region", "us-east-1");'
+    - 'check if label("jurisdiction", "eu");'
 ```
 
+For full details on territorial enforcement, regulatory compliance (GDPR Art 44-49, EU Cloud Sovereignty Framework), and cryptographic evidence verification, see the **[Digital & Data Sovereignty Guide](../sovereignty/)**.
