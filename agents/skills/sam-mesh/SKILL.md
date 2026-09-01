@@ -15,7 +15,7 @@ Pick the path that matches the need:
   [Bootstrap A Node](#bootstrap-a-node).
 - The task needs a plain HTTP call to the node, such as inference or a
   `local_proxy_url`: [Talk To The Node Over HTTP](#talk-to-the-node-over-http).
-- The task needs node diagnostics, such as logs or connectivity:
+- The node is up but the mesh seems broken:
   [Diagnose The Node](#diagnose-the-node).
 - The task needs a remote tool or capability:
   [Inspect The Mesh](#inspect-the-mesh).
@@ -104,16 +104,30 @@ it passes through to that service untouched.
 
 ## Diagnose The Node
 
-Node diagnostics (logs, connectivity, network and token info, connecting to a
-peer by address) are not MCP tools. Discover them instead of memorizing them:
+Operator diagnostics are not MCP tools, so they never appear in the tool list.
+A running node serves them under `/debug`, and the `sam-node` CLI wraps each
+endpoint over the node's Unix socket — no token involved:
 
 ```bash
-sam-node debug --help
+sam-node debug mesh-info                 # connected peers, DHT size, router peer ID
+sam-node debug connectivity [peer-id]    # ping the SAM router, or a specific peer
+sam-node debug network-info              # listen and observed addresses
+sam-node debug token-info                # local auth token expiration and status
+sam-node debug logs                      # recent log lines
+sam-node debug connect-peer <multiaddr>  # manually dial a peer
 ```
 
-Then run the subcommand that matches the need. They talk to the node over its
-Unix socket, so no token is involved, and each prints the node's JSON response,
-so the output composes with `jq`.
+Each command prints the endpoint's raw JSON, so it composes with `jq`. The same
+data is one `curl` away when the CLI is not at hand:
+
+```bash
+curl --unix-socket ~/.config/sam-mesh/sam.sock http://localhost/debug/mesh-info
+```
+
+These endpoints answer even while the mesh is unreachable — that is the state
+they exist to diagnose. When the node runs but mesh tools fail, check
+`debug connectivity` for `router_error_msg` and `debug token-info` for an
+expired token before restarting or re-enrolling anything.
 
 ## Inspect The Mesh
 

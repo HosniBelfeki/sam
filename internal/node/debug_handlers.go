@@ -54,7 +54,7 @@ func newDebugHandler(n *SamNode) http.Handler {
 		writeDebugJSON(w, n.tokenInfo())
 	})
 	mux.HandleFunc("GET /debug/logs", func(w http.ResponseWriter, r *http.Request) {
-		writeDebugJSON(w, map[string]any{"logs": GetRecentLogs()})
+		writeDebugJSON(w, logsResponse{Logs: GetRecentLogs()})
 	})
 	mux.HandleFunc("POST /debug/connect-peer", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
@@ -109,9 +109,47 @@ func writeDebugJSON(w http.ResponseWriter, v any) {
 	}
 }
 
+// The types below are the /debug payloads. They are unexported on purpose:
+// these endpoints are unversioned operator diagnostics, not part of the
+// api/sam.proto mesh contract.
+
+type meshInfoResponse struct {
+	PeerID         string   `json:"peer_id"`
+	ConnectedPeers []string `json:"connected_peers"`
+	DHTSize        int      `json:"dht_size"`
+	RouterPeerID   string   `json:"router_peer_id"`
+	LocalAPISocket string   `json:"local_api_socket,omitempty"`
+}
+
+type connectivityResponse struct {
+	ConnectedPeers  int    `json:"connected_peers"`
+	TotalKnownPeers int    `json:"total_known_peers"`
+	PingLatencyMS   *int64 `json:"ping_latency_ms,omitempty"`
+	PingError       *bool  `json:"ping_error,omitempty"`
+	PingErrorMsg    string `json:"ping_error_msg,omitempty"`
+	RouterLatencyMS *int64 `json:"router_latency_ms,omitempty"`
+	RouterError     *bool  `json:"router_error,omitempty"`
+	RouterErrorMsg  string `json:"router_error_msg,omitempty"`
+}
+
+type tokenInfoResponse struct {
+	HasToken         bool     `json:"has_token"`
+	ExpiresInSeconds *float64 `json:"expires_in_seconds,omitempty"`
+	IsExpired        *bool    `json:"is_expired,omitempty"`
+}
+
+type networkInfoResponse struct {
+	ListenAddresses   []string `json:"listen_addresses"`
+	ObservedAddresses []string `json:"observed_addresses"`
+}
+
+type logsResponse struct {
+	Logs []string `json:"logs"`
+}
+
 // meshInfo backs both the get_mesh_info MCP tool and GET /debug/mesh-info.
 // The MCP path skips the /debug boundary guard, so it re-checks here.
-func (n *SamNode) meshInfo() (map[string]any, error) {
+func (n *SamNode) meshInfo() (*meshInfoResponse, error) {
 	if err := n.debugReady(); err != nil {
 		return nil, err
 	}
@@ -122,29 +160,25 @@ func (n *SamNode) meshInfo() (map[string]any, error) {
 	for _, p := range peers {
 		connectedPeers = append(connectedPeers, p.String())
 	}
-	dhtSize := n.DHT.RoutingTable().Size()
 
-	resData := map[string]any{
-		"peer_id":         n.Host.ID().String(),
-		"connected_peers": connectedPeers,
-		"dht_size":        dhtSize,
-		"router_peer_id":  n.RouterPeerID.String(),
-	}
-	if n.BoundSocketPath != "" {
-		resData["local_api_socket"] = n.BoundSocketPath
-	}
-	return resData, nil
+	return &meshInfoResponse{
+		PeerID:         n.Host.ID().String(),
+		ConnectedPeers: connectedPeers,
+		DHTSize:        n.DHT.RoutingTable().Size(),
+		RouterPeerID:   n.RouterPeerID.String(),
+		LocalAPISocket: n.BoundSocketPath,
+	}, nil
 }
 
 // connectivityStats backs GET /debug/connectivity: with a peer ID it pings that
 // peer, otherwise it pings the SAM router.
-func (n *SamNode) connectivityStats(ctx context.Context, peerIDStr string) map[string]any {
+func (n *SamNode) connectivityStats(ctx context.Context, peerIDStr string) connectivityResponse {
 	ctx, cancel := context.WithTimeout(ctx, connectivityPingTimeout)
 	defer cancel()
 
-	stats := map[string]any{
-		"connected_peers":   len(n.Host.Network().Peers()),
-		"total_known_peers": len(n.Host.Peerstore().Peers()),
+	stats := connectivityResponse{
+		ConnectedPeers:  len(n.Host.Network().Peers()),
+		TotalKnownPeers: len(n.Host.Peerstore().Peers()),
 	}
 
 	if peerIDStr != "" {
@@ -153,22 +187,27 @@ func (n *SamNode) connectivityStats(ctx context.Context, peerIDStr string) map[s
 			n.preparePeerAddrs(ctx, pid)
 			start := time.Now()
 			err := n.Host.Connect(ctx, peer.AddrInfo{ID: pid})
-			stats["ping_latency_ms"] = time.Since(start).Milliseconds()
-			stats["ping_error"] = err != nil
+			latency := time.Since(start).Milliseconds()
+			failed := err != nil
+			stats.PingLatencyMS = &latency
+			stats.PingError = &failed
 			if err != nil {
-				stats["ping_error_msg"] = err.Error()
+				stats.PingErrorMsg = err.Error()
 			}
 		} else {
-			stats["ping_error"] = true
-			stats["ping_error_msg"] = "invalid peer id"
+			failed := true
+			stats.PingError = &failed
+			stats.PingErrorMsg = "invalid peer id"
 		}
 	} else if n.RouterPeerID != "" {
 		start := time.Now()
 		err := n.Host.Connect(ctx, peer.AddrInfo{ID: n.RouterPeerID})
-		stats["router_latency_ms"] = time.Since(start).Milliseconds()
-		stats["router_error"] = err != nil
+		latency := time.Since(start).Milliseconds()
+		failed := err != nil
+		stats.RouterLatencyMS = &latency
+		stats.RouterError = &failed
 		if err != nil {
-			stats["router_error_msg"] = err.Error()
+			stats.RouterErrorMsg = err.Error()
 		}
 	}
 
@@ -176,25 +215,24 @@ func (n *SamNode) connectivityStats(ctx context.Context, peerIDStr string) map[s
 }
 
 // tokenInfo backs GET /debug/token-info.
-func (n *SamNode) tokenInfo() map[string]any {
-	info := map[string]any{
-		"has_token": false,
-	}
-
+func (n *SamNode) tokenInfo() tokenInfoResponse {
+	var info tokenInfoResponse
 	token, err := n.Store.LoadIdentity()
 	if err == nil && len(token) > 0 {
-		info["has_token"] = true
+		info.HasToken = true
 		exp, err := n.Store.LoadIdentityExpiration()
 		if err == nil {
-			info["expires_in_seconds"] = time.Until(time.Unix(exp, 0)).Seconds()
-			info["is_expired"] = time.Now().Unix() > exp
+			expiresIn := time.Until(time.Unix(exp, 0)).Seconds()
+			expired := time.Now().Unix() > exp
+			info.ExpiresInSeconds = &expiresIn
+			info.IsExpired = &expired
 		}
 	}
 	return info
 }
 
 // networkInfo backs GET /debug/network-info.
-func (n *SamNode) networkInfo() map[string]any {
+func (n *SamNode) networkInfo() networkInfoResponse {
 	listenAddrs := []string{}
 	for _, a := range n.Host.Network().ListenAddresses() {
 		listenAddrs = append(listenAddrs, a.String())
@@ -205,9 +243,9 @@ func (n *SamNode) networkInfo() map[string]any {
 		observedAddrs = append(observedAddrs, a.String())
 	}
 
-	return map[string]any{
-		"listen_addresses":   listenAddrs,
-		"observed_addresses": observedAddrs,
+	return networkInfoResponse{
+		ListenAddresses:   listenAddrs,
+		ObservedAddresses: observedAddrs,
 	}
 }
 
