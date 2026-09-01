@@ -24,7 +24,7 @@ from google.genai import types
 from starlette.applications import Starlette
 
 PORT = 7777
-MODEL = os.environ.get("GEMINI_MODEL", "models/gemini-3.6-flash")
+MODEL = os.environ.get("GEMINI_MODEL", "models/gemini-3.5-flash-lite")
 
 class ChatExecutor(AgentExecutor):
     """One Gemini chat session per A2A contextId; the session carries the history."""
