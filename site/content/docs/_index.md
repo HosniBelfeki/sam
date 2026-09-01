@@ -22,6 +22,8 @@ Instead of exposing your agent's tools (like local scripts, LLM endpoints, or in
 ### "Developer Testnet Mode" (Ephemeral Testing Sandbox)
 For the fastest way to get started and experiment with the open-source code, you can connect a node to our public developer testnet (`bananas.sam-mesh.dev`). *Note: This is a shared developer testbed created with community resources. There are no guarantees; it is strictly for testing. Do not expose sensitive or production tools in a public testing environment.*
 
+{{< demo >}}
+
 - 🚀 **[User Quick Start Guide](quickstart/)**: Connect and run a SAM node using binaries or Docker, and query the local MCP server.
 - 🤖 **[Agent Integration Guide](user/agent-usage/)**: Connect Google Gemini, Claude, and other AI agents to your SAM node to call tools across the mesh.
 - 📡 **[Testnet Validation Tutorial](development/testnet-validation/)**: Real-time verification, remote tool invocation, and HTTP stream proxies.
