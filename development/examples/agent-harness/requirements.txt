@@ -2,7 +2,7 @@
 # client, because there is no such thing: the mesh is reached with ordinary
 # HTTP to an ordinary name.
 #
-# There is no SOCKS support here on purpose. The sandbox routes the agent's
+# There is no proxy support here on purpose. The sandbox routes the agent's
 # traffic to the boundary through tun0, so the agent neither configures a proxy
 # nor knows there is one.
 openai>=1.40,<3

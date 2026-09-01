@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"net/http"
 	"testing"
 
 	"github.com/google/sam/api"
@@ -83,8 +84,8 @@ func TestRefusedDestinationIsReportedAsRefused(t *testing.T) {
 	if !errors.Is(err, ErrConnectionRefused) {
 		t.Fatalf("DialDestination to a closed port = %v, want ErrConnectionRefused", err)
 	}
-	if code := replyCodeFor(err); code != replyConnectionRefused {
-		t.Errorf("reply code = %#x, want %#x", code, replyConnectionRefused)
+	if status, _ := refusalFor(err); status != http.StatusBadGateway {
+		t.Errorf("refusal status = %d, want %d", status, http.StatusBadGateway)
 	}
 }
 

@@ -84,7 +84,7 @@ func discoverHandler(t *testing.T, peerID string, seen *chan string) http.Handle
 }
 
 // clientOver speaks HTTP over an already-established connection, the way an
-// agent's HTTP client speaks over the connection SOCKS5 handed it.
+// agent's HTTP client speaks over the tunnel CONNECT handed it.
 func clientOver(conn net.Conn) *http.Client {
 	return &http.Client{
 		Transport: &http.Transport{
@@ -138,8 +138,8 @@ func TestMeshServiceWithNoProviderIsUnreachable(t *testing.T) {
 	if !errors.Is(err, ErrHostUnreachable) {
 		t.Fatalf("DialDestination = %v, want ErrHostUnreachable", err)
 	}
-	if code := replyCodeFor(err); code != replyHostUnreachable {
-		t.Errorf("reply code = %#x, want %#x", code, replyHostUnreachable)
+	if status, _ := refusalFor(err); status != http.StatusBadGateway {
+		t.Errorf("refusal status = %d, want %d", status, http.StatusBadGateway)
 	}
 }
 

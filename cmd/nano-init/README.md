@@ -5,22 +5,28 @@ boundary, and then gets out of the agent's way.
 
 ## What it does
 
-1. **Builds the only way out.** Creates `tun0` over netlink, gives it a
-   link-local address, and makes it the default route. There is no other
-   interface in the sandbox, so this is not the preferred path out; it is the
-   only one.
-2. **Carries a TCP stack.** Terminates the sandbox's TCP in userspace via
-   gVisor (through `tun2socks`) and opens a SOCKS5 flow to the boundary for
-   each connection.
-3. **Keeps the name.** Answers DNS with a placeholder address per name and
-   remembers the pairing, so what reaches the boundary is `mesh.sam.alt` rather
-   than an address. The boundary chooses a provider from the name, which is the
-   entire reason the name has to survive the trip.
+1. **Builds the only way out.** Creates `tun0` over netlink and gives it the
+   guest ends of the synthetic address pools (`100.64.0.0/10`, `100::/64`).
+   There is no other interface in the sandbox, so this is not the preferred
+   path out; it is the only one.
+2. **Carries a TCP stack.** Terminates the sandbox's TCP/IP in userspace via
+   the [tun2connect](https://github.com/aojea/agents.net) library (gVisor's
+   netstack) and opens one named HTTP tunnel to the boundary per flow:
+   authority-form `CONNECT` for TCP, `connect-udp` for UDP.
+3. **Keeps the name.** The virtual DNS answers with a synthetic address per
+   name and remembers the pairing, so what reaches the boundary is
+   `mesh.sam.alt` rather than an address. The boundary chooses a provider from
+   the name, which is the entire reason the name has to survive the trip. A
+   flow to an address the guest never resolved has no name, and is refused.
 4. **PID 1 duties.** Reaps orphans, propagates `SIGINT`/`SIGTERM`/`SIGQUIT` to
    the child's process group, and exits with the agent's own status.
 
 It is a separate Go module. A userspace TCP stack is a large dependency and has
-no business in the graph every other SAM binary builds from.
+no business in the graph every other SAM binary builds from. The datapath —
+engine, tunnel client, virtual DNS — is the tun2connect library, consumed here
+rather than forked: what this module owns is exactly the SAM- and
+platform-specific part, the vsock boundary for microVMs, `--create-namespaces`
+for pods, `copy` for image builds, and PID 1.
 
 ## What it deliberately does not do
 
@@ -79,4 +85,4 @@ image that has nothing else in it.
 - [Running agents on SAM](https://sam-mesh.dev/docs/user/running-agents/) — the
   full picture, including the microVM arrangement
 - [Agent architecture](https://sam-mesh.dev/docs/agent-architecture/) — why the
-  boundary speaks SOCKS5
+  boundary speaks named HTTP tunnels

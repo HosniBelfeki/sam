@@ -303,9 +303,9 @@ message AgentAttachRequest {
 }
 
 message AgentAttachResponse {
-  // Sandbox boundary endpoints to wire into the sandbox: SOCKS5 for guest to
-  // host, and a reverse channel for host to guest that is empty when the
-  // bundle declares no ingress.
+  // Sandbox boundary endpoints to wire into the sandbox: named HTTP tunnels
+  // (CONNECT, connect-udp) for guest to host, and a reverse channel for host
+  // to guest that is empty when the bundle declares no ingress.
   string egress_socket = 1;
   string ingress_socket = 2;
   string error = 3;

@@ -22,11 +22,13 @@
 // difference in the mesh.
 //
 // It reaches the mesh the way an agent does, through the sandbox boundary's
-// SOCKS5 socket, so what it measures is what an agent would experience rather
-// than what an operator with host access would.
+// Unix socket, opening each flow as a named HTTP CONNECT tunnel, so what it
+// measures is what an agent would experience rather than what an operator
+// with host access would.
 package bench
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -35,19 +37,18 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/url"
 	"sort"
 	"sync"
 	"time"
-
-	"golang.org/x/net/proxy"
 )
 
 // Options describe one measurement run. The zero value is not useful: at
 // minimum a Target and a positive Requests count are required.
 type Options struct {
-	// Socket is the sandbox boundary's SOCKS5 Unix socket. Empty measures the
-	// same workload without the boundary, which is the baseline the mesh
-	// numbers are only meaningful against.
+	// Socket is the sandbox boundary's Unix socket, which speaks HTTP CONNECT.
+	// Empty measures the same workload without the boundary, which is the
+	// baseline the mesh numbers are only meaningful against.
 	Socket string
 
 	// UnixTarget dials the target over this Unix socket instead of resolving
@@ -292,7 +293,8 @@ func once(ctx context.Context, client *http.Client, opts Options) Sample {
 }
 
 // newClient builds the transport the workload runs over. Through a boundary it
-// dials the SOCKS5 socket, which is the only path a sandboxed agent has.
+// opens each flow as a CONNECT tunnel on the boundary socket, which is the
+// only path a sandboxed agent has.
 func newClient(opts Options) (*http.Client, error) {
 	transport := &http.Transport{
 		MaxIdleConnsPerHost: opts.Concurrency,
@@ -303,15 +305,10 @@ func newClient(opts Options) (*http.Client, error) {
 	case opts.Socket != "" && opts.UnixTarget != "":
 		return nil, errors.New("bench: a run goes through the boundary or straight to a socket, not both")
 	case opts.Socket != "":
-		dialer, err := proxy.SOCKS5("unix", opts.Socket, nil, proxy.Direct)
-		if err != nil {
-			return nil, fmt.Errorf("bench: dial boundary %s: %w", opts.Socket, err)
+		socket := opts.Socket
+		transport.DialContext = func(ctx context.Context, _, addr string) (net.Conn, error) {
+			return dialThroughBoundary(ctx, socket, addr)
 		}
-		contextDialer, ok := dialer.(proxy.ContextDialer)
-		if !ok {
-			return nil, errors.New("bench: SOCKS5 dialer does not support contexts")
-		}
-		transport.DialContext = contextDialer.DialContext
 	case opts.UnixTarget != "":
 		transport.DialContext = func(ctx context.Context, _, _ string) (net.Conn, error) {
 			return (&net.Dialer{}).DialContext(ctx, "unix", opts.UnixTarget)
@@ -322,6 +319,46 @@ func newClient(opts Options) (*http.Client, error) {
 
 	return &http.Client{Transport: transport}, nil
 }
+
+// dialThroughBoundary opens one boundary flow: an authority-form CONNECT
+// naming the destination, answered 200 before any tunneled byte moves.
+func dialThroughBoundary(ctx context.Context, socket, addr string) (net.Conn, error) {
+	conn, err := (&net.Dialer{}).DialContext(ctx, "unix", socket)
+	if err != nil {
+		return nil, fmt.Errorf("bench: dial boundary %s: %w", socket, err)
+	}
+	if d, ok := ctx.Deadline(); ok {
+		_ = conn.SetDeadline(d)
+	}
+	req := &http.Request{Method: http.MethodConnect, URL: &url.URL{Host: addr}, Host: addr, Header: make(http.Header)}
+	if err := req.Write(conn); err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("bench: CONNECT %s: %w", addr, err)
+	}
+	br := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(br, req)
+	if err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("bench: CONNECT %s: %w", addr, err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		_ = conn.Close()
+		if reason := resp.Header.Get("Boundary-Reason"); reason != "" {
+			return nil, fmt.Errorf("bench: boundary refused %s: %s (%s)", addr, resp.Status, reason)
+		}
+		return nil, fmt.Errorf("bench: boundary refused %s: %s", addr, resp.Status)
+	}
+	_ = conn.SetDeadline(time.Time{})
+	return &bufferedConn{Conn: conn, br: br}, nil
+}
+
+// bufferedConn keeps bytes the response reader buffered past the header.
+type bufferedConn struct {
+	net.Conn
+	br *bufio.Reader
+}
+
+func (c *bufferedConn) Read(p []byte) (int, error) { return c.br.Read(p) }
 
 func ttfbOf(samples []Sample) []time.Duration {
 	out := make([]time.Duration, 0, len(samples))

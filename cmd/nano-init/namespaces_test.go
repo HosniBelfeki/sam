@@ -147,12 +147,12 @@ func TestResolvConfAlreadyOurs(t *testing.T) {
 	}{
 		{
 			name:     "the file a pod can mount for the sandbox",
-			contents: "nameserver " + tunIP + "\n",
+			contents: "nameserver " + resolverIP + "\n",
 			want:     true,
 		},
 		{
 			name:     "comments and blank lines are not nameservers",
-			contents: "# supplied by the platform\n\nnameserver " + tunIP + "\n",
+			contents: "# supplied by the platform\n\nnameserver " + resolverIP + "\n",
 			want:     true,
 		},
 		{
@@ -165,7 +165,7 @@ func TestResolvConfAlreadyOurs(t *testing.T) {
 			// The dangerous one: ours plus somebody else's would send some
 			// lookups outside the boundary, so it does not count as done.
 			name:     "ours alongside another server",
-			contents: "nameserver " + tunIP + "\nnameserver 8.8.8.8\n",
+			contents: "nameserver " + resolverIP + "\nnameserver 8.8.8.8\n",
 			want:     false,
 		},
 		{

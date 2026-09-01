@@ -139,6 +139,14 @@ type Router struct {
 // sandbox, "not permitted" and "does not exist" must look the same, or the
 // boundary becomes a discovery oracle for the mesh's contents.
 func (r *Router) Route(dst Destination) (Route, error) {
+	if api.IsMeshEntrypointHost(dst.Name) || api.IsMeshHost(dst.Name) {
+		// Mesh services are HTTP surfaces; a datagram session to one names
+		// nothing that exists, and is denied like any other non-service.
+		if dst.network() == "udp" {
+			return Route{}, fmt.Errorf("%w: %s is not reachable over UDP", ErrNotAllowed, dst.Name)
+		}
+	}
+
 	if api.IsMeshEntrypointHost(dst.Name) {
 		return Route{Kind: RouteMeshEntrypoint, Destination: dst}, nil
 	}

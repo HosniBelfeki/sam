@@ -27,10 +27,10 @@
 # exercised the way it would be in practice. Pointing a single load generator at
 # a single boundary would measure a socket, not a mesh.
 #
-# Load is driven from the host into the boundary's SOCKS5 socket. That is the
-# same entry point the guest uses over vsock, but it skips the in-guest netstack
-# and the vsock hop, so these numbers bound the mesh datapath and not the
-# sandbox's own overhead.
+# Load is driven from the host into the boundary's Unix socket, one CONNECT
+# tunnel per flow. That is the same entry point the guest uses over vsock, but
+# it skips the in-guest netstack and the vsock hop, so these numbers bound the
+# mesh datapath and not the sandbox's own overhead.
 #
 # Usage:
 #   tests/scale/load-fleet.sh --agents 200 --requests 200 --out /var/log/load

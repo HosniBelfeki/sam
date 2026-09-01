@@ -135,7 +135,7 @@ func startBoundaryServing(t *testing.T, agentSocket, nodeSocket, agentID string,
 		t.Fatalf("ListenSandboxSocket: %v", err)
 	}
 
-	server := &sambox.SOCKS5Server{
+	server := &sambox.ConnectServer{
 		Dialer: &sambox.AgentDialer{
 			Router:        &sambox.Router{Egress: egress},
 			SidecarSocket: nodeSocket,

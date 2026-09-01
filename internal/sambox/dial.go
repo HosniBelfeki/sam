@@ -24,14 +24,14 @@ import (
 	"time"
 )
 
-// dialTimeout bounds opening a destination. The SOCKS5 layer deliberately drops
-// its handshake deadline before dialling, so this is the only bound and it has
-// to exist here.
+// dialTimeout bounds opening a destination. The CONNECT layer deliberately
+// drops its handshake deadline before dialling, so this is the only bound and
+// it has to exist here.
 const dialTimeout = 30 * time.Second
 
 // AgentDialer opens whatever a Route calls for. It is the only place in the
 // sandbox boundary that touches the network, which keeps the routing decision
-// (route.go) and the protocol (socks5.go) free of I/O.
+// (route.go) and the protocol (connect.go) free of I/O.
 type AgentDialer struct {
 	// Router classifies destinations. Required.
 	Router *Router
@@ -87,7 +87,7 @@ func (d *AgentDialer) dialRoute(ctx context.Context, route Route, dst Destinatio
 	case RouteMeshEntrypoint:
 		return d.dialMeshEntrypoint()
 	case RouteExternal:
-		return d.dial(ctx, "tcp", dst.Address())
+		return d.dial(ctx, dst.network(), dst.Address())
 	case RouteMeshService:
 		return d.dialMeshService(ctx, route)
 	default:
@@ -139,7 +139,7 @@ func (d *AgentDialer) dial(ctx context.Context, network, address string) (net.Co
 	return conn, nil
 }
 
-// classifyDialError maps a dial failure onto the vocabulary the SOCKS5 layer
+// classifyDialError maps a dial failure onto the vocabulary the CONNECT layer
 // can report, so an agent sees "refused" or "unreachable" rather than a
 // generic failure it cannot act on.
 func classifyDialError(err error) error {

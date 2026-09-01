@@ -131,7 +131,7 @@ func main() {
 	}
 
 	flags := runCmd.Flags()
-	flags.StringVar(&socket, "socket", "", "Sandbox boundary SOCKS5 socket to measure through; omit to measure the same workload without a boundary, which is the baseline")
+	flags.StringVar(&socket, "socket", "", "Sandbox boundary Unix socket (HTTP CONNECT) to measure through; omit to measure the same workload without a boundary, which is the baseline")
 	flags.StringVar(&unixTarget, "target-unix", "", "Dial the target over this Unix socket rather than resolving its host, so a baseline needs no relay in the path")
 	flags.StringVar(&target, "target", "", "URL to request, e.g. http://mesh.sam.alt/v1/models (required)")
 	flags.StringVar(&method, "method", "GET", "HTTP method")

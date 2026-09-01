@@ -15,10 +15,14 @@
 package integration_test
 
 import (
+	"bufio"
 	"context"
+	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,17 +30,16 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"golang.org/x/net/proxy"
 
 	"github.com/google/sam/api"
 	"github.com/google/sam/internal/sambox"
 )
 
 // TestSandboxBoundaryCUJ drives the sandbox boundary the way an agent does:
-// a SOCKS5 client on a Unix socket, no credential of any kind, addressing
-// everything by name. Node A provides the services, node B is the node the
-// gateway consumes, and the agent must reach the mesh through the gateway
-// while never reaching node B's own API.
+// an HTTP CONNECT client on a Unix socket, no credential of any kind,
+// addressing everything by name. Node A provides the services, node B is the
+// node the gateway consumes, and the agent must reach the mesh through the
+// gateway while never reaching node B's own API.
 //
 // One mesh is set up for the whole test: the cases are cheap, the mesh is not.
 func TestSandboxBoundaryCUJ(t *testing.T) {
@@ -115,7 +118,7 @@ func TestSandboxBoundaryCUJ(t *testing.T) {
 	t.Run("requests", func(t *testing.T) {
 		tests := []struct {
 			name string
-			// A refused destination fails the SOCKS5 handshake, so the request
+			// A refused destination fails the CONNECT handshake, so the request
 			// errors instead of returning a status.
 			wantRefused  bool
 			method       string
@@ -269,7 +272,7 @@ func startBoundaryWith(t *testing.T, agentSocket, nodeSocket, agentID string, eg
 		t.Fatalf("ListenSandboxSocket: %v", err)
 	}
 
-	server := &sambox.SOCKS5Server{
+	server := &sambox.ConnectServer{
 		Dialer: &sambox.AgentDialer{
 			Router:        &sambox.Router{Egress: egress},
 			SidecarSocket: nodeSocket,
@@ -292,23 +295,47 @@ func startBoundaryWith(t *testing.T, agentSocket, nodeSocket, agentID string, eg
 }
 
 // boundaryClient is an ordinary HTTP client that happens to reach the network
-// through the sandbox socket, which is exactly what an agent's client is.
+// through the sandbox socket, which is exactly what an agent's client is. Each
+// flow opens as an authority-form CONNECT naming its destination, the same
+// wire shape tun2connect produces from inside a sandbox.
 func boundaryClient(t *testing.T, agentSocket string) *http.Client {
 	t.Helper()
 
-	dialer, err := proxy.SOCKS5("unix", agentSocket, nil, proxy.Direct)
-	if err != nil {
-		t.Fatalf("proxy.SOCKS5: %v", err)
-	}
-	contextDialer, ok := dialer.(proxy.ContextDialer)
-	if !ok {
-		t.Fatal("SOCKS5 dialer does not implement ContextDialer")
+	dialContext := func(ctx context.Context, _, addr string) (net.Conn, error) {
+		conn, err := (&net.Dialer{}).DialContext(ctx, "unix", agentSocket)
+		if err != nil {
+			return nil, err
+		}
+		req := &http.Request{Method: http.MethodConnect, URL: &url.URL{Host: addr}, Host: addr, Header: make(http.Header)}
+		if err := req.Write(conn); err != nil {
+			_ = conn.Close()
+			return nil, err
+		}
+		br := bufio.NewReader(conn)
+		resp, err := http.ReadResponse(br, req)
+		if err != nil {
+			_ = conn.Close()
+			return nil, err
+		}
+		if resp.StatusCode != http.StatusOK {
+			_ = conn.Close()
+			return nil, errors.New("boundary refused " + addr + ": " + resp.Status)
+		}
+		return &connectConn{Conn: conn, br: br}, nil
 	}
 	return &http.Client{
-		Transport: &http.Transport{DialContext: contextDialer.DialContext},
+		Transport: &http.Transport{DialContext: dialContext},
 		Timeout:   20 * time.Second,
 	}
 }
+
+// connectConn keeps bytes the response reader buffered past the header.
+type connectConn struct {
+	net.Conn
+	br *bufio.Reader
+}
+
+func (c *connectConn) Read(p []byte) (int, error) { return c.br.Read(p) }
 
 func connectMCPThroughBoundary(t *testing.T, ctx context.Context, client *http.Client) *mcp.ClientSession {
 	t.Helper()

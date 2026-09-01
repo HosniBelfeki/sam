@@ -33,10 +33,13 @@
 // convenience for clients that look a name up before connecting, not a control:
 // an agent that resolves some other way is routed through the tun regardless.
 //
-// The TCP stack is gVisor's, via tun2socks. Writing one would mean writing
-// retransmission, windowing and teardown, and getting those subtly wrong shows
-// up as tail latency under load, which is exactly where this has to be
-// trusted.
+// The datapath is the tun2connect library: gVisor's TCP stack terminating the
+// sandbox's flows in userspace, each one leaving for the boundary as a named
+// HTTP CONNECT (RFC 9110) or connect-udp (RFC 9298) tunnel, with a virtual DNS
+// preserving the name the agent asked for. Writing a TCP stack here would mean
+// writing retransmission, windowing and teardown, and getting those subtly
+// wrong shows up as tail latency under load, which is exactly where this has
+// to be trusted.
 package main
 
 import (
@@ -53,28 +56,34 @@ import (
 	"time"
 
 	"github.com/vishvananda/netlink"
-	"github.com/xjasonlyu/tun2socks/v2/engine"
-	"github.com/xjasonlyu/tun2socks/v2/tunnel"
+	"golang.org/x/sys/unix"
+
+	"github.com/aojea/agents.net/tun2connect/pkg/tun2connect"
 )
 
 const (
 	tunName = "tun0"
+	tunMTU  = 1500
 
-	// Addresses inside the sandbox are link-local because that is what these
-	// addresses are for: RFC 3927 describes a single link with no router, and
-	// a tun to the boundary is exactly that. A sandbox numbered out of
-	// 10.0.0.0/8 will eventually be deployed somewhere that already uses it.
-	tunIP   = "169.254.1.1"
-	tunAddr = tunIP + "/30"
+	// The guest addresses sit at the TOP of tun2connect's synthetic pools:
+	// the virtual DNS invents answers from the bottom up, so they can never
+	// collide with one. The /10 and /64 prefix lengths make the kernel
+	// install connected routes covering every synthetic address, so no
+	// explicit route entries are needed.
+	//
+	// v4 is CGNAT space (RFC 6598) rather than the link-local range this used
+	// to number from: link-local would be leak-proof at the first router, but
+	// SSRF guards in HTTP clients commonly block 169.254/16, which broke
+	// legitimate egress. v6 is the RFC 6666 discard-only prefix, so a packet
+	// that ever escapes through a stray interface is blackholed rather than
+	// delivered.
+	tunAddr4 = "100.127.255.254/10"
+	tunAddr6 = "100::ffff:ffff:ffff:fffe/64"
 
-	// The resolver answers on the tun's own address, which is the one address
-	// this sandbox is certain to have. Nothing outside can reach it: a
-	// link-local address is not routed anywhere.
-	dnsAddr = tunIP + ":53"
-
-	// Disjoint from tunAddr: an overlap would hand out the interface's own
-	// address as a name's answer, which fails in a way nobody enjoys reading.
-	virtualPool = "169.254.64.0/18"
+	// The resolver's address is any pool address routed through the tun: the
+	// engine answers UDP port 53 locally wherever the query is sent, so it
+	// needs no route or listener of its own.
+	resolverIP = "100.127.255.253"
 )
 
 func main() {
@@ -193,11 +202,7 @@ func run(createNS bool, ingressSocket, boundarySocket, cmdName string, cmdArgs [
 		log.Fatalf("this sandbox has no way out: %v", err)
 	}
 
-	names, err := newResolver(virtualPool)
-	if err != nil {
-		log.Fatalf("resolver: %v", err)
-	}
-	if err := setupNetwork(ctx, boundarySocket, names); err != nil {
+	if err := setupNetwork(ctx, boundarySocket); err != nil {
 		log.Fatalf("set up sandbox network: %v", err)
 	}
 
@@ -225,75 +230,112 @@ func run(createNS bool, ingressSocket, boundarySocket, cmdName string, cmdArgs [
 // stack rather than running a separate binary, so a sandbox image can be the
 // agent and nothing else. That is not tidiness: image size is what decides how
 // many agents fit on a host.
-func setupNetwork(ctx context.Context, boundarySocket string, names *resolver) error {
+func setupNetwork(ctx context.Context, boundarySocket string) error {
 	// As PID 1 in a microVM nothing else has done this, and a sandbox without
 	// loopback breaks things that have no business caring about the network.
 	if lo, err := netlink.LinkByName("lo"); err == nil {
 		_ = netlink.LinkSetUp(lo)
 	}
 
-	tun := &netlink.Tuntap{
-		LinkAttrs: netlink.LinkAttrs{Name: tunName},
-		Mode:      netlink.TUNTAP_MODE_TUN,
-	}
-	if err := netlink.LinkAdd(tun); err != nil {
+	fd, err := openTUN(tunName)
+	if err != nil {
 		return fmt.Errorf("create %s: %w\n%s", tunName, err, describeTunFailure(err))
 	}
-	if err := netlink.LinkSetUp(tun); err != nil {
+
+	link, err := netlink.LinkByName(tunName)
+	if err != nil {
+		return fmt.Errorf("find %s after creating it: %w", tunName, err)
+	}
+	for _, cidr := range []string{tunAddr4, tunAddr6} {
+		addr, err := netlink.ParseAddr(cidr)
+		if err != nil {
+			return fmt.Errorf("parse %s: %w", cidr, err)
+		}
+		if err := netlink.AddrAdd(link, addr); err != nil {
+			return fmt.Errorf("address %s with %s: %w", tunName, cidr, err)
+		}
+	}
+	if err := netlink.LinkSetUp(link); err != nil {
 		return fmt.Errorf("bring up %s: %w", tunName, err)
 	}
 
-	addr, err := netlink.ParseAddr(tunAddr)
-	if err != nil {
-		return fmt.Errorf("parse %s: %w", tunAddr, err)
-	}
-	if err := netlink.AddrAdd(tun, addr); err != nil {
-		return fmt.Errorf("address %s: %w", tunName, err)
-	}
-
-	// A device route with no gateway: nothing on the far side of this link has
+	// Default routes with no gateway: nothing on the far side of this link has
 	// an address worth naming, and everything goes the same way regardless.
-	// The destination has to be spelled out rather than left nil, which
-	// netlink reads as "no route specified at all".
-	if err := netlink.RouteAdd(&netlink.Route{
-		LinkIndex: tun.Attrs().Index,
-		Scope:     netlink.SCOPE_LINK,
-		Dst:       &net.IPNet{IP: net.IPv4zero, Mask: net.CIDRMask(0, 32)},
-	}); err != nil {
-		return fmt.Errorf("default route via %s: %w", tunName, err)
+	// The connected /10 and /64 routes already cover every synthetic address,
+	// but the default is what keeps the promise that routing does not ask: an
+	// agent that hardcodes its own resolver still has the query answered by
+	// the engine, and a stray dial to a literal address terminates at the
+	// boundary as a visible refusal rather than a kernel errno. The
+	// destination has to be spelled out rather than left nil, which netlink
+	// reads as "no route specified at all".
+	for _, dst := range []*net.IPNet{
+		{IP: net.IPv4zero, Mask: net.CIDRMask(0, 32)},
+		{IP: net.IPv6zero, Mask: net.CIDRMask(0, 128)},
+	} {
+		if err := netlink.RouteAdd(&netlink.Route{
+			LinkIndex: link.Attrs().Index,
+			Scope:     netlink.SCOPE_LINK,
+			Dst:       dst,
+		}); err != nil {
+			return fmt.Errorf("default route for %s via %s: %w", dst, tunName, err)
+		}
 	}
-
-	dns, err := net.ListenPacket("udp", dnsAddr)
-	if err != nil {
-		return fmt.Errorf("resolver on %s: %w", dnsAddr, err)
-	}
-	go names.serveDNS(dns)
-	go func() {
-		<-ctx.Done()
-		_ = dns.Close()
-	}()
 
 	// A pod can mount the file over instead, in which case it is read-only and
 	// already says this.
 	if !resolvConfAlreadyOurs() {
-		if err := os.WriteFile("/etc/resolv.conf", []byte("nameserver "+tunIP+"\n"), 0o644); err != nil {
+		if err := os.WriteFile("/etc/resolv.conf", []byte("nameserver "+resolverIP+"\n"), 0o644); err != nil {
 			// Not fatal: resolution is a convenience here, not the control.
 			log.Printf("could not write /etc/resolv.conf, name resolution may fail: %v", err)
 		}
 	}
 
-	// direct:// is a placeholder the engine insists on. The real dialer is
-	// installed below, before the agent exists to send anything, so nothing
-	// can take the placeholder path.
-	engine.Insert(&engine.Key{
-		Device:   "tun://" + tunName,
-		Proxy:    "direct://",
-		LogLevel: "warn",
+	dev, err := tun2connect.NewTUNDevice(fd, tunMTU)
+	if err != nil {
+		return fmt.Errorf("link endpoint on %s: %w", tunName, err)
+	}
+	engine, err := tun2connect.New(tun2connect.Config{
+		Device: dev,
+		Dialer: &tun2connect.BoundaryClient{
+			DialBoundary: func(ctx context.Context) (net.Conn, error) {
+				return dialBoundary(ctx, boundarySocket)
+			},
+		},
+		DNS:       tun2connect.NewVirtualDNS(),
+		EnableUDP: true,
 	})
-	engine.Start()
-
-	tunnel.T().SetProxy(&boundaryProxy{socket: boundarySocket, resolver: names})
+	if err != nil {
+		return fmt.Errorf("start the userspace TCP stack: %w", err)
+	}
+	go func() {
+		<-ctx.Done()
+		engine.Close()
+	}()
 	return nil
+}
+
+// openTUN opens the clone device and names the interface. The fd is what the
+// engine reads and writes; the interface is what the kernel routes into.
+func openTUN(name string) (int, error) {
+	fd, err := unix.Open(tunDevice, unix.O_RDWR, 0)
+	if err != nil {
+		return -1, fmt.Errorf("open %s: %w", tunDevice, err)
+	}
+	ifr, err := unix.NewIfreq(name)
+	if err != nil {
+		_ = unix.Close(fd)
+		return -1, err
+	}
+	ifr.SetUint16(unix.IFF_TUN | unix.IFF_NO_PI)
+	if err := unix.IoctlIfreq(fd, unix.TUNSETIFF, ifr); err != nil {
+		_ = unix.Close(fd)
+		return -1, fmt.Errorf("TUNSETIFF %s: %w", name, err)
+	}
+	if err := unix.SetNonblock(fd, true); err != nil {
+		_ = unix.Close(fd)
+		return -1, err
+	}
+	return fd, nil
 }
 
 // runAgent starts the agent and reports the exit status it should be judged by.

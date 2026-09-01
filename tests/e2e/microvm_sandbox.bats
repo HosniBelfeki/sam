@@ -121,12 +121,12 @@ fc_put() {
 
   kill "${boundary_pid}" 2>/dev/null
 
-  # A SOCKS5 greeting, which is what nano-init opens with. Anything else means
-  # something arrived but it was not the boundary protocol.
-  run head -c 1 "${FC_DIR}/arrived"
+  # A CONNECT request line, which is what nano-init opens with. Anything else
+  # means something arrived but it was not the boundary protocol.
+  run head -c 7 "${FC_DIR}/arrived"
   [[ "$status" -eq 0 ]]
-  printf '%s' "$output" | od -An -tu1 | grep -qE '\<5\>' || {
-    echo "first byte was not a SOCKS5 version marker:"
+  [[ "$output" == "CONNECT" ]] || {
+    echo "the first bytes were not a CONNECT request line:"
     od -An -tx1 -N16 "${FC_DIR}/arrived"
     false
   }
