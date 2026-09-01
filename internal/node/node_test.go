@@ -295,16 +295,27 @@ func TestVerifyBiscuitRejectsExpiredToken(t *testing.T) {
 	}
 
 	want := time.Now().Add(time.Hour)
-	_, expiry, err := node.verifyBiscuit(mint(want), remotePeer)
+	trustedKeys := node.getTrustedPublicKeys()
+	b, verifyingKey, err := identity.VerifyBiscuitAndGetKey(mint(want), remotePeer, trustedKeys, node.BiscuitTimeout)
 	if err != nil {
 		t.Fatalf("valid token rejected: %v", err)
+	}
+	expiry := time.Now().Add(node.BiscuitTimeout)
+	if authorizer, authErr := b.Authorizer(verifyingKey, identity.AuthorizerOptions(node.BiscuitTimeout)...); authErr == nil {
+		identity.EnforceExpiration(authorizer)
+		authorizer.AddPolicy(api.AllowIfTruePolicy)
+		if authErr := authorizer.Authorize(); authErr == nil {
+			if e, expErr := identity.ExpirationOf(authorizer); expErr == nil {
+				expiry = e
+			}
+		}
 	}
 	// The admission is cached against this instant, so it has to be the token's.
 	if skew := expiry.Sub(want); skew < -time.Second || skew > time.Second {
 		t.Errorf("reported expiry %v, want ~%v", expiry, want)
 	}
 
-	if _, _, err := node.verifyBiscuit(mint(time.Now().Add(-time.Hour)), remotePeer); err == nil {
+	if _, _, err := identity.VerifyBiscuitAndGetKey(mint(time.Now().Add(-time.Hour)), remotePeer, trustedKeys, node.BiscuitTimeout); err == nil {
 		t.Fatal("expired token admitted on the peer-authentication path")
 	}
 }

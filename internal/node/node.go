@@ -891,19 +891,14 @@ func (n *SamNode) performRouterAuthHandshake(s network.Stream, biscuitBytes []by
 		return false, fmt.Errorf("%w: remote router returned empty biscuit", ErrFatalAuth)
 	}
 
-	n.keysMu.RLock()
-	var trustedKeys []ed25519.PublicKey
-	for _, tk := range n.trustedKeys {
-		trustedKeys = append(trustedKeys, tk.Key)
-	}
-	n.keysMu.RUnlock()
+	trustedKeys := n.getTrustedPublicKeys()
 
 	if len(trustedKeys) == 0 {
 		return false, fmt.Errorf("%w: no trusted control plane keys loaded", ErrFatalAuth)
 	}
 
 	// Verify the router's biscuit using the control plane keys
-	b, verifiedKey, err := identity.VerifyBiscuitAndGetKey(resp.Biscuit, expectedRouter, trustedKeys, n.BiscuitTimeout)
+	b, verifyingKey, err := identity.VerifyBiscuitAndGetKey(resp.Biscuit, expectedRouter, trustedKeys, n.BiscuitTimeout)
 	if err != nil {
 		return false, fmt.Errorf("%w: failed to verify router biscuit: %w", ErrFatalAuth, err)
 	}
@@ -911,7 +906,7 @@ func (n *SamNode) performRouterAuthHandshake(s network.Stream, biscuitBytes []by
 	// Enforce role("router") inside the biscuit, under the key that verified:
 	// with several valid keys loaded (rotation grace) the first is not
 	// necessarily the signer.
-	authorizer, err := b.Authorizer(verifiedKey, identity.AuthorizerOptions(n.BiscuitTimeout)...)
+	authorizer, err := b.Authorizer(verifyingKey, identity.AuthorizerOptions(n.BiscuitTimeout)...)
 	if err != nil {
 		return false, fmt.Errorf("authorizer instantiation failed: %w", err)
 	}
@@ -1508,6 +1503,16 @@ func (n *SamNode) startDiscovery(ctx context.Context, meshID string, interval ti
 	}
 }
 
+func (n *SamNode) getTrustedPublicKeys() []ed25519.PublicKey {
+	n.keysMu.RLock()
+	defer n.keysMu.RUnlock()
+	keys := make([]ed25519.PublicKey, 0, len(n.trustedKeys))
+	for _, tk := range n.trustedKeys {
+		keys = append(keys, tk.Key)
+	}
+	return keys
+}
+
 // HandleAuthHandshake is the core libp2p stream handler for /sam/auth/1.0.0.
 // This is the "Admission Office" of the mesh node.
 func (n *SamNode) HandleAuthHandshake(s network.Stream) {
@@ -1539,7 +1544,7 @@ func (n *SamNode) HandleAuthHandshake(s network.Stream) {
 		return
 	}
 
-	b, expiry, err := n.verifyBiscuit(exchange.Biscuit, remotePeer)
+	b, verifyingKey, err := identity.VerifyBiscuitAndGetKey(exchange.Biscuit, remotePeer, n.getTrustedPublicKeys(), n.BiscuitTimeout)
 	if err != nil {
 		logger.Warnf("[AuthN] Authorization failed for %s: %v", remotePeer, err)
 		return
@@ -1549,6 +1554,17 @@ func (n *SamNode) HandleAuthHandshake(s network.Stream) {
 	if err := identity.RequireAuthorityBinding(b, remotePeer); err != nil {
 		logger.Warnf("[AuthN] %v", err)
 		return
+	}
+
+	expiry := time.Now().Add(n.BiscuitTimeout)
+	if authorizer, authErr := b.Authorizer(verifyingKey, identity.AuthorizerOptions(n.BiscuitTimeout)...); authErr == nil {
+		identity.EnforceExpiration(authorizer)
+		authorizer.AddPolicy(api.AllowIfTruePolicy)
+		if authErr := authorizer.Authorize(); authErr == nil {
+			if e, expErr := identity.ExpirationOf(authorizer); expErr == nil {
+				expiry = e
+			}
+		}
 	}
 
 	n.authPeers.Store(remotePeer, expiry)
@@ -1561,47 +1577,6 @@ func (n *SamNode) HandleAuthHandshake(s network.Stream) {
 	if err := writer.WriteMsg(respBytes); err != nil {
 		logger.Errorf("[AuthN] Failed to write mutual ACK to %s: %v", remotePeer, err)
 	}
-}
-
-func (n *SamNode) verifyBiscuit(biscuitData []byte, remotePeer peer.ID) (*biscuit.Biscuit, time.Time, error) {
-	b, err := biscuit.Unmarshal(biscuitData)
-	if err != nil {
-		return nil, time.Time{}, fmt.Errorf("malformed biscuit: %w", err)
-	}
-
-	n.keysMu.RLock()
-	keys := n.trustedKeys
-	n.keysMu.RUnlock()
-
-	var lastErr error
-	for _, tk := range keys {
-		if len(tk.Key) != ed25519.PublicKeySize {
-			continue
-		}
-		authorizer, err := b.Authorizer(tk.Key, identity.AuthorizerOptions(n.BiscuitTimeout)...)
-		if err != nil {
-			lastErr = fmt.Errorf("authorizer error: %w", err)
-			continue
-		}
-
-		identity.EnforceExpiration(authorizer)
-		authorizer.AddPolicy(api.AllowIfTruePolicy)
-
-		if err := authorizer.Authorize(); err == nil {
-			expiry, err := identity.ExpirationOf(authorizer)
-			if err != nil {
-				return nil, time.Time{}, err
-			}
-			return b, expiry, nil
-		} else {
-			lastErr = fmt.Errorf("authorize error: %w", err)
-		}
-	}
-
-	if lastErr != nil {
-		return nil, time.Time{}, fmt.Errorf("no valid key found (last error: %v)", lastErr)
-	}
-	return nil, time.Time{}, fmt.Errorf("no valid key found")
 }
 
 func (n *SamNode) RegisterService(ctx context.Context, req *api.RegisterServiceRequest) error {
