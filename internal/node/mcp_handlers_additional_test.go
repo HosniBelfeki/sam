@@ -173,9 +173,13 @@ func TestConnectivityStats(t *testing.T) {
 	defer cleanup1()
 
 	stats := node1.connectivityStats(context.Background(), "")
+	if stats.ConnectedPeers < 0 || stats.TotalKnownPeers < 0 {
+		t.Fatalf("nonsensical peer counts: %+v", stats)
+	}
 
-	if _, ok := stats["connected_peers"]; !ok {
-		t.Fatalf("missing connected_peers in stats")
+	invalid := node1.connectivityStats(context.Background(), "not-a-peer-id")
+	if invalid.PingError == nil || !*invalid.PingError || invalid.PingErrorMsg != "invalid peer id" {
+		t.Fatalf("expected invalid peer id ping error, got %+v", invalid)
 	}
 }
 
@@ -185,9 +189,8 @@ func TestTokenInfo(t *testing.T) {
 	defer cleanup1()
 
 	info := node1.tokenInfo()
-
-	if _, ok := info["has_token"].(bool); !ok {
-		t.Fatalf("expected has_token boolean, got %v", info["has_token"])
+	if info.HasToken {
+		t.Fatalf("bare node should have no token, got %+v", info)
 	}
 }
 
@@ -197,9 +200,8 @@ func TestNetworkInfo(t *testing.T) {
 	defer cleanup1()
 
 	info := node1.networkInfo()
-
-	if _, ok := info["listen_addresses"]; !ok {
-		t.Fatalf("missing listen_addresses")
+	if len(info.ListenAddresses) == 0 {
+		t.Fatalf("expected listen addresses, got %+v", info)
 	}
 }
 
