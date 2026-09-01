@@ -213,7 +213,7 @@ attenuation:
 
   # Explicitly connect Node 2 to Node 1 to avoid "no addresses" error
   local node1_addr="/dns4/${MESH_PREFIX}-node-1/tcp/5002/p2p/${TARGET_PEER_ID}"
-  docker run --rm --network "${MESH_NETWORK}" "${MESH_RUNTIME_IMAGE}" mcp-client -url "http://${MESH_PREFIX}-node-2:8080/mcp" -tool "connect_peer" -args "{\"peer_addr\":\"${node1_addr}\"}" >/dev/null
+  mesh_connect_peer 2 "${node1_addr}" >/dev/null
 }
 
 teardown() {

@@ -17,6 +17,9 @@ package node
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/sam/api"
@@ -136,7 +139,7 @@ func TestHandleGetMeshInfo(t *testing.T) {
 	}
 }
 
-func TestHandleConnectPeer(t *testing.T) {
+func TestConnectPeer(t *testing.T) {
 	ctx := context.Background()
 	node, cleanup := startBareNode(t, ctx)
 	defer cleanup()
@@ -144,14 +147,9 @@ func TestHandleConnectPeer(t *testing.T) {
 	nodeB, cleanupB := startBareNode(t, ctx)
 	defer cleanupB()
 
-	res, _, err := node.handleConnectPeer(context.Background(), &mcp.CallToolRequest{}, ConnectPeerParams{
-		PeerAddr: nodeB.Host.Addrs()[0].String() + "/p2p/" + nodeB.Host.ID().String(),
-	})
+	err := node.connectPeer(context.Background(), nodeB.Host.Addrs()[0].String()+"/p2p/"+nodeB.Host.ID().String())
 	if err != nil {
-		t.Fatalf("handleConnectPeer failed: %v", err)
-	}
-	if res.Content[0].(*mcp.TextContent).Text != "Connected" {
-		t.Errorf("expected Connected")
+		t.Fatalf("connectPeer failed: %v", err)
 	}
 }
 
@@ -169,111 +167,89 @@ func TestHandleCallRemoteServer(t *testing.T) {
 	}
 }
 
-// TestCheckConnectivityHandler tests the check_connectivity tool.
-func TestCheckConnectivityHandler(t *testing.T) {
+// TestConnectivityStats tests the logic behind GET /debug/connectivity.
+func TestConnectivityStats(t *testing.T) {
 	node1, cleanup1 := startBareNode(t, context.Background())
 	defer cleanup1()
 
-	res, _, err := node1.handleCheckConnectivity(context.Background(), nil, CheckConnectivityParams{})
-	if err != nil {
-		t.Fatalf("handleCheckConnectivity failed: %v", err)
-	}
-
-	if len(res.Content) != 1 {
-		t.Fatalf("expected 1 content block, got %d", len(res.Content))
-	}
-
-	tc, ok := res.Content[0].(*mcp.TextContent)
-	if !ok {
-		t.Fatalf("expected TextContent")
-	}
-
-	var stats map[string]any
-	if err := json.Unmarshal([]byte(tc.Text), &stats); err != nil {
-		t.Fatalf("failed to parse JSON: %v", err)
-	}
+	stats := node1.connectivityStats(context.Background(), "")
 
 	if _, ok := stats["connected_peers"]; !ok {
 		t.Fatalf("missing connected_peers in stats")
 	}
 }
 
-// TestGetTokenInfoHandler tests the get_token_info tool.
-func TestGetTokenInfoHandler(t *testing.T) {
+// TestTokenInfo tests the logic behind GET /debug/token-info.
+func TestTokenInfo(t *testing.T) {
 	node1, cleanup1 := startBareNode(t, context.Background())
 	defer cleanup1()
 
-	res, _, err := node1.handleGetTokenInfo(context.Background(), nil, GetTokenInfoParams{})
-	if err != nil {
-		t.Fatalf("handleGetTokenInfo failed: %v", err)
-	}
+	info := node1.tokenInfo()
 
-	tc, ok := res.Content[0].(*mcp.TextContent)
-	if !ok {
-		t.Fatalf("expected TextContent")
-	}
-
-	var info map[string]any
-	if err := json.Unmarshal([]byte(tc.Text), &info); err != nil {
-		t.Fatalf("failed to parse JSON: %v", err)
-	}
-
-	// Should have has_token=false initially since no token is built in setupTestNode explicitly for the node's store.
-	// Wait, setupTestNode might set a token?
-	if hasToken, ok := info["has_token"].(bool); !ok {
+	if _, ok := info["has_token"].(bool); !ok {
 		t.Fatalf("expected has_token boolean, got %v", info["has_token"])
-	} else if hasToken {
-		// It might be true if setupTestNode saves a biscuit.
-		_ = hasToken
 	}
 }
 
-// TestGetNetworkInfoHandler tests the get_network_info tool.
-func TestGetNetworkInfoHandler(t *testing.T) {
+// TestNetworkInfo tests the logic behind GET /debug/network-info.
+func TestNetworkInfo(t *testing.T) {
 	node1, cleanup1 := startBareNode(t, context.Background())
 	defer cleanup1()
 
-	res, _, err := node1.handleGetNetworkInfo(context.Background(), nil, GetNetworkInfoParams{})
-	if err != nil {
-		t.Fatalf("handleGetNetworkInfo failed: %v", err)
-	}
-
-	tc, ok := res.Content[0].(*mcp.TextContent)
-	if !ok {
-		t.Fatalf("expected TextContent")
-	}
-
-	var info map[string]any
-	if err := json.Unmarshal([]byte(tc.Text), &info); err != nil {
-		t.Fatalf("failed to parse JSON: %v", err)
-	}
+	info := node1.networkInfo()
 
 	if _, ok := info["listen_addresses"]; !ok {
 		t.Fatalf("missing listen_addresses")
 	}
 }
 
-// TestGetRecentLogsHandler tests the get_recent_logs tool.
-func TestGetRecentLogsHandler(t *testing.T) {
+// TestDebugHandlerHTTP exercises the /debug mux itself: routing, method
+// gating, and request validation.
+func TestDebugHandlerHTTP(t *testing.T) {
 	node1, cleanup1 := startBareNode(t, context.Background())
 	defer cleanup1()
 
-	res, _, err := node1.handleGetRecentLogs(context.Background(), nil, GetRecentLogsParams{})
-	if err != nil {
-		t.Fatalf("handleGetRecentLogs failed: %v", err)
+	handler := newDebugHandler(node1)
+
+	get := func(path string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		return rec
 	}
 
-	tc, ok := res.Content[0].(*mcp.TextContent)
-	if !ok {
-		t.Fatalf("expected TextContent")
+	for _, path := range []string{"/debug/mesh-info", "/debug/connectivity", "/debug/network-info", "/debug/token-info", "/debug/logs"} {
+		rec := get(path)
+		if rec.Code != http.StatusOK {
+			t.Errorf("GET %s: got %d, want 200 (body: %s)", path, rec.Code, rec.Body.String())
+			continue
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+			t.Errorf("GET %s: invalid JSON: %v", path, err)
+		}
 	}
 
-	var data map[string]any
-	if err := json.Unmarshal([]byte(tc.Text), &data); err != nil {
-		t.Fatalf("failed to parse JSON: %v", err)
+	rec := get("/debug/connect-peer")
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("GET /debug/connect-peer: got %d, want 405", rec.Code)
 	}
 
-	if _, ok := data["logs"]; !ok {
-		t.Fatalf("missing logs")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/debug/connect-peer", strings.NewReader("not json")))
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("POST /debug/connect-peer with bad body: got %d, want 400", rec.Code)
+	}
+
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/debug/connect-peer", strings.NewReader("{}")))
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("POST /debug/connect-peer without peer_addr: got %d, want 400", rec.Code)
+	}
+
+	// A half-built node refuses loudly instead of panicking.
+	rec = httptest.NewRecorder()
+	newDebugHandler(nil).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/debug/logs", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("GET /debug/logs on nil node: got %d, want 503", rec.Code)
 	}
 }

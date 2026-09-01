@@ -194,21 +194,12 @@ roles:
 	node2TCPAddr := matchesAddr[1]
 
 	// 6. Request Node 1 to connect to Node 2
-	connectArgs := fmt.Sprintf(`{"peer_addr":"%s/p2p/%s"}`, node2TCPAddr, node2PeerID)
-	stdout, stderr, err := runCommand(t, repoRoot(t), 5*time.Second, nil, "",
-		clientBin,
-		"-url", fmt.Sprintf("http://127.0.0.1:%d/mcp", node1ApiPort),
-		"-token", "node1-token",
-		"-tool", "connect_peer",
-		"-args", connectArgs,
-	)
-	if err != nil {
-		t.Fatalf("connect_peer failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
-	}
+	connectPeerWithToken(t, fmt.Sprintf("127.0.0.1:%d", node1ApiPort), "node1-token",
+		fmt.Sprintf("%s/p2p/%s", node2TCPAddr, node2PeerID))
 
 	// Verify Node 1 is connected to Node 2
 	time.Sleep(1 * time.Second)
-	stdout, stderr, err = runCommand(t, repoRoot(t), 5*time.Second, nil, "",
+	stdout, stderr, err := runCommand(t, repoRoot(t), 5*time.Second, nil, "",
 		clientBin,
 		"-url", fmt.Sprintf("http://127.0.0.1:%d/mcp", node1ApiPort),
 		"-token", "node1-token",

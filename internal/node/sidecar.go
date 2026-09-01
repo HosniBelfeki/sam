@@ -78,6 +78,10 @@ func StartSidecarServer(node *SamNode, addr, socketPath, token, certFile, keyFil
 		handlePeerEvidence(node, w, r)
 	})))))
 
+	// Operator diagnostics (#318): agent-invisible, and deliberately not behind
+	// withMeshConnection — they must answer while the mesh is unreachable.
+	mux.Handle("/debug/", withAuth(token, true, newDebugHandler(node)))
+
 	// Mount Egress Proxy. allowAuthorizationFallback=false is required here: this
 	// handler forwards Authorization to the destination service, so it must never
 	// also accept it as the local gate credential (would leak the sidecar token off-node).

@@ -15,6 +15,8 @@ Pick the path that matches the need:
   [Bootstrap A Node](#bootstrap-a-node).
 - The task needs a plain HTTP call to the node, such as inference or a
   `local_proxy_url`: [Talk To The Node Over HTTP](#talk-to-the-node-over-http).
+- The task needs node diagnostics, such as logs or connectivity:
+  [Diagnose The Node](#diagnose-the-node).
 - The task needs a remote tool or capability:
   [Inspect The Mesh](#inspect-the-mesh).
 - The task needs a model completion:
@@ -99,6 +101,19 @@ curl http://127.0.0.1:8080/v1/models -H "X-Sam-Authentication: Bearer <token>"
 Never print the token or echo it into the transcript. `Authorization` is not the
 node's credential: send it only when the destination service needs its own, and
 it passes through to that service untouched.
+
+## Diagnose The Node
+
+Node diagnostics (logs, connectivity, network and token info, connecting to a
+peer by address) are not MCP tools. Discover them instead of memorizing them:
+
+```bash
+sam-node debug --help
+```
+
+Then run the subcommand that matches the need. They talk to the node over its
+Unix socket, so no token is involved, and each prints the node's JSON response,
+so the output composes with `jq`.
 
 ## Inspect The Mesh
 

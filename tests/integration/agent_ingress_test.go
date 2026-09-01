@@ -68,7 +68,7 @@ func TestAgentIngressCUJ(t *testing.T) {
 
 	addrB := waitForPeerInfoInLog(t, filepath.Join(homeB, "node.log"))
 	peerB := extractPeerID(addrB)
-	callMCP(t, apiAddrA, "connect_peer", map[string]any{"peer_addr": addrB})
+	connectPeer(t, apiAddrA, addrB)
 	waitForDHTPeers(t, apiAddrB)
 
 	// The agent's own server, inside its sandbox.

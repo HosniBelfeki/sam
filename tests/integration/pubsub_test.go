@@ -137,7 +137,7 @@ func TestPubSubTools(t *testing.T) {
 	// Force Node 1 to connect to Node 2
 	addr2 := waitForPeerInfoInLog(t, filepath.Join(tmpHome2, "node2.log"))
 	t.Logf("Node 2 address: %s", addr2)
-	callTool(mcpAddr1, "connect_peer", map[string]any{"peer_addr": addr2})
+	connectPeer(t, mcpAddr1, addr2)
 
 	// Node 1 subscribes to topic "test-topic"
 	subscribeResult1 := callTool(mcpAddr1, "subscribe_topic", map[string]any{

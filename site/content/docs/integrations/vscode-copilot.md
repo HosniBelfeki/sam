@@ -338,9 +338,8 @@ The real output:
 
 ```text
 mesh offered model: openrouter/auto
-mesh granted 15 tools: call_remote_tool, check_connectivity, connect_peer,
-  describe_remote_tool, discover_remote_services, find_remote_tools,
-  get_mesh_info, get_network_info, get_recent_logs, get_token_info,
+mesh granted 10 tools: call_remote_tool, describe_remote_tool,
+  discover_remote_services, find_remote_tools, get_mesh_info,
   list_local_services, mesh_pubsub_broadcast, poll_messages, send_message,
   subscribe_topic
 step 1: get_mesh_info({})

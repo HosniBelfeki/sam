@@ -58,7 +58,7 @@ teardown() {
 
   echo "[$(date +%T)] Connecting Node 1 to Node 2"
   local node2_addr="/dns4/${MESH_PREFIX}-node-2/tcp/5002/p2p/${node2_peer_id}"
-  run docker run --rm --network "${MESH_NETWORK}" "${MESH_RUNTIME_IMAGE}" mcp-client -url "http://${MESH_PREFIX}-node-1:8080/mcp" -tool "connect_peer" -args "{\"peer_addr\":\"${node2_addr}\"}"
+  run mesh_connect_peer 1 "${node2_addr}"
   [[ "$status" -eq 0 ]]
   mesh_wait_for_peer_connection 1 "${node2_peer_id}" 20
 
@@ -110,11 +110,7 @@ teardown() {
 
   echo "[$(date +%T)] Connecting Node 1 to Node 2"
   local node2_addr="/dns4/${MESH_PREFIX}-node-2/tcp/5002/p2p/${node2_peer_id}"
-  run docker run --rm --network "${MESH_NETWORK}" \
-    "${MESH_RUNTIME_IMAGE}" mcp-client \
-    -url "http://${MESH_PREFIX}-node-1:8080/mcp" \
-    -tool "connect_peer" \
-    -args "{\"peer_addr\":\"${node2_addr}\"}"
+  run mesh_connect_peer 1 "${node2_addr}"
   [[ "$status" -eq 0 ]]
   mesh_wait_for_peer_connection 1 "${node2_peer_id}" 20
 
@@ -159,11 +155,7 @@ teardown() {
 
   echo "[$(date +%T)] Connecting Node 1 to Node 2"
   local node2_addr="/dns4/${MESH_PREFIX}-node-2/tcp/5002/p2p/${node2_peer_id}"
-  run docker run --rm --network "${MESH_NETWORK}" \
-    "${MESH_RUNTIME_IMAGE}" mcp-client \
-    -url "http://${MESH_PREFIX}-node-1:8080/mcp" \
-    -tool "connect_peer" \
-    -args "{\"peer_addr\":\"${node2_addr}\"}"
+  run mesh_connect_peer 1 "${node2_addr}"
   [[ "$status" -eq 0 ]]
   mesh_wait_for_peer_connection 1 "${node2_peer_id}" 20
 
@@ -222,11 +214,7 @@ teardown() {
 
   echo "[$(date +%T)] Connecting Node 1 to Node 2"
   local node2_addr="/dns4/${MESH_PREFIX}-node-2/tcp/5002/p2p/${node2_peer_id}"
-  run docker run --rm --network "${MESH_NETWORK}" \
-    "${MESH_RUNTIME_IMAGE}" mcp-client \
-    -url "http://${MESH_PREFIX}-node-1:8080/mcp" \
-    -tool "connect_peer" \
-    -args "{\"peer_addr\":\"${node2_addr}\"}"
+  run mesh_connect_peer 1 "${node2_addr}"
   [[ "$status" -eq 0 ]]
   mesh_wait_for_peer_connection 1 "${node2_peer_id}" 20
 
