@@ -29,6 +29,7 @@ import (
 	"github.com/google/sam/internal/identity"
 	golog "github.com/ipfs/go-log/v2"
 	"github.com/libp2p/go-libp2p/core/crypto"
+	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/multiformats/go-multiaddr"
 	"google.golang.org/protobuf/proto"
 )
@@ -62,39 +63,50 @@ func GetOrGenerateKey(s *Store) crypto.PrivKey {
 
 func (n *SamNode) Enroll(ctx context.Context, controlPlaneURL string, jwt string) error {
 	pubKey := n.Host.Peerstore().PubKey(n.Host.ID())
+	enrollResp, err := n.enrollHTTP(ctx, controlPlaneURL, jwt, n.Host.ID(), pubKey)
+	if err != nil {
+		return err
+	}
+
+	return n.connectToRouters(ctx, enrollResp.RouterAddresses)
+}
+
+// enrollHTTP performs the HTTP half of enrollment for an explicit peer
+// identity, so it can run before the libp2p host exists (startup recovery).
+func (n *SamNode) enrollHTTP(ctx context.Context, controlPlaneURL, jwt string, peerID peer.ID, pubKey crypto.PubKey) (*api.EnrollResponse, error) {
 	pubBytes, err := crypto.MarshalPublicKey(pubKey)
 	if err != nil {
-		return fmt.Errorf("failed to marshal public key: %w", err)
+		return nil, fmt.Errorf("failed to marshal public key: %w", err)
 	}
 
 	req := &api.EnrollRequest{
 		Jwt:           jwt,
-		PeerId:        n.Host.ID().String(),
+		PeerId:        peerID.String(),
 		PublicKey:     pubBytes,
 		RequestedRole: n.config.RequiredRole,
 		Labels:        n.config.Labels, // validated at startup
 	}
 	data, err := proto.Marshal(req)
 	if err != nil {
-		return fmt.Errorf("failed to marshal enroll request: %v", err)
+		return nil, fmt.Errorf("failed to marshal enroll request: %v", err)
 	}
 
 	if !strings.HasPrefix(controlPlaneURL, "http://") && !strings.HasPrefix(controlPlaneURL, "https://") {
-		return fmt.Errorf("control plane address must be an HTTP or HTTPS URL for enrollment: %s", controlPlaneURL)
+		return nil, fmt.Errorf("control plane address must be an HTTP or HTTPS URL for enrollment: %s", controlPlaneURL)
 	}
 	url := controlPlaneURL + "/register"
 	logger.Infof("Enrolling via HTTP at %s", url)
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(data))
 	if err != nil {
-		return fmt.Errorf("failed to create HTTP request: %v", err)
+		return nil, fmt.Errorf("failed to create HTTP request: %v", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/x-protobuf")
 
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(httpReq)
 	if err != nil {
-		return fmt.Errorf("HTTP request failed: %v", err)
+		return nil, fmt.Errorf("HTTP request failed: %v", err)
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
@@ -102,12 +114,29 @@ func (n *SamNode) Enroll(ctx context.Context, controlPlaneURL string, jwt string
 		}
 	}()
 
-	enrollResp, err := n.processEnrollResponse(resp)
+	return n.processEnrollResponse(resp)
+}
+
+// recoverStaleIdentity re-enrolls over HTTP with a JWT obtained from the
+// stored refresh token, keeping the node's PeerID. It must not touch n.Host:
+// it runs before the host exists, and router connection happens in the
+// normal startup path afterwards.
+func (n *SamNode) recoverStaleIdentity(ctx context.Context) error {
+	controlPlaneURL, err := n.Store.LoadControlPlaneURL()
+	if err != nil || controlPlaneURL == "" {
+		return fmt.Errorf("no control plane URL in store")
+	}
+	jwt, err := n.renewWithRefreshToken(ctx, "")
 	if err != nil {
 		return err
 	}
-
-	return n.connectToRouters(ctx, enrollResp.RouterAddresses)
+	privKey := GetOrGenerateKey(n.Store)
+	peerID, err := peer.IDFromPublicKey(privKey.GetPublic())
+	if err != nil {
+		return fmt.Errorf("failed to derive peer ID from stored key: %w", err)
+	}
+	_, err = n.enrollHTTP(ctx, controlPlaneURL, jwt, peerID, privKey.GetPublic())
+	return err
 }
 
 func (n *SamNode) processEnrollResponse(resp *http.Response) (*api.EnrollResponse, error) {
@@ -154,9 +183,7 @@ func (n *SamNode) processEnrollResponse(resp *http.Response) (*api.EnrollRespons
 		return nil, fmt.Errorf("failed to save mesh config: %v", err)
 	}
 
-	n.keysMu.Lock()
-	n.trustedKeys = append(n.trustedKeys, TrustedKey{Key: ed25519.PublicKey(enrollResp.ControlPlanePublicKey), ReceivedAt: time.Now()})
-	n.keysMu.Unlock()
+	n.addTrustedKey(ed25519.PublicKey(enrollResp.ControlPlanePublicKey))
 
 	return &enrollResp, nil
 }
@@ -335,9 +362,7 @@ func (n *SamNode) EnrollBootstrap(ctx context.Context, controlPlaneURL string, b
 		return fmt.Errorf("failed to save mesh config: %v", err)
 	}
 
-	n.keysMu.Lock()
-	n.trustedKeys = append(n.trustedKeys, TrustedKey{Key: ed25519.PublicKey(enrollResp.ControlPlanePublicKey), ReceivedAt: time.Now()})
-	n.keysMu.Unlock()
+	n.addTrustedKey(ed25519.PublicKey(enrollResp.ControlPlanePublicKey))
 
 	// Connect and Auth to router after enrollment to join the mesh
 	if len(enrollResp.RouterAddresses) == 0 {

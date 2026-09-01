@@ -16,12 +16,14 @@ package node
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/libp2p/go-libp2p/core/peer"
 	"go.etcd.io/bbolt"
@@ -42,6 +44,57 @@ func TestStore_NewStore_And_Close(t *testing.T) {
 
 	if err := store.Close(); err != nil {
 		t.Errorf("Failed to close store: %v", err)
+	}
+}
+
+func TestStore_TrustedKeys(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	// Empty store: no keys, no error
+	keys, err := store.LoadTrustedKeys()
+	if err != nil {
+		t.Fatalf("LoadTrustedKeys on empty store: %v", err)
+	}
+	if len(keys) != 0 {
+		t.Fatalf("expected no keys, got %d", len(keys))
+	}
+
+	pub1, _, _ := ed25519.GenerateKey(nil)
+	pub2, _, _ := ed25519.GenerateKey(nil)
+	want := []TrustedKey{
+		{Key: pub1, ReceivedAt: time.Now().Add(-time.Hour).UTC().Truncate(time.Second)},
+		{Key: pub2, ReceivedAt: time.Now().UTC().Truncate(time.Second)},
+	}
+	if err := store.SaveTrustedKeys(want); err != nil {
+		t.Fatalf("SaveTrustedKeys: %v", err)
+	}
+	got, err := store.LoadTrustedKeys()
+	if err != nil {
+		t.Fatalf("LoadTrustedKeys: %v", err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %d keys, want %d", len(got), len(want))
+	}
+	for i := range got {
+		if !got[i].Key.Equal(want[i].Key) || !got[i].ReceivedAt.Equal(want[i].ReceivedAt) {
+			t.Errorf("key %d: got %+v, want %+v", i, got[i], want[i])
+		}
+	}
+
+	// Mesh reset must clear the persisted trust set
+	if err := store.ResetMeshIdentity(); err != nil {
+		t.Fatalf("ResetMeshIdentity: %v", err)
+	}
+	got, err = store.LoadTrustedKeys()
+	if err != nil {
+		t.Fatalf("LoadTrustedKeys after reset: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("expected trust set cleared after mesh reset, got %d keys", len(got))
 	}
 }
 

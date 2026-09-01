@@ -16,15 +16,46 @@ package node
 
 import (
 	"context"
+	"crypto/ed25519"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/sam/api"
 	"google.golang.org/protobuf/proto"
 )
+
+func TestMergeTrustedKeys(t *testing.T) {
+	now := time.Now()
+	earlier := now.Add(-2 * time.Hour)
+	keyA, _, _ := ed25519.GenerateKey(nil)
+	keyB, _, _ := ed25519.GenerateKey(nil)
+	keyC, _, _ := ed25519.GenerateKey(nil)
+
+	existing := []TrustedKey{
+		{Key: keyA, ReceivedAt: earlier},
+		{Key: keyC, ReceivedAt: earlier}, // expired at the CP: absent from /keys
+	}
+	got := mergeTrustedKeys(existing, []ed25519.PublicKey{keyA, keyB}, now)
+
+	if len(got) != 2 {
+		t.Fatalf("expected 2 keys, got %d", len(got))
+	}
+	if !got[0].Key.Equal(keyA) || !got[0].ReceivedAt.Equal(earlier) {
+		t.Errorf("known key must keep its ReceivedAt: got %+v", got[0])
+	}
+	if !got[1].Key.Equal(keyB) || !got[1].ReceivedAt.Equal(now) {
+		t.Errorf("new key must get the sync time: got %+v", got[1])
+	}
+	for _, tk := range got {
+		if tk.Key.Equal(keyC) {
+			t.Error("key expired at the control plane must be dropped")
+		}
+	}
+}
 
 func TestFetchControlPlaneInfo(t *testing.T) {
 	expectedInfo := &api.ControlPlaneInfoResponse{
@@ -106,8 +137,19 @@ func TestSyncMeshConfig(t *testing.T) {
 		t.Fatalf("Failed to marshal info: %v", err)
 	}
 
+	cpPub, _, _ := ed25519.GenerateKey(nil)
+	gracePub, _, _ := ed25519.GenerateKey(nil)
+	keysBody, err := proto.Marshal(&api.KeysResponse{PublicKeys: [][]byte{cpPub, gracePub}})
+	if err != nil {
+		t.Fatalf("Failed to marshal keys: %v", err)
+	}
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
+		if r.URL.Path == "/keys" {
+			_, _ = w.Write(keysBody)
+			return
+		}
 		_, _ = w.Write(body)
 	}))
 	defer server.Close()
@@ -158,6 +200,18 @@ func TestSyncMeshConfig(t *testing.T) {
 	}
 	if string(savedPubKey) != string(testPubKey) {
 		t.Errorf("Expected saved pubKey %s, got %s", testPubKey, savedPubKey)
+	}
+
+	// The full valid key set from /keys must have been persisted
+	trusted, err := store.LoadTrustedKeys()
+	if err != nil {
+		t.Fatalf("LoadTrustedKeys: %v", err)
+	}
+	if len(trusted) != 2 {
+		t.Fatalf("expected 2 trusted keys from /keys, got %d", len(trusted))
+	}
+	if !trusted[0].Key.Equal(cpPub) || !trusted[1].Key.Equal(gracePub) {
+		t.Errorf("persisted keys do not match /keys response")
 	}
 	if len(savedAddrsStr) != 1 || savedAddrsStr[0] != expectedInfo.RouterAddresses[0] {
 		t.Errorf("Expected saved addrs %v, got %v", expectedInfo.RouterAddresses, savedAddrsStr)

@@ -255,8 +255,23 @@ func NewSamNode(cfg Options) (*SamNode, error) {
 	}
 
 	var trustedKeys []TrustedKey
-	if len(cfg.ControlPlanePubKey) > 0 {
-		trustedKeys = []TrustedKey{{Key: cfg.ControlPlanePubKey, ReceivedAt: time.Now()}}
+	if cfg.Store != nil {
+		if stored, err := cfg.Store.LoadTrustedKeys(); err != nil {
+			logger.Warnf("Failed to load persisted trusted keys: %v", err)
+		} else {
+			for _, tk := range stored {
+				// A corrupt entry must not reach ed25519 verification (panics
+				// on wrong-size keys).
+				if len(tk.Key) == ed25519.PublicKeySize {
+					trustedKeys = append(trustedKeys, tk)
+				} else {
+					logger.Warnf("Ignoring persisted trusted key with invalid size %d", len(tk.Key))
+				}
+			}
+		}
+	}
+	if len(cfg.ControlPlanePubKey) > 0 && !containsTrustedKey(trustedKeys, cfg.ControlPlanePubKey) {
+		trustedKeys = append(trustedKeys, TrustedKey{Key: cfg.ControlPlanePubKey, ReceivedAt: time.Now()})
 	}
 
 	node := &SamNode{
@@ -295,10 +310,49 @@ func NewSamNode(cfg Options) (*SamNode, error) {
 // Start initializes the libp2p host, DHT, connects to the routers, and starts runtime components.
 func (n *SamNode) Start(ctx context.Context) error {
 	if biscuitBytes := n.GetIdentity(); len(biscuitBytes) > 0 {
-		controlPlanePubKeyBytes, _, err := n.Store.LoadMeshConfig()
-		if err == nil && len(controlPlanePubKeyBytes) > 0 {
-			if err := identity.VerifyBiscuitRole(biscuitBytes, ed25519.PublicKey(controlPlanePubKeyBytes), n.config.RequiredRole, n.BiscuitTimeout); err != nil {
-				return fmt.Errorf("loaded identity fails role requirement %q: %w", n.config.RequiredRole, err)
+		// The identity may be signed by any currently valid control plane
+		// key, not only the newest: after a rotation the biscuit's key can
+		// legitimately be in its grace period.
+		n.keysMu.RLock()
+		candidates := make([]ed25519.PublicKey, 0, len(n.trustedKeys))
+		for _, tk := range n.trustedKeys {
+			candidates = append(candidates, tk.Key)
+		}
+		n.keysMu.RUnlock()
+		if len(candidates) == 0 {
+			if pubKeyBytes, _, err := n.Store.LoadMeshConfig(); err == nil && len(pubKeyBytes) == ed25519.PublicKeySize {
+				candidates = append(candidates, ed25519.PublicKey(pubKeyBytes))
+			}
+		}
+		if len(candidates) > 0 {
+			var roleErr error
+			for _, key := range candidates {
+				if roleErr = identity.VerifyBiscuitRole(biscuitBytes, key, n.config.RequiredRole, n.BiscuitTimeout); roleErr == nil {
+					break
+				}
+			}
+			if roleErr != nil {
+				// Stale identity (e.g. signing key rotated past its grace
+				// period while offline): try silent re-enrollment with the
+				// stored refresh token before giving up.
+				logger.Warnf("Loaded identity fails role requirement %q: %v; attempting recovery via stored refresh token", n.config.RequiredRole, roleErr)
+				if recErr := n.recoverStaleIdentity(ctx); recErr != nil {
+					return fmt.Errorf("loaded identity fails role requirement %q (refresh-token recovery failed: %v): %w", n.config.RequiredRole, recErr, roleErr)
+				}
+				logger.Info("Identity recovered via refresh-token re-enrollment.")
+				// Re-enrollment persisted the response's router addresses; adopt
+				// them so the static relay setup below doesn't use stale ones.
+				if _, storedAddrs, loadErr := n.Store.LoadMeshConfig(); loadErr == nil {
+					var addrs []multiaddr.Multiaddr
+					for _, addrStr := range storedAddrs {
+						if ma, parseErr := multiaddr.NewMultiaddr(addrStr); parseErr == nil {
+							addrs = append(addrs, ma)
+						}
+					}
+					if len(addrs) > 0 {
+						n.config.RouterAddrs = addrs
+					}
+				}
 			}
 		}
 	}
@@ -849,13 +903,15 @@ func (n *SamNode) performRouterAuthHandshake(s network.Stream, biscuitBytes []by
 	}
 
 	// Verify the router's biscuit using the control plane keys
-	b, err := identity.VerifyBiscuit(resp.Biscuit, expectedRouter, trustedKeys, n.BiscuitTimeout)
+	b, verifiedKey, err := identity.VerifyBiscuitAndGetKey(resp.Biscuit, expectedRouter, trustedKeys, n.BiscuitTimeout)
 	if err != nil {
 		return false, fmt.Errorf("%w: failed to verify router biscuit: %w", ErrFatalAuth, err)
 	}
 
-	// Enforce role("router") inside the biscuit
-	authorizer, err := b.Authorizer(trustedKeys[0], identity.AuthorizerOptions(n.BiscuitTimeout)...)
+	// Enforce role("router") inside the biscuit, under the key that verified:
+	// with several valid keys loaded (rotation grace) the first is not
+	// necessarily the signer.
+	authorizer, err := b.Authorizer(verifiedKey, identity.AuthorizerOptions(n.BiscuitTimeout)...)
 	if err != nil {
 		return false, fmt.Errorf("authorizer instantiation failed: %w", err)
 	}
@@ -1230,20 +1286,68 @@ func (n *SamNode) handleBannedEvent(event *api.MeshEvent) {
 	}
 }
 
+func containsTrustedKey(keys []TrustedKey, key ed25519.PublicKey) bool {
+	for _, tk := range keys {
+		if bytes.Equal(tk.Key, key) {
+			return true
+		}
+	}
+	return false
+}
+
+// addTrustedKey appends a control plane public key to the trust set (no-op
+// on duplicates) and persists the updated set so it survives restarts.
+func (n *SamNode) addTrustedKey(key ed25519.PublicKey) {
+	n.keysMu.Lock()
+	if containsTrustedKey(n.trustedKeys, key) {
+		n.keysMu.Unlock()
+		return
+	}
+	n.trustedKeys = append(n.trustedKeys, TrustedKey{Key: key, ReceivedAt: time.Now()})
+	snapshot := append([]TrustedKey(nil), n.trustedKeys...)
+	n.keysMu.Unlock()
+	n.persistTrustedKeys(snapshot)
+}
+
+func (n *SamNode) persistTrustedKeys(keys []TrustedKey) {
+	if n.Store == nil {
+		return
+	}
+	if err := n.Store.SaveTrustedKeys(keys); err != nil {
+		logger.Errorf("Failed to persist trusted keys: %v", err)
+	}
+}
+
 func (n *SamNode) handleKeyRotationEvent(event *api.MeshEvent) {
 	if len(event.NewPublicKey) != ed25519.PublicKeySize {
 		logger.Errorf("[Mesh Event] Key rotation failed: invalid public key size %d, expected %d", len(event.NewPublicKey), ed25519.PublicKeySize)
 		return
 	}
 	logger.Infow("[Mesh Event] key rotation received", "event", meshEventKeyRotation, "key", fmt.Sprintf("%x", event.NewPublicKey))
-	n.keysMu.Lock()
-	defer n.keysMu.Unlock()
-	for _, tk := range n.trustedKeys {
-		if bytes.Equal(tk.Key, event.NewPublicKey) {
-			return // Ignore duplicate
+	n.addTrustedKey(ed25519.PublicKey(event.NewPublicKey))
+}
+
+// pruneTrustedKeys drops keys older than gracePeriod but always keeps the
+// most recently received one: the current signing key has no successor until
+// a rotation event arrives, so ageing it out would empty the trust set and
+// leave the node unable to verify any peer or router.
+func pruneTrustedKeys(keys []TrustedKey, now time.Time, gracePeriod time.Duration) []TrustedKey {
+	if len(keys) == 0 {
+		return keys
+	}
+	newest := 0
+	for i, tk := range keys {
+		if tk.ReceivedAt.After(keys[newest].ReceivedAt) {
+			newest = i
 		}
 	}
-	n.trustedKeys = append(n.trustedKeys, TrustedKey{Key: ed25519.PublicKey(event.NewPublicKey), ReceivedAt: time.Now()})
+	var active []TrustedKey
+	for i, tk := range keys {
+		if i == newest || now.Sub(tk.ReceivedAt) <= gracePeriod {
+			active = append(active, tk)
+		}
+	}
+	return active
 }
 
 func (n *SamNode) startKeyPruning(ctx context.Context, gracePeriod time.Duration) {
@@ -1258,15 +1362,14 @@ func (n *SamNode) startKeyPruning(ctx context.Context, gracePeriod time.Duration
 			case <-ticker.C:
 				logger.Info("[KeyPruning] Pruning expired keys...")
 				n.keysMu.Lock()
-				now := time.Now()
-				var activeKeys []TrustedKey
-				for _, tk := range n.trustedKeys {
-					if now.Sub(tk.ReceivedAt) <= gracePeriod {
-						activeKeys = append(activeKeys, tk)
-					}
-				}
-				n.trustedKeys = activeKeys
+				pruned := pruneTrustedKeys(n.trustedKeys, time.Now(), gracePeriod)
+				changed := len(pruned) != len(n.trustedKeys)
+				n.trustedKeys = pruned
+				snapshot := append([]TrustedKey(nil), pruned...)
 				n.keysMu.Unlock()
+				if changed {
+					n.persistTrustedKeys(snapshot)
+				}
 			case <-ctx.Done():
 				return
 			}

@@ -39,6 +39,7 @@ const (
 	keyOidcIssuer   = "oidc_issuer"
 	keyOidcClientID = "oidc_client_id"
 	keyOidcAudience = "oidc_audience"
+	keyTrustedKeys  = "trusted_keys"
 )
 
 type Store struct {
@@ -239,6 +240,33 @@ func (s *Store) SaveControlPlaneURL(url string) error {
 	})
 }
 
+// SaveTrustedKeys persists the full set of control plane public keys the
+// node currently trusts, so keys learned from rotation events or /keys
+// survive restarts (the singular mesh-config key only tracks enrollment).
+func (s *Store) SaveTrustedKeys(keys []TrustedKey) error {
+	data, err := json.Marshal(keys)
+	if err != nil {
+		return err
+	}
+	return s.db.Update(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(bucketIdentity))
+		return b.Put([]byte(keyTrustedKeys), data)
+	})
+}
+
+func (s *Store) LoadTrustedKeys() ([]TrustedKey, error) {
+	var keys []TrustedKey
+	err := s.db.View(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(bucketIdentity))
+		data := b.Get([]byte(keyTrustedKeys))
+		if len(data) == 0 {
+			return nil
+		}
+		return json.Unmarshal(data, &keys)
+	})
+	return keys, err
+}
+
 func (s *Store) LoadControlPlaneURL() (string, error) {
 	var val []byte
 	err := s.db.View(func(tx *bbolt.Tx) error {
@@ -263,6 +291,7 @@ func (s *Store) ResetMeshIdentity() error {
 			keyOidcIssuer,
 			keyOidcClientID,
 			keyOidcAudience,
+			keyTrustedKeys,
 			"control_plane_public_key",
 			"router_addresses",
 			"control_plane_url",
