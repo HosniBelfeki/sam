@@ -6,7 +6,11 @@ weight: 1
 
 # Quick Start
 
-This guide gets you up and running with a SAM node connected to the public `bananas.sam-mesh.dev` mesh. You can run SAM either directly via a binary or using Docker.
+This guide gets you up and running with a SAM node connected to the public `bananas.sam-mesh.dev` developer testnet. You can run SAM either directly via a binary or using Docker.
+
+> [!NOTE]
+> **Developer Testnet Notice:**
+> bananas.sam-mesh.dev is a free developer testnet created using community resources. It is provided strictly for developer testing and experimentation and carries **no guarantees, uptime commitments, or persistent warranties**. For production workloads or sovereign private meshes, please see the [Kubernetes Deployment Guide](../user/kubernetes-deployment/) and the [Digital & Data Sovereignty Architecture](../sovereignty/).
 
 ## 1. Install SAM
 
