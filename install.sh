@@ -25,7 +25,9 @@ esac
 # Get latest release version
 echo "Fetching latest release information..."
 LATEST_RELEASE_URL="https://api.github.com/repos/${REPO}/releases/latest"
-VERSION=$(curl -s $LATEST_RELEASE_URL | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+# `|| true`: with pipefail, a grep that matches nothing would kill the script
+# here instead of reaching the friendly error below.
+VERSION=$(curl -s $LATEST_RELEASE_URL | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' || true)
 
 if [ -z "$VERSION" ]; then
     echo "Error: Could not find the latest release."

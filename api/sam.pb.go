@@ -2221,9 +2221,9 @@ func (x *AgentAttachRequest) GetBundle() *AgentBundle {
 
 type AgentAttachResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Sandbox boundary endpoints to wire into the sandbox: SOCKS5 for guest to
-	// host, and a reverse channel for host to guest that is empty when the
-	// bundle declares no ingress.
+	// Sandbox boundary endpoints to wire into the sandbox: named HTTP tunnels
+	// (CONNECT, connect-udp) for guest to host, and a reverse channel for host
+	// to guest that is empty when the bundle declares no ingress.
 	EgressSocket  string `protobuf:"bytes,1,opt,name=egress_socket,json=egressSocket,proto3" json:"egress_socket,omitempty"`
 	IngressSocket string `protobuf:"bytes,2,opt,name=ingress_socket,json=ingressSocket,proto3" json:"ingress_socket,omitempty"`
 	Error         string `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`

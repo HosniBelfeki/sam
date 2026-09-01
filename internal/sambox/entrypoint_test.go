@@ -21,7 +21,6 @@ import (
 	"testing"
 
 	"github.com/google/sam/api"
-	"golang.org/x/net/proxy"
 )
 
 type sidecarCall struct {
@@ -52,18 +51,10 @@ func entrypointClient(t *testing.T, socket string) *http.Client {
 
 func entrypointClientForAgent(t *testing.T, socket, agentID string) *http.Client {
 	t.Helper()
-	boundary := startSOCKS5(t, &SOCKS5Server{
+	boundary := startBoundary(t, &ConnectServer{
 		Dialer: &AgentDialer{Router: &Router{}, SidecarSocket: socket, AgentID: agentID},
 	})
-	dialer, err := proxy.SOCKS5("unix", boundary, nil, proxy.Direct)
-	if err != nil {
-		t.Fatalf("proxy.SOCKS5: %v", err)
-	}
-	contextDialer, ok := dialer.(proxy.ContextDialer)
-	if !ok {
-		t.Fatal("SOCKS5 dialer does not implement ContextDialer")
-	}
-	return &http.Client{Transport: &http.Transport{DialContext: contextDialer.DialContext}}
+	return &http.Client{Transport: &http.Transport{DialContext: boundaryDialContext(boundary)}}
 }
 
 // TestAgentIdentityIsAssertedToTheNode covers the half of admission that makes
@@ -132,7 +123,8 @@ func TestAgentCannotForgeItsIdentity(t *testing.T) {
 }
 
 // TestAgentReachesInferenceAndTools covers what an agent is supposed to have:
-// the mesh's inference and tool endpoints, reached by name, over SOCKS5.
+// the mesh's inference and tool endpoints, reached by name, through the
+// boundary's CONNECT tunnels.
 func TestAgentReachesInferenceAndTools(t *testing.T) {
 	socket, calls := recordingSidecar(t)
 	client := entrypointClient(t, socket)

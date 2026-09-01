@@ -27,7 +27,7 @@ sequenceDiagram
     participant Node as sam-node (mesh member)
     participant Mesh as The mesh / the internet
 
-    Agent->>Box: SOCKS5 CONNECT mesh.sam.alt:80
+    Agent->>Box: CONNECT mesh.sam.alt:80
     Box->>Box: Classify by name, apply policy
     Box->>Node: /v1/chat/completions over the node's API socket
     Node->>Mesh: Route to a provider, authorized by the node's Biscuit
@@ -91,29 +91,31 @@ with 403 and never reaches the node.
 A specific service can be addressed by its own name instead of letting policy
 choose: `http://code-reviewer.mcp.sam.alt/`.
 
-Destinations that policy refuses fail the SOCKS5 handshake, which the sandbox's
-kernel turns into an ordinary connection refusal — so an agent sees "refused"
-rather than a hang.
+Destinations that policy refuses fail the CONNECT handshake with a 403 and a
+`Boundary-Reason` header, which the sandbox's own network stack turns into an
+ordinary connection refusal — so an agent sees "refused" rather than a hang,
+and an operator reading the log sees the reason in words.
 
 ---
 
 ## 4. Connecting a sandbox to the socket
 
-The sandbox has no network of its own. It runs `tun2socks` against a `tun`
-device and points it at the boundary socket, so every flow leaves as SOCKS5
-carrying the destination *name*:
+The sandbox has no network of its own. `nano-init` terminates its TCP/IP in
+userspace on a `tun` device and points every flow at the boundary socket as a
+named HTTP tunnel — CONNECT for TCP, connect-udp for UDP — carrying the
+destination *name*:
 
 | sandbox | how it reaches the socket |
 |---|---|
 | Firecracker microVM | vsock; firecracker terminates it as `<uds_path>_<port>` on the host |
 | container with `network=none` | the socket is bind-mounted in |
 
-For a quick test without a sandbox, bridge a TCP port to the socket and use any
-SOCKS5 client:
+For a quick test without a sandbox, curl speaks the TCP half natively through
+any HTTP proxy client; bridge a TCP port to the socket first:
 
 ```bash
 socat TCP-LISTEN:1080,fork,reuseaddr UNIX-CONNECT:/var/run/sam/agent.sock &
-curl --socks5-hostname 127.0.0.1:1080 http://mesh.sam.alt/v1/models
+curl --proxy http://127.0.0.1:1080 http://mesh.sam.alt/v1/models
 ```
 
 ---

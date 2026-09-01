@@ -61,9 +61,9 @@ func main() {
 	runCmd := &cobra.Command{
 		Use:   "run",
 		Short: "Serve the sandbox boundary for an agent",
-		Long: "Serves SOCKS5 on a sandbox-facing Unix socket, so an unmodified agent reaches\n" +
-			"mesh inference and tools by name, and reaches nothing else unless egress policy\n" +
-			"allows it.",
+		Long: "Serves named HTTP tunnels (CONNECT for TCP, connect-udp for UDP) on a\n" +
+			"sandbox-facing Unix socket, so an unmodified agent reaches mesh inference and\n" +
+			"tools by name, and reaches nothing else unless egress policy allows it.",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			golog.SetAllLoggers(golog.LevelInfo)
@@ -102,7 +102,7 @@ func main() {
 				logger.Infof("Serving metrics on http://%s/metrics", metricsAddr)
 			}
 
-			server := &sambox.SOCKS5Server{
+			server := &sambox.ConnectServer{
 				Dialer: &sambox.AgentDialer{
 					Router:        &sambox.Router{Egress: egress},
 					SidecarSocket: sidecarSocket,
@@ -127,7 +127,7 @@ func main() {
 		},
 	}
 
-	runCmd.Flags().StringVar(&sandboxSocket, "socket", "", "Path to the sandbox-facing Unix socket to serve SOCKS5 on (required)")
+	runCmd.Flags().StringVar(&sandboxSocket, "socket", "", "Path to the sandbox-facing Unix socket to serve the boundary (HTTP CONNECT) on (required)")
 	runCmd.Flags().StringVar(&sidecarSocket, "sidecar-socket", "", "Path to the local sam-node API Unix socket (required)")
 	runCmd.Flags().StringVar(&bundlePath, "bundle", "", "Path to the agent bundle declaring the agent's identity and its egress allowance")
 	runCmd.Flags().StringSliceVar(&egressAllow, "egress-allow", nil, "Destinations an unidentified sandbox may reach, e.g. api.github.com or *.pypi.org; use --bundle instead where an agent has an identity")

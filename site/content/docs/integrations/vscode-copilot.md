@@ -372,7 +372,7 @@ for url in ["https://api.github.com/zen", "https://example.com"]:
 ```
 
 ```text
-[TCP] dial 169.254.64.2:443: boundary refused: not allowed by policy
+[TCP] dial 100.64.0.2:443: boundary refused: 403 Forbidden (not allowed by policy)
 https://api.github.com/zen  -> 200 b'Responsive is better than fast.'
 https://example.com         -> URLError: [Errno 104] Connection reset by peer
 ```

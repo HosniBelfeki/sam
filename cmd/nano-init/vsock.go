@@ -21,6 +21,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/mdlayher/vsock"
 )
@@ -44,6 +45,10 @@ import (
 // dependency worth economising on.
 
 const vsockScheme = "vsock://"
+
+// boundaryDialTimeout bounds opening one flow to the boundary; established
+// flows carry no deadline.
+const boundaryDialTimeout = 30 * time.Second
 
 // dialBoundary opens a connection to the boundary named by spec, which is
 // either "vsock://<cid>:<port>" or a Unix socket path.

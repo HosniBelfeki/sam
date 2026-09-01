@@ -76,7 +76,8 @@ denial is information the agent should reason about, not an outage.
 ### The boundary is the only way out
 
 The sandbox has no network interface, no DNS resolver and no route. It has a
-single Unix socket, on which `sam-box` speaks SOCKS5.
+single Unix socket, on which `sam-box` serves named HTTP tunnels: CONNECT for
+TCP, connect-udp for UDP.
 
 Every connection the agent opens arrives there as a **name**, and the boundary
 decides what it is:
@@ -146,7 +147,7 @@ flowchart LR
 
   M(["the mesh<br/>models · tools · peers"])
 
-  H -- "SOCKS5 over a unix socket" --> B
+  H -- "CONNECT over a unix socket" --> B
   B -- "node API socket<br/>+ X-Sam-Agent" --> N
   N <--> M
   B -. "allowed names only" .-> E([internet])
@@ -216,10 +217,10 @@ worked because the container could route somewhere, it would be proving nothing.
 
 Notice what is *not* passed: no API key, no mesh token, no endpoint, and **no
 proxy variable**. `nano-init` runs as PID 1, builds one `tun0`, makes it the
-default route and terminates the sandbox's TCP itself, opening a SOCKS5 flow to
-the boundary per connection. The agent asks for `mesh.sam.alt` like any other
-host and its traffic leaves through the tun because there is nowhere else for
-it to go.
+default route and terminates the sandbox's TCP itself, opening a named CONNECT
+tunnel to the boundary per connection. The agent asks for `mesh.sam.alt` like
+any other host and its traffic leaves through the tun because there is nowhere
+else for it to go.
 
 That distinction is worth dwelling on, because the obvious alternative is to set
 `HTTP_PROXY` and be done. That is the wrong layering: an agent that has to
@@ -265,25 +266,30 @@ flowchart LR
 ```
 
 The guest has no network device at all. `nano-init` presents a `tun0` that is
-the default route, terminates TCP on it, and opens a SOCKS5 flow to the
-boundary for each connection. The harness makes ordinary HTTP requests and needs
-no configuration, because from inside the VM there is nothing else it could be
-doing.
+the default route, terminates TCP on it, and opens a named CONNECT tunnel to
+the boundary for each connection. The harness makes ordinary HTTP requests
+and needs no configuration, because from inside the VM there is nothing else it
+could be doing.
 
 The only difference from the container is how the boundary is named: a path when
 it is bind-mounted in, `vsock://2:1080` when there is no shared filesystem.
 Nothing else in the sandbox knows which kind it is.
 
 Names are resolved by the boundary rather than in the guest, which is why the
-sandbox needs no resolver: `nano-init` answers with a placeholder address per
+sandbox needs no resolver: the virtual DNS answers with a synthetic address per
 name and remembers the pairing, so `mesh.sam.alt` reaches the boundary as a
-name and the boundary chooses a provider for it.
+name and the boundary chooses a provider for it. An address the guest never
+resolved stands for no name, and a flow to one is refused.
 
-Every address inside the sandbox is link-local (`169.254.0.0/16`), which is
-what those addresses are for: RFC 3927 describes a single link with no router,
-and a tun to the boundary is exactly that. It also means nothing in the sandbox
-can be confused with a real destination — a sandbox numbered out of
-`10.0.0.0/8` will eventually be deployed somewhere that already uses it.
+Every address inside the sandbox is synthetic: IPv4 out of `100.64.0.0/10`
+(CGNAT space, RFC 6598) and IPv6 out of `100::/64` (the discard-only prefix,
+RFC 6666). Link-local would have been the leak-proof choice, but SSRF guards
+in HTTP clients commonly block `169.254/16` and would break legitimate egress;
+the discard prefix keeps the leak-proofing for IPv6, since a packet that ever
+escapes through a stray interface is blackholed by the first conforming
+router. Neither range can be confused with a real destination — a sandbox
+numbered out of `10.0.0.0/8` will eventually be deployed somewhere that
+already uses it.
 
 One detail costs people an afternoon: Firecracker's vsock multiplexes guest
 connections onto **`<uds_path>_<port>`** on the host. A guest connecting to CID
@@ -377,7 +383,7 @@ metadata:
   name: sandbox-resolv
 data:
   resolv.conf: |
-    nameserver 169.254.1.1
+    nameserver 100.127.255.253
 ```
 
 Note what is **not** there: no `securityContext`, no added capabilities, no
@@ -420,13 +426,13 @@ and apply to every container in the pod. Measured on GKE, the per-container
 mount gives you this:
 
 ```console
-[sandbox] nameserver 169.254.1.1
+[sandbox] nameserver 100.127.255.253
 [node]    search default.svc.cluster.local ... nameserver 34.118.224.10
 [node]    cluster DNS works
 ```
 
-With `dnsConfig`, `sam-node` would get `169.254.1.1` as well and could no longer
-resolve the control plane.
+With `dnsConfig`, `sam-node` would get `100.127.255.253` as well and could no
+longer resolve the control plane.
 
 **If you do not supply one, it needs somewhere writable.** Without the mount
 above, `nano-init` falls back to bind-mounting a private `resolv.conf` itself,
@@ -516,6 +522,6 @@ property of the deployment, not of how well the prompt was written.
 
 ## See also
 
-- [Agent architecture](../../agent-architecture/) — the design decisions and why the boundary is SOCKS5
+- [Agent architecture](../../agent-architecture/) — the design decisions and why the boundary is named HTTP tunnels
 - [What an agent costs](../../scale-report/) — measured memory, startup and enforcement overhead
 - [Secure gateway](../secure-gateway/) — the gateway's configuration surface

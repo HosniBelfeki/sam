@@ -58,7 +58,7 @@ exactly one of them — one place where a flow is named, decided and opened.
 
 ## 3. The layering
 
-One socket, one protocol, one policy point. SOCKS5 is the waist.
+One socket, one protocol, one policy point. Named HTTP tunnels are the waist.
 
 ```text
 ┌─ sandbox (microVM, or container with network=none) ───────────────┐
@@ -67,16 +67,17 @@ One socket, one protocol, one policy point. SOCKS5 is the waist.
 │        │ IP                                                       │
 │      tun0  ── default route, the only device besides lo           │
 │        │                                                          │
-│   tun2socks ── IP flows → SOCKS5, destination kept as a NAME      │
-│        │       (virtual-DNS / fake-IP, see Decision 2)            │
+│  tun2connect ── IP flows → CONNECT (TCP) / connect-udp (UDP),     │
+│        │        destination kept as a NAME                        │
+│        │        (virtual DNS, see Decision 2)                     │
 └────────┼──────────────────────────────────────────────────────────┘
-         │  one byte stream
+         │  one byte stream per flow
          │  microVM  : AF_VSOCK → firecracker → host UDS <uds>_<port>
          │  container: bind-mounted UDS
 ┌────────┼──────────────────────────────────────────────────────────┐
 │ host   ▼                                                          │
 │  sam-box  (one per sandbox, NO libp2p host, NO enrollment)        │
-│    = SOCKS5 server = THE policy enforcement point                 │
+│    = CONNECT server = THE policy enforcement point                │
 │        │                                                          │
 │        ├── mesh.sam.alt          ── /v1 + /mcp only ─────┐        │
 │        ├── <svc>.<type>.sam.alt  ── HTTP: discover, then ┤        │
@@ -93,20 +94,43 @@ One socket, one protocol, one policy point. SOCKS5 is the waist.
                                                     mesh
 ```
 
-### Decision 1 — SOCKS5, not HTTP CONNECT, is the sandbox boundary protocol
+### Decision 1 — named HTTP tunnels are the sandbox boundary protocol
 
-SOCKS5 is chosen for three properties HTTP proxying does not have:
+The boundary speaks authority-form `CONNECT` (RFC 9110) for TCP and
+connect-udp (RFC 9298, capsules per RFC 9297) for UDP. An earlier revision of
+this document chose SOCKS5 over HTTP proxying, for three properties; the
+reversal is worth being explicit about, because all three properties are kept
+and the reasons the comparison once favoured SOCKS5 stopped being true:
 
-* **It carries the destination name.** `ATYP=0x03` is a domain name. The gateway
-  authorizes `api.github.com`, not `140.82.121.5`. Domain filtering therefore
-  needs no DNS interception, no MITM, and no IP allowlists that rot.
-* **It is protocol-agnostic.** TCP is TCP. `git`, Postgres, gRPC and a raw socket
-  are all first-class; HTTP becomes a payload rather than a requirement.
-* **It has a refusal vocabulary.** Reply `0x02 connection not allowed by
-  ruleset` is a policy denial the guest kernel turns into a clean
-  `ECONNREFUSED` — exactly what an agent should observe when it reaches for
-  something it may not have. UDP (`UDP ASSOCIATE`) is specified but stays **out
-  of scope** for v1: deny it, so the only way out is a named TCP flow.
+* **It carries the destination name.** `CONNECT api.github.com:443` is
+  authority-form: the gateway authorizes `api.github.com`, not
+  `140.82.121.5`. Domain filtering still needs no DNS interception, no MITM
+  and no IP allowlists that rot. connect-udp carries the name the same way,
+  in the URI template `/.well-known/masque/udp/{host}/{port}/`.
+* **It is protocol-agnostic.** After the `200 OK` the tunnel is a byte pipe.
+  `git`, Postgres, gRPC and a raw socket are all first-class; HTTP is the
+  *handshake*, not a requirement on the payload.
+* **It has a refusal vocabulary.** A policy denial is `403` with a
+  `Boundary-Reason` header, which tun2connect turns into a clean
+  `ECONNREFUSED` in the guest — exactly what an agent should observe when it
+  reaches for something it may not have — while an operator reading a log
+  sees the reason in words.
+
+What SOCKS5 could not offer, and what decided the reversal:
+
+* **One protocol in both directions.** The reverse channel into a sandbox
+  (§9.2) always spoke `CONNECT <port>`; now egress and ingress are the same
+  shape, and there is one grammar to reason about on the whole boundary.
+* **Headers are the extension point.** Sandbox identity for multiplexing
+  rides in `Proxy-Authorization` (§8.5), and anything else — tracing, a
+  sandbox id — is a header away. SOCKS5 had a fixed binary vocabulary and
+  nowhere to put any of that.
+* **UDP fits.** `UDP ASSOCIATE` presumes a datagram socket beside the TCP
+  one, which never fit a boundary that is a single Unix socket. connect-udp
+  frames datagrams as capsules *on the same stream*, so UDP arrives named,
+  policy-checked and audit-delimited like every TCP flow (§11).
+* **It is curl-testable.** `curl --proxy` speaks the TCP half natively, which
+  makes the boundary probeable with a tool every operator already has.
 
 HTTP MITM does not disappear; it moves *above* the waist. When a domain is
 configured for secret injection, the gateway terminates TLS for that flow with
@@ -116,10 +140,15 @@ the status quo, where every flow is MITM'd.
 
 ### Decision 2 — names are resolved on the host, never in the guest
 
-`tun2socks` runs with a virtual-DNS pool (fake IPs out of `198.18.0.0/15`). The
-guest resolver gets a synthetic address, `tun2socks` maps that address back to
-the FQDN when the flow opens, and the gateway receives the FQDN in the SOCKS5
-request. Nothing in the guest ever performs a real DNS lookup, so:
+tun2connect answers guest DNS from synthetic pools it invents — IPv4 out of
+`100.64.0.0/10` (CGNAT space: link-local would be leak-proof, but SSRF guards
+in HTTP clients commonly block `169.254/16` and would break legitimate
+egress), IPv6 out of `100::/64` (the RFC 6666 discard prefix, so an escaped
+packet blackholes). The guest resolver gets a synthetic address, the engine
+maps it back to the FQDN when the flow opens, and the gateway receives the
+FQDN in the tunnel request. A flow whose destination was never resolved has
+no name and is refused in the guest. Nothing in the guest ever performs a
+real DNS lookup, so:
 
 * `nano-init`'s DNS spoofer, `/etc/resolv.conf` rewrite, `HTTP_PROXY` injection
   and `libinterceptor.so` bootstrap are **deleted**, not reimplemented;
@@ -135,8 +164,8 @@ become the same code path, and the difference is one line of sandbox setup:
 
 | sandbox | guest side | host side |
 |---|---|---|
-| Firecracker microVM | `tun2socks` → vsock CID 2, port *P* | listener on `<uds>_P` |
-| container, `network=none` | `tun2socks` → `/run/sam/agent.sock` | listener on the bind-mounted path |
+| Firecracker microVM | `tun2connect` → vsock CID 2, port *P* | listener on `<uds>_P` |
+| container, `network=none` | `tun2connect` → `/run/sam/agent.sock` | listener on the bind-mounted path |
 
 This keeps AF_VSOCK out of the Go code entirely (no new dependency) and — more
 importantly for the test pyramid — makes the whole datapath exercisable in a Go
@@ -223,18 +252,18 @@ discovery and the sidecar API (`/mcp`, `/v1/*`, `/sam/service/*`,
 `/sam/<peer>/…`) over TCP and its Unix socket.
 
 **`sam-box` — the sandbox dataplane.** One per sandbox. It holds **no libp2p
-host, no enrollment, no mesh identity**. It serves SOCKS5 on the sandbox-facing
-socket, enforces the egress policy, does MITM/secret injection where configured,
-and reaches the mesh solely by dialling the local `sam-node` sidecar Unix socket
-as a client.
+host, no enrollment, no mesh identity**. It serves the named-tunnel boundary
+(CONNECT, connect-udp) on the sandbox-facing socket, enforces the egress
+policy, does MITM/secret injection where configured, and reaches the mesh
+solely by dialling the local `sam-node` sidecar Unix socket as a client.
 
 What this buys:
 
 * *N* sandboxes per host still share **one** libp2p host, so no *N*× DHT
   clients, identify/ping loops or router connections — the thing that would
   otherwise cap density in the scale experiment.
-* `sam-box` becomes small and boring: a SOCKS5 server plus an HTTP client. No
-  `join`, no OIDC, no Biscuit handling, no bbolt store. Most of
+* `sam-box` becomes small and boring: an HTTP CONNECT server plus an HTTP
+  client. No `join`, no OIDC, no Biscuit handling, no bbolt store. Most of
   [cmd/sam-box/main.go](cmd/sam-box/main.go) is deleted.
 * The blast radius of a compromised sandbox stops at its `sam-box`, which holds
   one agent credential and can be killed and reissued in isolation.
@@ -246,7 +275,7 @@ identity (Decision 5, §8). Losing the libp2p host costs it nothing here — the
 agent's authority never came from the host in the first place.
 
 `internal/sambox` keeps the ephemeral CA and secret injection and gains the
-SOCKS5 server; `internal/node` keeps everything mesh.
+CONNECT server; `internal/node` keeps everything mesh.
 
 ## 5. Contracts
 
@@ -267,8 +296,8 @@ its mesh name directly: `http://code-reviewer.mcp.sam.alt/`.
 
 ### 5.2 Gateway dispatch
 
-Applied to the SOCKS5 request's `(host, port)` — `host` is the name
-`tun2socks` preserved, never an IP — in order:
+Applied to the tunnel request's `(host, port)` — `host` is the name
+`tun2connect` preserved, never an IP — in order:
 
 1. **`mesh.sam.alt`** (`api.IsMeshEntrypointHost`) → the gateway's own
    agent-facing surface, served in process: `/v1/models`,
@@ -296,8 +325,8 @@ Applied to the SOCKS5 request's `(host, port)` — `host` is the name
    new sidecar endpoint, no libp2p in `sam-box`.
 3. **anything else** → egress policy (§5.3). Allowed flows are dialled directly;
    flows on a secret-injection domain are terminated with the ephemeral CA.
-4. **no match, or a name in the zone that resolves to nothing** → SOCKS5 reply
-   `0x02`.
+4. **no match, or a name in the zone that resolves to nothing** → `403` with
+   `Boundary-Reason: not allowed by policy`.
 
 Case 2 is the only one that inspects payload, and only because provider
 selection is an HTTP-level decision. `https://` to a mesh name therefore needs
@@ -383,7 +412,8 @@ quietly lose the boundary.
 Coverage is pushed as far down the pyramid as it will go. Firecracker appears
 exactly once, at the top.
 
-**Unit (`internal/…`, `api/`).** SOCKS5 request/reply codec; the name↔URI
+**Unit (`internal/…`, `api/`).** CONNECT and connect-udp request parsing, the
+refusal-status mapping and the RFC 9297 capsule codec; the name↔URI
 projection (`api/names_test.go`, already landed); dispatch classification
 (`mesh.sam.alt` / mesh name / public / denied); the agent-facing path allowlist;
 wildcard matching in the egress allowlist; SNI-vs-authorized-name mismatch.
@@ -397,20 +427,20 @@ containers:
   `openai_facade_test.go`;
 * node B registers a fake MCP service — reuse `newFakeMCPHandler`;
 * node C runs with a sidecar Unix socket, and a `sam-box` beside it serves
-  SOCKS5 on a second socket in `t.TempDir()`;
-* the test drives a real SOCKS5 client (`golang.org/x/net/proxy`, already a
-  direct dependency) over that socket and asserts:
+  the boundary on a second socket in `t.TempDir()`;
+* the test opens real CONNECT tunnels over that socket (stdlib `net/http`, the
+  same wire shape tun2connect produces) and asserts:
   1. `mesh.sam.alt:80` → `/v1/chat/completions` reaches A's fake LLM across the mesh,
   2. `mesh.sam.alt:80` → `/mcp` `call_remote_tool` reaches B's fake MCP,
   3. `<svc>.mcp.sam.alt:80` resolves through discovery to B and reaches it,
   4. an allowlisted public name reaches a local `httptest` server,
-  5. a non-allowlisted name is refused with SOCKS5 `0x02`,
+  5. a non-allowlisted name is refused with `403`,
   6. no path outside `/v1/*` and `/mcp` reaches node C at all.
 
 **E2E (`tests/e2e/*.bats`).** Two CUJs, no more:
 
 * *Container sandbox*: `docker run --network none` with the real harness plus
-  `tun2socks`, a bind-mounted UDS to a host `sam-node`, against the existing bats
+  `nano-init`, a bind-mounted UDS to a host `sam-node`, against the existing bats
   mesh (`lib/container_mesh.bash`). Asserts a real inference call, a real tool
   call, and one blocked domain.
 * *microVM sandbox*: the same rootfs under Firecracker, `skip` unless `/dev/kvm`
@@ -421,27 +451,38 @@ containers:
 
 Nothing on the host requires a `go.mod` change:
 
-* SOCKS5 **server** — a few hundred lines against the stdlib; we implement only
-  `CONNECT` with `NO AUTH` (RFC 1928) on a Unix socket.
-* SOCKS5 **client** (tests) — `golang.org/x/net/proxy`, already a direct dep.
+* CONNECT / connect-udp **server** — a few hundred lines against the stdlib,
+  including the RFC 9297 capsule codec, on a Unix socket.
+* CONNECT **client** (tests, `sam-bench`) — stdlib `net/http` request writing.
 * AF_VSOCK — never touched by Go code (Decision 3).
 * MITM CA and secret injection — `internal/sambox`, already ours.
 * Mesh name projection — `api/names.go`, stdlib only.
 
-### 7.1 The guest-side tun2socks
+### 7.1 The guest-side datapath: tun2connect
 
 The guest side is Go, in `cmd/nano-init`, which is **its own module**
-(`github.com/google/sam/cmd/nano-init`). It uses
-`github.com/xjasonlyu/tun2socks/v2` for the userspace TCP/IP stack and
-`github.com/vishvananda/netlink` to build `tun0`, so the root `go.mod` is
-untouched and the host binaries carry none of it.
+(`github.com/google/sam/cmd/nano-init`). Its datapath is the
+[`tun2connect`](https://github.com/aojea/agents.net) library — gVisor's
+netstack terminating the sandbox's TCP/IP in userspace, a `BoundaryClient`
+speaking CONNECT and connect-udp, and a `VirtualDNS` preserving names — plus
+`github.com/vishvananda/netlink` to build `tun0`. All of it lives in the
+nano-init module, so the root `go.mod` is untouched and the host binaries
+carry none of it.
+
+Consuming the datapath as a library, rather than shipping a universal guest
+binary, is a deliberate split: the engine, the tunnel client and the name
+preservation are universal and live upstream with their own tests; what stays
+in `nano-init` is exactly what is SAM- and platform-specific — the vsock
+boundary for microVMs, `--create-namespaces` for pods, the `copy` mode for
+image builds, and PID 1 duty.
 
 Owning the guest datapath is what makes the rest of this design possible:
 
-* the destination stays a **name** all the way to the SOCKS5 request. A stack
+* the destination stays a **name** all the way to the tunnel request. A stack
   that proxies by address has already thrown away the thing policy reasons
-  about, so `nano-init` runs its own resolver, hands out placeholder addresses
-  from `169.254.64.0/18`, and restores the name when it opens the flow;
+  about, so the virtual DNS hands out synthetic addresses from
+  `100.64.0.0/10` and `100::/64` and the engine restores the name when it
+  opens the flow — and refuses a flow that never had one;
 * policy and telemetry decisions can be made *inside* the guest — per-process
   attribution, for instance — which an external binary cannot be extended to do;
 * it builds for whatever architectures the project builds for, with no
@@ -452,7 +493,7 @@ The module boundary is the point. A userspace network stack is a large
 dependency, and keeping it in a separate module means it is a guest-image
 concern rather than something every `sam-node` and `sam-box` build has to carry.
 
-The host is unaffected either way: the sandbox boundary is SOCKS5 over a byte
+The host is unaffected either way: the sandbox boundary is CONNECT over a byte
 stream, so the guest implementation could be replaced without changing anything
 on the host or rewriting any test above.
 
@@ -639,11 +680,11 @@ in-band afterwards:
 1. **One socket per agent (default).** Identity is a property of the socket,
    fixed when the sandbox is created: one vsock UDS per microVM, one bind-mounted
    socket per container. Nothing in-band, nothing to spoof.
-2. **SOCKS5 username (multiplexing).** When one `sam-box` fronts many agents over
-   one socket, the RFC 1929 username/password sub-negotiation carries the agent
-   id and its admission token. It is standard, in-band, supported by every SOCKS
-   client (`socks5://user:pass@host`), and it makes identity
-   **per-connection** — which is exactly what a multiplexer needs.
+2. **Proxy-Authorization (multiplexing).** When one `sam-box` fronts many agents
+   over one socket, Basic credentials on the tunnel request carry the agent id
+   and its admission token. It is standard, in-band, supported by every HTTP
+   proxy client, and it makes identity **per-connection** — which is exactly
+   what a multiplexer needs.
 
 ### 8.6 The honest limit
 
@@ -680,7 +721,7 @@ blocks in `biscuit-go` to be attributable. It is a clean upgrade, not a rewrite.
 * `internal/node` — **nothing** for authorization: appended blocks are already
   verified and evaluated. Only the namespace-binding policy is new.
 * `internal/sambox` — holds the bundle, attaches it per flow, per socket or per
-  SOCKS5 connection; serves the §10 control socket and the §9 ingress endpoint.
+  tunnel connection; serves the §10 control socket and the §9 ingress endpoint.
 * `cmd/nano-init` — owns the guest side of the ingress channel (§9.2).
 * Sidecar — propagates the agent header on egress alongside `X-Sam-Biscuit`.
 * Tests — the CUJ that demonstrates the selling point belongs at integration
@@ -846,8 +887,8 @@ So a sandbox has exactly two channels, one per direction:
 
 | channel | direction | protocol | who listens |
 |---|---|---|---|
-| egress | guest → host | SOCKS5 | host (`sam-box`) |
-| ingress | host → guest | one stream per request | guest (`nano-init`) |
+| egress | guest → host | named HTTP tunnels (CONNECT, connect-udp) | host (`sam-box`) |
+| ingress | host → guest | one stream per request (`CONNECT <port>`) | guest (`nano-init`) |
 
 Firecracker's vsock is bidirectional, so host→guest needs no new transport: the
 host connects to the firecracker UDS and writes `CONNECT <port>`, with the guest
@@ -944,9 +985,11 @@ becomes `agent:my-counter-1.demo.actors.resources.substrate.ate.dev`, and
 Two things to settle **with** the Substrate side rather than assume:
 
 * **Egress ownership.** `atenet` already supplies DNS, routing, proxy sidecars
-  and CONNECT. The SOCKS5 boundary has to slot in as the sandbox's egress rather
-  than compete with it. `sam-box` behind atenet's sidecar seam is the likely
-  fit, but that is a conversation, not a decision to take unilaterally.
+  and CONNECT. The named-tunnel boundary has to slot in as the sandbox's egress
+  rather than compete with it — speaking CONNECT is what makes that a fit
+  rather than a translation. `sam-box` behind atenet's sidecar seam is the
+  likely arrangement, but that is a conversation, not a decision to take
+  unilaterally.
 * **Ingress.** Substrate already routes inbound to actors by Host header. §9
   must reuse that path rather than build a parallel one: a SAM ingress
   declaration should end up as a Substrate route.
@@ -968,8 +1011,10 @@ Two things to settle **with** the Substrate side rather than assume:
 
 ## 11. Remaining smaller open items
 
-1. **UDP.** Denied in v1. If an agent ever needs QUIC or real DNS, it returns as
-   `UDP ASSOCIATE` under the same name-based policy.
+1. **UDP — shipped.** Carried as connect-udp (RFC 9298) with capsules on the
+   same one-socket boundary, under the same name-based deny-by-default policy.
+   DNS never leaves the guest either way: port 53 is answered by the virtual
+   DNS, and everything else is a named, policy-checked session.
 2. **Guest trust of the ephemeral CA.** Baked into the sandbox image at build
    time, or re-introduce a bootstrap endpoint? v1 avoids the question by keeping
    mesh names on `http://` (§5.2).

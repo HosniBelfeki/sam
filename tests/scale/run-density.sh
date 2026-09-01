@@ -214,7 +214,7 @@ for step in ${STEPS//,/ }; do
   #
   # Twice, because reusing a connection and opening one are different
   # questions. A kept-alive flow is admitted once and carries every request
-  # after that for free; a new flow per request pays the SOCKS5 handshake and
+  # after that for free; a new flow per request pays the CONNECT handshake and
   # the policy decision every time. Only the second measures what enforcement
   # costs, and only the first describes how an agent normally behaves.
   for condition in reused-flow new-flow-per-request; do

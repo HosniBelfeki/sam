@@ -100,7 +100,7 @@ func TestSandboxCreatesItsOwnNamespaces(t *testing.T) {
 		t.Fatalf("ListenSandboxSocket: %v", err)
 	}
 
-	boundary := &sambox.SOCKS5Server{
+	boundary := &sambox.ConnectServer{
 		Dialer: &sambox.AgentDialer{
 			Router: &sambox.Router{Egress: egress},
 			DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
@@ -157,7 +157,7 @@ func TestSandboxCreatesItsOwnNamespaces(t *testing.T) {
 	if !strings.Contains(got, "links=lo,tun0") {
 		t.Errorf("the agent did not get a namespace of its own; it reported:\n%s", got)
 	}
-	if !strings.Contains(got, "resolv=nameserver 169.254.1.1") {
+	if !strings.Contains(got, "resolv=nameserver 100.127.255.253") {
 		t.Errorf("the agent kept the outer resolv.conf, so a pod's DNS would have been repointed:\n%s", got)
 	}
 

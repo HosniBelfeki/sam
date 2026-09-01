@@ -160,7 +160,7 @@ func TestSandboxReachesOnlyWhatPolicyAllows(t *testing.T) {
 		t.Fatalf("ListenSandboxSocket: %v", err)
 	}
 
-	boundary := &sambox.SOCKS5Server{
+	boundary := &sambox.ConnectServer{
 		Dialer: &sambox.AgentDialer{
 			Router:        &sambox.Router{Egress: egress},
 			SidecarSocket: sidecarSocket,

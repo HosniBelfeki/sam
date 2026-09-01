@@ -33,8 +33,8 @@ import (
 // The agent speaks HTTP to "openrouter.inference.sam.alt", while the sidecar
 // routes by path, so somebody has to discover a provider and rewrite the
 // request onto /sam/<peer>/<type>/<name>. That happens here, on an in-process
-// HTTP server whose other end is handed back to the SOCKS5 layer as an ordinary
-// connection.
+// HTTP server whose other end is handed back to the CONNECT layer as an
+// ordinary connection.
 
 const (
 	// maxDiscoverBody bounds the discovery response. It is small and local, but
@@ -78,7 +78,7 @@ func (d *AgentDialer) dialMeshService(ctx context.Context, route Route) (net.Con
 }
 
 // serveOnPipe runs h on one end of an in-memory connection and hands back the
-// other, so an HTTP handler can be given to the SOCKS5 layer as an ordinary
+// other, so an HTTP handler can be given to the CONNECT layer as an ordinary
 // connection.
 func serveOnPipe(h http.Handler) net.Conn {
 	agentSide, boundarySide := net.Pipe()

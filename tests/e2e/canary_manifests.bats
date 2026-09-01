@@ -111,7 +111,7 @@ unservable() {
   local declared resolver
   declared=$(grep -A2 'resolv.conf: |' .github/k8s/sam-box-canary-template.yaml \
     | grep nameserver | awk '{print $2}')
-  resolver=$(grep -oE 'tunIP[[:space:]]*=[[:space:]]*"[0-9.]+"' cmd/nano-init/main.go \
+  resolver=$(grep -oE 'resolverIP[[:space:]]*=[[:space:]]*"[0-9.]+"' cmd/nano-init/main.go \
     | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+')
 
   echo "# canary declares: ${declared}" >&3

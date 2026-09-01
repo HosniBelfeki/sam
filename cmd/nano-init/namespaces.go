@@ -258,9 +258,9 @@ func resolvConfSaysOurs(contents string) bool {
 			continue
 		}
 		// Any nameserver but ours, and the file is not one we can rely on.
-		if !strings.EqualFold(fields[0], "nameserver") || len(fields) != 2 || fields[1] != tunIP {
+		if !strings.EqualFold(fields[0], "nameserver") || len(fields) != 2 || fields[1] != resolverIP {
 			return false
 		}
 	}
-	return strings.Contains(contents, tunIP)
+	return strings.Contains(contents, resolverIP)
 }

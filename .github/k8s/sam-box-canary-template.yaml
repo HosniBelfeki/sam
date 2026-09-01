@@ -23,7 +23,7 @@ metadata:
   namespace: sam-canary-${ENV_NAME}
 data:
   resolv.conf: |
-    nameserver 169.254.1.1
+    nameserver 100.127.255.253
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -43,8 +43,8 @@ metadata:
 # nano-init makes its own with --create-namespaces and gives itself the only
 # route out; the agent then speaks ordinary HTTP to ordinary names, and the
 # fact that it reaches anything at all is the assertion. A curl pointed at
-# --socks5-hostname would prove the boundary works for a client that chose to
-# use it, which is the one case nobody needs proving.
+# --proxy would prove the boundary works for a client that chose to use it,
+# which is the one case nobody needs proving.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
