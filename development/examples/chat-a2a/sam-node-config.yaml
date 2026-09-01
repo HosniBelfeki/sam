@@ -1,0 +1,8 @@
+version: "v1alpha1"
+attenuation:
+  policies: []
+services:
+  - type: "a2a"
+    name: "chat"
+    description: "Gemini-backed conversational A2A agent"
+    target_url: "http://127.0.0.1:7777"
