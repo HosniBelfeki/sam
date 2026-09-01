@@ -38,6 +38,7 @@ import (
 	"github.com/biscuit-auth/biscuit-go/v2/datalog"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/sam/api"
+	"github.com/google/sam/internal/identity"
 	"github.com/google/sam/internal/node"
 	"github.com/google/sam/internal/storage"
 	"github.com/libp2p/go-libp2p/core/crypto"
@@ -921,6 +922,93 @@ func TestEnrollmentWorkflow(t *testing.T) {
 	}
 	if len(enrollResp2.BiscuitToken) == 0 {
 		t.Error("biscuit token empty in Auto-Approve response")
+	}
+}
+
+func TestHandleRefresh_RejectsStaleTimestamp(t *testing.T) {
+	t.Parallel()
+
+	srv, store, cpURL := setupTestServer(t, "")
+	defer func() {
+		_ = srv.Close()
+		_ = store.Close()
+	}()
+
+	ctx := context.Background()
+	cpPriv, _, err := store.GetCurrentKey(ctx)
+	if err != nil {
+		t.Fatalf("GetCurrentKey: %v", err)
+	}
+
+	priv, pub, err := crypto.GenerateKeyPair(crypto.Ed25519, -1)
+	if err != nil {
+		t.Fatalf("GenerateKeyPair: %v", err)
+	}
+	nodePeer, err := peer.IDFromPrivateKey(priv)
+	if err != nil {
+		t.Fatalf("IDFromPrivateKey: %v", err)
+	}
+	pubKeyBytes, err := crypto.MarshalPublicKey(pub)
+	if err != nil {
+		t.Fatalf("MarshalPublicKey: %v", err)
+	}
+
+	biscuitBytes, err := identity.MintBootstrapBiscuitToken(
+		cpPriv,
+		nodePeer,
+		api.RoleNode,
+		time.Now().Add(api.BiscuitTokenTTL),
+		nil,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("MintBootstrapBiscuitToken: %v", err)
+	}
+
+	if err := store.EnrollNode(ctx, &storage.EnrolledNode{
+		PeerID:         nodePeer.String(),
+		PublicKey:      pubKeyBytes,
+		Biscuit:        biscuitBytes,
+		Role:           api.RoleNode,
+		EnrollmentType: "Bootstrap",
+		EnrolledAt:     time.Now(),
+		ExpiresAt:      time.Now().Add(api.OIDCSessionTTL),
+	}); err != nil {
+		t.Fatalf("EnrollNode: %v", err)
+	}
+
+	staleTimestamp := time.Now().Add(-2 * time.Hour).UnixMilli()
+	challengeData := []byte(fmt.Sprintf("%d", staleTimestamp))
+	challengeSig, err := priv.Sign(challengeData)
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+
+	refreshReq := &api.TokenRefreshRequest{
+		ChallengeSignature: challengeSig,
+		Timestamp:          staleTimestamp,
+	}
+	refreshData, err := proto.Marshal(refreshReq)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	req, err := http.NewRequest(http.MethodPost, cpURL+"/refresh", bytes.NewReader(refreshData))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+base64.StdEncoding.EncodeToString(biscuitBytes))
+	req.Header.Set("Content-Type", "application/x-protobuf")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusUnauthorized {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected stale-timestamp refresh to be rejected with 401, got %s: %s", resp.Status, body)
 	}
 }
 

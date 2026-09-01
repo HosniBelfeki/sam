@@ -118,7 +118,7 @@ func registerNode(t *testing.T, cpURL, jwtToken string) (crypto.PrivKey, peer.ID
 func refreshNode(t *testing.T, cpURL string, priv crypto.PrivKey, currentBiscuit []byte) *api.TokenRefreshResponse {
 	t.Helper()
 
-	timestamp := time.Now().Unix()
+	timestamp := time.Now().UnixMilli()
 	sig, err := priv.Sign([]byte(fmt.Sprintf("%d", timestamp)))
 	if err != nil {
 		t.Fatal(err)

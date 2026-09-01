@@ -676,6 +676,19 @@ func (s *Server) HandleRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	const refreshChallengeMaxAge = 5 * time.Minute
+	if req.Timestamp <= 0 {
+		http.Error(w, "missing or invalid timestamp", http.StatusBadRequest)
+		return
+	}
+	challengeTime := time.UnixMilli(req.Timestamp)
+	now := time.Now()
+	if now.Sub(challengeTime) > refreshChallengeMaxAge || challengeTime.Sub(now) > refreshChallengeMaxAge {
+		logger.Warnw("Stale or invalid challenge timestamp", "peer_id", nodeRecord.PeerID, "timestamp", req.Timestamp)
+		http.Error(w, "stale or invalid challenge timestamp", http.StatusUnauthorized)
+		return
+	}
+
 	challengeData := []byte(fmt.Sprintf("%d", req.Timestamp))
 	ok, err := pubKey.Verify(challengeData, req.ChallengeSignature)
 	if err != nil || !ok {
