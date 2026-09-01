@@ -63,7 +63,7 @@ func TestA2ACUJ(t *testing.T) {
 	waitForAPI(t, apiAddrB)
 
 	addrA := waitForPeerInfoInLog(t, filepath.Join(homeA, "node.log"))
-	callMCP(t, apiAddrB, "connect_peer", map[string]any{"peer_addr": addrA})
+	connectPeer(t, apiAddrB, addrA)
 	waitForDHTPeers(t, apiAddrA)
 
 	idx := strings.LastIndex(addrA, "/p2p/")
