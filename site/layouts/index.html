@@ -10,9 +10,9 @@
   <div class="mesh-glow-cyan"></div>
   <div class="mesh-glow-yellow"></div>
 
-  <div class="landing-container" style="flex-direction: column; text-align: center; max-width: 1000px; margin-top: 2rem;">
-    <!-- Top Row: Hero Branding -->
-    <div class="hero-brand-col" style="align-items: center; margin-bottom: 3rem;">
+  <div class="landing-container" style="flex-direction: column; text-align: center; max-width: 800px;">
+    <!-- Hero Branding -->
+    <div class="hero-brand-col" style="align-items: center;">
       <h1 class="landing-title">SAM</h1>
       <p class="landing-subtitle">Sovereign Agent Mesh</p>
       <p class="landing-description" style="text-align: center; max-width: 600px; margin-left: auto; margin-right: auto;">
@@ -24,24 +24,6 @@
         <a href="{{ .Site.Params.github_repo }}" target="_blank" rel="noopener" class="btn-sleek btn-dark">GitHub</a>
       </div>
     </div>
-
-    <!-- Bottom Row: Demo Player -->
-    <link rel="stylesheet" href="{{ "vendor/asciinema-player/asciinema-player.css" | relURL }}">
-    <div style="width: 100%;">
-      <div id="demo-player" data-cast="{{ "demo.cast" | relURL }}"></div>
-    </div>
-    <script src="{{ "vendor/asciinema-player/asciinema-player.min.js" | relURL }}"></script>
-    <script>
-      var demoEl = document.getElementById('demo-player');
-      AsciinemaPlayer.create(demoEl.dataset.cast, demoEl, {
-        speed: 2.5,
-        idleTimeLimit: 2,
-        autoPlay: true,
-        loop: true,
-        preload: true,
-        fit: 'width' // fill the container width; height follows the terminal
-      });
-    </script>
   </div>
 
   {{ partial "scripts.html" . }}
