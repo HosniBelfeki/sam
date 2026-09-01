@@ -8,7 +8,7 @@ routing over libp2p, and `contextId` continuity across turns.
 
 Edit `Dockerfile` and replace `<API_KEY>` in `ENV GEMINI_API_KEY=<API_KEY>`
 (same pattern as `gemini-buddy-mcp`). Optionally override the model with
-`GEMINI_MODEL` (default `models/gemini-3.6-flash`).
+`GEMINI_MODEL` (default `models/gemini-3.5-flash-lite`).
 
 ## 2. Host the agent on a mesh node
 
@@ -60,6 +60,7 @@ a stock A2A client work against the mesh unmodified.
 Requires [`uv`](https://docs.astral.sh/uv/).
 
 ```sh
+cd development/examples/chat-a2a
 uv run --with-requirements requirements.txt chat.py "http://127.0.0.1:9099/sam/$PEER/a2a/chat"
 ```
 

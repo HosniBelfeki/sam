@@ -75,6 +75,7 @@ When configuring `type: a2a` services (Agent2Agent protocol agents):
 * **URL backends only**: register the agent's local HTTP endpoint as `target_url`. `command` backends are rejected.
 * **Raw Proxy Access**: remote peers reach the agent at `http://localhost:8080/sam/{peer}/a2a/{service}/...`. The agent card served at `.../.well-known/agent-card.json` is rewritten in transit so its interface URLs point back at this mesh path; transports the mesh cannot carry (gRPC) are dropped and streaming is advertised off.
 * **Label-gated egress**: setting `X-Sam-Required-Labels: key=value[,key=value]` on a raw a2a request makes the caller's node verify the provider's control-plane-attested labels and refuse fail-closed (HTTP 403) before any data leaves the node. The header is stripped before forwarding.
+* **Runnable example**: the [A2A Chat use case](../../use-cases/chat-a2a/) walks through hosting an a2a agent on a kind mesh and talking to it with a stock `a2a-sdk` client.
 
 ---
 
