@@ -32,8 +32,16 @@ import (
 // parseRequiredLabels splits the X-Sam-Required-Labels header value
 // (comma-separated "key=value" pairs) into a label map; any malformed entry
 // rejects the whole request.
+//
+// Only a blank specification means "no requirement". A specification that
+// carries content but names no label — ",," or a lone separator — is rejected
+// instead of being read as unconstrained: an empty requirement set switches
+// the label gate off entirely (see VerifyPeerLabels and rankProviders), so
+// silently deriving one from a caller's non-blank input would turn a
+// fail-closed control into a fail-open one. Empty entries *alongside* real
+// ones stay tolerated, so a trailing comma is still harmless.
 func parseRequiredLabels(h string) (map[string]string, error) {
-	if h == "" {
+	if strings.TrimSpace(h) == "" {
 		return nil, nil
 	}
 	var out map[string]string
@@ -60,6 +68,9 @@ func parseRequiredLabels(h string) (map[string]string, error) {
 			return nil, fmt.Errorf("duplicate label key %q", k)
 		}
 		out[k] = v
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("invalid required labels %q: expected at least one key=value pair", h)
 	}
 	return out, nil
 }
