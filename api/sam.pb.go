@@ -1677,11 +1677,13 @@ func (x *KeysResponse) GetPublicKeys() [][]byte {
 }
 
 type TokenRefreshRequest struct {
-	state              protoimpl.MessageState `protogen:"open.v1"`
-	ChallengeSignature []byte                 `protobuf:"bytes,1,opt,name=challenge_signature,json=challengeSignature,proto3" json:"challenge_signature,omitempty"`
-	Timestamp          int64                  `protobuf:"varint,2,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Signature over the decimal string form of timestamp, made with the node key.
+	ChallengeSignature []byte `protobuf:"bytes,1,opt,name=challenge_signature,json=challengeSignature,proto3" json:"challenge_signature,omitempty"`
+	// Unix milliseconds. Must be within the control plane's freshness window.
+	Timestamp     int64 `protobuf:"varint,2,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *TokenRefreshRequest) Reset() {
