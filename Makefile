@@ -223,7 +223,7 @@ docker-build-router:
 	docker build --load -t sam-router:local -f Dockerfile.sam-router .
 
 docker-build-node:
-	docker build --load --no-cache -t sam-node:local -f Dockerfile.sam-node .
+	docker build --load -t sam-node:local -f Dockerfile.sam-node .
 
 docker-build-mock-oidc:
 	docker build --load -t sam-mock-oidc:local -f tests/e2e/docker/Dockerfile.mock-oidc .

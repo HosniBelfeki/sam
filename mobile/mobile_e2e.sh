@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-set -xeuo pipefail
+set -xeEuo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &> /dev/null && pwd)
 REPO_ROOT=$(cd "$SCRIPT_DIR/.." &> /dev/null && pwd)
@@ -36,16 +36,31 @@ cleanup() {
   rm -rf /tmp/host-node-data /tmp/control-plane-data /tmp/router-data
   adb reverse --remove-all || true
 }
-trap cleanup EXIT
 
-# 1. Build host binaries and docker images
-make build
-make docker-build-control-plane docker-build-router docker-build-node docker-build-mock-oidc
+# Phases let CI build and start the mesh before the emulator exists (setup),
+# and run only the device-attached part under the emulator (test). Locally,
+# the default runs both against an already-connected device.
+PHASE="${1:-all}"
+case "$PHASE" in
+  setup) trap cleanup ERR ;; # on success the mesh stays up for the test phase
+  test | all) trap cleanup EXIT ;;
+  *)
+    echo "usage: $0 [setup|test|all]" >&2
+    exit 2
+    ;;
+esac
 
-# 2. Build Android x86_64 FFI library using the Makefile and copy to Flutter jniLibs
-make mobile-ffi-android-x86_64
+setup_env() {
+# 1. Build the host mcp-client (the only host binary the test drives), the
+# docker images and the Android FFI library in one parallel make run.
+go build -v -o "$REPO_ROOT/bin/mcp-client" ./cmd/mcp-client
+make -j4 docker-build-control-plane docker-build-router docker-build-node docker-build-mock-oidc mobile-ffi-android-x86_64
 mkdir -p mobile/sam-node-app/android/app/src/main/jniLibs/x86_64
 cp bin/android-x86_64/libsam.so mobile/sam-node-app/android/app/src/main/jniLibs/x86_64/libsam.so
+
+# Warm the app dependencies so the emulator-attached phase goes straight to
+# the gradle build.
+(cd mobile/sam-node-app && flutter pub get)
 
 # Create Docker bridge network
 docker network create sam-net || true
@@ -59,9 +74,6 @@ docker run --name mock-oidc \
 
 # Wait for OIDC server to be ready
 timeout 15s bash -c 'until curl -s http://127.0.0.1:18080/ >/dev/null; do sleep 0.5; done'
-
-# Set up adb reverse for OIDC
-adb reverse tcp:18080 tcp:18080
 
 # 4. Start the Control Plane and Router containers
 rm -rf /tmp/control-plane-data /tmp/router-data
@@ -102,10 +114,6 @@ docker run --name sam-router \
   --keys-path /data/router.key \
   --allow-loopback \
   --log-level debug
-
-# Set up adb reverse for Control Plane and Router
-adb reverse tcp:37001 tcp:37001
-adb reverse tcp:37002 tcp:37002
 
 # Wait for Control Plane to be ready
 timeout 15s bash -c 'until curl -s http://127.0.0.1:37001/info >/dev/null; do sleep 0.5; done'
@@ -243,10 +251,17 @@ curl -s -X POST \
   -H "Authorization: Bearer host-token" \
   -d '{"service":{"type":"SERVICE_TYPE_MCP","name":"host-tool","description":"test tool on host"},"targetUrl":"http://host-mock-mcp:9091"}' \
   http://127.0.0.1:8081/sam/service/register
+}
 
-# 7. Start the Android Emulator and run the Flutter integration test
-# Since this script runs on CI inside ReactiveCircus/android-emulator-runner,
-# the emulator is already started and adb is fully connected to the emulator.
+run_test() {
+# The emulator reaches the host mesh through adb reverse.
+adb reverse tcp:18080 tcp:18080
+adb reverse tcp:37001 tcp:37001
+adb reverse tcp:37002 tcp:37002
+
+# 7. Run the Flutter integration test against the running emulator.
+# On CI this phase runs inside ReactiveCircus/android-emulator-runner,
+# so the emulator is already started and adb is fully connected to it.
 cd mobile/sam-node-app
 
 # Run Flutter integration test
@@ -309,3 +324,13 @@ fi
 
 echo "[E2E] SUCCESS: Bidirectional mobile E2E test passed!"
 exit 0
+}
+
+case "$PHASE" in
+  setup) setup_env ;;
+  test) run_test ;;
+  all)
+    setup_env
+    run_test
+    ;;
+esac
