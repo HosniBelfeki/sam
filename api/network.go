@@ -171,6 +171,9 @@ const (
 
 	// ServiceTypeStringInference is the string identifier for Inference services.
 	ServiceTypeStringInference = "inference"
+
+	// ServiceTypeStringA2A is the string identifier for A2A (Agent2Agent) services.
+	ServiceTypeStringA2A = "a2a"
 )
 
 // ParseServiceType converts a string identifier (e.g. from JSON or REST) to the ServiceType protobuf enum.
@@ -180,6 +183,8 @@ func ParseServiceType(s string) (ServiceType, error) {
 		return ServiceType_SERVICE_TYPE_MCP, nil
 	case ServiceTypeStringInference:
 		return ServiceType_SERVICE_TYPE_INFERENCE, nil
+	case ServiceTypeStringA2A:
+		return ServiceType_SERVICE_TYPE_A2A, nil
 	default:
 		return ServiceType_SERVICE_TYPE_UNSPECIFIED, fmt.Errorf("invalid service type: %s", s)
 	}
@@ -192,6 +197,8 @@ func ServiceTypeToString(t ServiceType) (string, error) {
 		return ServiceTypeStringMCP, nil
 	case ServiceType_SERVICE_TYPE_INFERENCE:
 		return ServiceTypeStringInference, nil
+	case ServiceType_SERVICE_TYPE_A2A:
+		return ServiceTypeStringA2A, nil
 	default:
 		return "", fmt.Errorf("invalid or unspecified service type")
 	}

@@ -653,13 +653,100 @@ func handleDiscoverService(node *SamNode, w http.ResponseWriter, r *http.Request
 	}
 }
 
+// egressMiddleware lets a service type hook raw egress traffic without the
+// proxy knowing the type exists. Types self-register from init().
+type egressMiddleware struct {
+	// gateRequest may refuse the request (writing the HTTP error itself,
+	// returning false) or return a derived request to forward.
+	gateRequest func(node *SamNode, w http.ResponseWriter, r *http.Request, route egressRoute) (*http.Request, bool)
+	// serveLocal may fully handle the request at this node (returning true)
+	// instead of letting it stream through the proxy; nil means no hook.
+	// It runs after the egress headers (biscuit, agent claim) are prepared.
+	serveLocal func(node *SamNode, rt http.RoundTripper, w http.ResponseWriter, r *http.Request, route egressRoute) bool
+}
+
+// egressRoute is the parsed /sam/{peer}/{type}/{svc}/{upstream} egress path,
+// with the service type lowercased to match how the remote ingress parses it.
+type egressRoute struct {
+	peerID       string
+	serviceType  string
+	serviceName  string
+	upstreamPath string
+}
+
+// Keyed by lowercase service-type string; written only during init().
+var egressMiddlewares = map[string]egressMiddleware{}
+
+func registerEgressMiddleware(serviceType string, mw egressMiddleware) {
+	egressMiddlewares[strings.ToLower(serviceType)] = mw
+}
+
+// parseEgressRoute parses a /sam/{peer}/{type}/{svc}/{upstream} egress path.
+func parseEgressRoute(path string) (egressRoute, bool) {
+	parts := strings.SplitN(path, "/", 6)
+	if len(parts) < 5 {
+		return egressRoute{}, false
+	}
+	route := egressRoute{peerID: parts[2], serviceType: strings.ToLower(parts[3]), serviceName: parts[4]}
+	if len(parts) > 5 {
+		route.upstreamPath = parts[5]
+	}
+	return route, true
+}
+
+// applyEgressMiddleware routes a raw egress request through the middleware
+// registered for its service type, if any.
+func applyEgressMiddleware(node *SamNode, w http.ResponseWriter, r *http.Request) (*http.Request, bool) {
+	route, ok := parseEgressRoute(r.URL.Path)
+	if !ok {
+		return r, true
+	}
+	mw, ok := egressMiddlewares[route.serviceType]
+	if !ok || mw.gateRequest == nil {
+		return r, true
+	}
+	return mw.gateRequest(node, w, r, route)
+}
+
+// serveEgressLocally gives the service type's middleware a chance to answer
+// the request from this node (e.g. agent-card regeneration) instead of
+// proxying; it reports whether the request was handled.
+func serveEgressLocally(node *SamNode, rt http.RoundTripper, w http.ResponseWriter, r *http.Request) bool {
+	route, ok := parseEgressRoute(r.URL.Path)
+	if !ok {
+		return false
+	}
+	mw, ok := egressMiddlewares[route.serviceType]
+	if !ok || mw.serveLocal == nil {
+		return false
+	}
+	return mw.serveLocal(node, rt, w, r, route)
+}
+
+// allowLimitedEgressConn lets egress traffic ride limited (relayed) libp2p
+// connections while a direct one is established.
+func allowLimitedEgressConn(ctx context.Context) context.Context {
+	return network.WithAllowLimitedConn(ctx, "egress-proxy")
+}
+
+// prepareEgressPeer warms up connectivity to the destination peer of an
+// egress request if it is not already connected.
+func (node *SamNode) prepareEgressPeer(ctx context.Context, peerID string) {
+	pid, err := peer.Decode(peerID)
+	if err != nil {
+		return
+	}
+	if cond := node.Host.Network().Connectedness(pid); cond != network.Connected && cond != network.Limited {
+		node.preparePeerAddrs(ctx, pid)
+	}
+}
+
 func createEgressProxy(node *SamNode) http.Handler {
 	transport := libp2phttp.NewTransport(node.Host)
 
 	proxy := &httputil.ReverseProxy{
 		Director: func(req *http.Request) {
-			ctx := req.Context()
-			ctx = network.WithAllowLimitedConn(ctx, "egress-proxy")
+			ctx := allowLimitedEgressConn(req.Context())
 			*req = *req.WithContext(ctx)
 
 			parts := strings.SplitN(req.URL.Path, "/", 6)
@@ -667,12 +754,7 @@ func createEgressProxy(node *SamNode) http.Handler {
 				return
 			}
 			peerID := parts[2]
-			pid, err := peer.Decode(peerID)
-			if err == nil {
-				if cond := node.Host.Network().Connectedness(pid); cond != network.Connected && cond != network.Limited {
-					node.preparePeerAddrs(ctx, pid)
-				}
-			}
+			node.prepareEgressPeer(ctx, peerID)
 			serviceType := parts[3]
 			serviceName := parts[4]
 			upstreamPath := ""
@@ -708,6 +790,11 @@ func createEgressProxy(node *SamNode) http.Handler {
 			return
 		}
 
+		r, ok := applyEgressMiddleware(node, w, r)
+		if !ok {
+			return
+		}
+
 		r.Header.Set(api.HeaderSamBiscuit, base64.StdEncoding.EncodeToString(biscuitBytes))
 
 		// Forwarded, not stripped: the agent claim is what lets the peer at the
@@ -723,6 +810,10 @@ func createEgressProxy(node *SamNode) http.Handler {
 		// Strip the local sidecar gate header before forwarding off-node; a caller-supplied
 		// "Authorization" header passes straight through untouched as the destination's own credential.
 		r.Header.Del(api.HeaderSamAuthentication)
+
+		if serveEgressLocally(node, transport, w, r) {
+			return
+		}
 
 		proxy.ServeHTTP(w, r)
 	})

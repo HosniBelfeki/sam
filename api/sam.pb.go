@@ -93,6 +93,7 @@ const (
 	ServiceType_SERVICE_TYPE_UNSPECIFIED ServiceType = 0
 	ServiceType_SERVICE_TYPE_MCP         ServiceType = 1
 	ServiceType_SERVICE_TYPE_INFERENCE   ServiceType = 2
+	ServiceType_SERVICE_TYPE_A2A         ServiceType = 3
 )
 
 // Enum value maps for ServiceType.
@@ -101,11 +102,13 @@ var (
 		0: "SERVICE_TYPE_UNSPECIFIED",
 		1: "SERVICE_TYPE_MCP",
 		2: "SERVICE_TYPE_INFERENCE",
+		3: "SERVICE_TYPE_A2A",
 	}
 	ServiceType_value = map[string]int32{
 		"SERVICE_TYPE_UNSPECIFIED": 0,
 		"SERVICE_TYPE_MCP":         1,
 		"SERVICE_TYPE_INFERENCE":   2,
+		"SERVICE_TYPE_A2A":         3,
 	}
 )
 
@@ -3073,11 +3076,12 @@ const file_api_sam_proto_rawDesc = "" +
 	"\x1dENROLLMENT_STATUS_UNSPECIFIED\x10\x00\x12\x1d\n" +
 	"\x19ENROLLMENT_STATUS_PENDING\x10\x01\x12\x1e\n" +
 	"\x1aENROLLMENT_STATUS_APPROVED\x10\x02\x12\x1e\n" +
-	"\x1aENROLLMENT_STATUS_REJECTED\x10\x03*]\n" +
+	"\x1aENROLLMENT_STATUS_REJECTED\x10\x03*s\n" +
 	"\vServiceType\x12\x1c\n" +
 	"\x18SERVICE_TYPE_UNSPECIFIED\x10\x00\x12\x14\n" +
 	"\x10SERVICE_TYPE_MCP\x10\x01\x12\x1a\n" +
-	"\x16SERVICE_TYPE_INFERENCE\x10\x02B\x1bZ\x19github.com/google/sam/apib\x06proto3"
+	"\x16SERVICE_TYPE_INFERENCE\x10\x02\x12\x14\n" +
+	"\x10SERVICE_TYPE_A2A\x10\x03B\x1bZ\x19github.com/google/sam/apib\x06proto3"
 
 var (
 	file_api_sam_proto_rawDescOnce sync.Once

@@ -118,11 +118,6 @@ func (b *baseService) Teardown() error {
 	return b.cmd.Process.Kill()
 }
 
-// A2AService is zero-override embedding. They exist
-// so the factory produces a distinct type per ServiceType, leaving room for
-// future per-kind behaviour without churn.
-type A2AService struct{ baseService }
-
 func NewServiceFromRequest(req *api.RegisterServiceRequest) (Service, error) {
 	info := req.Service
 	switch info.Type {
@@ -130,6 +125,8 @@ func NewServiceFromRequest(req *api.RegisterServiceRequest) (Service, error) {
 		return &MCPService{baseService: baseService{info: info, backend: req.Backend}}, nil
 	case api.ServiceType_SERVICE_TYPE_INFERENCE:
 		return &InferenceService{baseService: baseService{info: info, backend: req.Backend}}, nil
+	case api.ServiceType_SERVICE_TYPE_A2A:
+		return &A2AService{baseService: baseService{info: info, backend: req.Backend}}, nil
 	default:
 		return nil, fmt.Errorf("unspecified or unsupported service type: %v", info.Type)
 	}

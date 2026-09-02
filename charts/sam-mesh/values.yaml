@@ -182,3 +182,6 @@ bootstrap:
   bindings: []
   # Services sam:role:node may call
   nodeServices: ["*"]
+  # Label patterns ("key=value" or "key=*") sam:role:node may attest with
+  # --labels. Empty means nodes cannot enroll with any label (fail closed).
+  nodeLabels: []
