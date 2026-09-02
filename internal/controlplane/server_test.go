@@ -925,16 +925,11 @@ func TestEnrollmentWorkflow(t *testing.T) {
 	}
 }
 
-func TestHandleRefresh_RejectsStaleTimestamp(t *testing.T) {
-	t.Parallel()
+// enrollRefreshTestNode enrolls a bootstrap node directly in the store and
+// returns its key and currently issued biscuit, ready to drive /refresh.
+func enrollRefreshTestNode(t *testing.T, ctx context.Context, store storage.Store) (crypto.PrivKey, []byte) {
+	t.Helper()
 
-	srv, store, cpURL := setupTestServer(t, "")
-	defer func() {
-		_ = srv.Close()
-		_ = store.Close()
-	}()
-
-	ctx := context.Background()
 	cpPriv, _, err := store.GetCurrentKey(ctx)
 	if err != nil {
 		t.Fatalf("GetCurrentKey: %v", err)
@@ -976,28 +971,37 @@ func TestHandleRefresh_RejectsStaleTimestamp(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("EnrollNode: %v", err)
 	}
+	return priv, biscuitBytes
+}
 
-	staleTimestamp := time.Now().Add(-2 * time.Hour).UnixMilli()
-	challengeData := []byte(fmt.Sprintf("%d", staleTimestamp))
-	challengeSig, err := priv.Sign(challengeData)
+// signedRefreshRequest builds a marshaled /refresh body for the given timestamp.
+func signedRefreshRequest(t *testing.T, priv crypto.PrivKey, timestamp int64) []byte {
+	t.Helper()
+
+	sig, err := priv.Sign([]byte(fmt.Sprintf("%d", timestamp)))
 	if err != nil {
 		t.Fatalf("Sign: %v", err)
 	}
-
-	refreshReq := &api.TokenRefreshRequest{
-		ChallengeSignature: challengeSig,
-		Timestamp:          staleTimestamp,
-	}
-	refreshData, err := proto.Marshal(refreshReq)
+	data, err := proto.Marshal(&api.TokenRefreshRequest{
+		ChallengeSignature: sig,
+		Timestamp:          timestamp,
+	})
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
+	return data
+}
 
-	req, err := http.NewRequest(http.MethodPost, cpURL+"/refresh", bytes.NewReader(refreshData))
+// doRefresh posts a prebuilt /refresh body under the given biscuit and returns
+// the response status and body.
+func doRefresh(t *testing.T, cpURL string, biscuit, body []byte) (int, []byte) {
+	t.Helper()
+
+	req, err := http.NewRequest(http.MethodPost, cpURL+"/refresh", bytes.NewReader(body))
 	if err != nil {
 		t.Fatalf("NewRequest: %v", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+base64.StdEncoding.EncodeToString(biscuitBytes))
+	req.Header.Set("Authorization", "Bearer "+base64.StdEncoding.EncodeToString(biscuit))
 	req.Header.Set("Content-Type", "application/x-protobuf")
 
 	resp, err := http.DefaultClient.Do(req)
@@ -1005,10 +1009,90 @@ func TestHandleRefresh_RejectsStaleTimestamp(t *testing.T) {
 		t.Fatalf("Do: %v", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
+	respBody, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, respBody
+}
 
-	if resp.StatusCode != http.StatusUnauthorized {
-		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("expected stale-timestamp refresh to be rejected with 401, got %s: %s", resp.Status, body)
+// TestHandleRefresh_TimestampFreshness walks the challenge timestamp across
+// the ±5m freshness window. Each case enrolls its own node because a
+// successful refresh rotates the biscuit and would bleed into the next case.
+func TestHandleRefresh_TimestampFreshness(t *testing.T) {
+	t.Parallel()
+
+	srv, store, cpURL := setupTestServer(t, "")
+	defer func() {
+		_ = srv.Close()
+		_ = store.Close()
+	}()
+
+	ctx := context.Background()
+
+	cases := []struct {
+		name       string
+		timestamp  func() int64
+		wantStatus int
+	}{
+		{"fresh", func() int64 { return time.Now().UnixMilli() }, http.StatusOK},
+		{"within window past", func() int64 { return time.Now().Add(-4 * time.Minute).UnixMilli() }, http.StatusOK},
+		{"within window future", func() int64 { return time.Now().Add(4 * time.Minute).UnixMilli() }, http.StatusOK},
+		{"stale", func() int64 { return time.Now().Add(-2 * time.Hour).UnixMilli() }, http.StatusUnauthorized},
+		{"far future", func() int64 { return time.Now().Add(2 * time.Hour).UnixMilli() }, http.StatusUnauthorized},
+		{"seconds instead of milliseconds", func() int64 { return time.Now().Unix() }, http.StatusUnauthorized},
+		{"zero", func() int64 { return 0 }, http.StatusBadRequest},
+		{"negative", func() int64 { return -1 }, http.StatusBadRequest},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			priv, biscuitBytes := enrollRefreshTestNode(t, ctx, store)
+			status, body := doRefresh(t, cpURL, biscuitBytes, signedRefreshRequest(t, priv, tc.timestamp()))
+			if status != tc.wantStatus {
+				t.Errorf("got status %d, want %d (body: %s)", status, tc.wantStatus, body)
+			}
+		})
+	}
+}
+
+// TestHandleRefresh_BiscuitIsSingleUse pins refresh-token rotation: a biscuit
+// can be redeemed exactly once, so a captured request replayed inside the
+// freshness window mints nothing, while the rotated token keeps refreshing.
+func TestHandleRefresh_BiscuitIsSingleUse(t *testing.T) {
+	t.Parallel()
+
+	srv, store, cpURL := setupTestServer(t, "")
+	defer func() {
+		_ = srv.Close()
+		_ = store.Close()
+	}()
+
+	ctx := context.Background()
+	priv, biscuitBytes := enrollRefreshTestNode(t, ctx, store)
+
+	refreshData := signedRefreshRequest(t, priv, time.Now().UnixMilli())
+
+	status, body := doRefresh(t, cpURL, biscuitBytes, refreshData)
+	if status != http.StatusOK {
+		t.Fatalf("first refresh: got %d: %s", status, body)
+	}
+	var refreshResp api.TokenRefreshResponse
+	if err := proto.Unmarshal(body, &refreshResp); err != nil {
+		t.Fatalf("unmarshal TokenRefreshResponse: %v", err)
+	}
+	if bytes.Equal(refreshResp.BiscuitToken, biscuitBytes) {
+		t.Fatal("refresh returned the same biscuit instead of rotating it")
+	}
+
+	// Byte-identical replay of the captured request: the timestamp is still
+	// fresh, but the presented biscuit has been rotated.
+	status, body = doRefresh(t, cpURL, biscuitBytes, refreshData)
+	if status != http.StatusUnauthorized {
+		t.Fatalf("expected replayed refresh to be rejected with 401, got %d: %s", status, body)
+	}
+
+	// The rotated token is the one redeemable credential.
+	status, body = doRefresh(t, cpURL, refreshResp.BiscuitToken, signedRefreshRequest(t, priv, time.Now().UnixMilli()))
+	if status != http.StatusOK {
+		t.Fatalf("refresh with rotated biscuit: got %d: %s", status, body)
 	}
 }
 

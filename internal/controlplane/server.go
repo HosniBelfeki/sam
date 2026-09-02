@@ -697,6 +697,16 @@ func (s *Server) HandleRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Rotation with reuse detection: every issuance path persists the latest
+	// biscuit, so only that one token is redeemable. A replayed refresh
+	// presents an already-rotated biscuit and is refused; a node that lost the
+	// rotated token recovers through its re-enrollment fallback.
+	if subtle.ConstantTimeCompare(currentBiscuitBytes, nodeRecord.Biscuit) != 1 {
+		logger.Warnw("Refresh presented an already-rotated biscuit (possible replay)", "peer_id", nodeRecord.PeerID)
+		http.Error(w, "Biscuit already rotated: only the latest issued token can be refreshed, re-enroll instead", http.StatusUnauthorized)
+		return
+	}
+
 	// Fetch current signing private key and policy config
 	privKey, _, err := s.store.GetCurrentKey(ctx)
 	if err != nil {

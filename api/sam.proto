@@ -215,7 +215,9 @@ message KeysResponse {
 }
 
 message TokenRefreshRequest {
+  // Signature over the decimal string form of timestamp, made with the node key.
   bytes challenge_signature = 1;
+  // Unix milliseconds. Must be within the control plane's freshness window.
   int64 timestamp = 2;
 }
 
