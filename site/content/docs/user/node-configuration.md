@@ -73,7 +73,7 @@ When configuring `target_url` for `type: inference` services (e.g. Ollama, vLLM,
 
 When configuring `type: a2a` services (Agent2Agent protocol agents):
 * **URL backends only**: register the agent's local HTTP endpoint as `target_url`. `command` backends are rejected.
-* **Raw Proxy Access**: remote peers reach the agent at `http://localhost:8080/sam/{peer}/a2a/{service}/...`. The agent card served at `.../.well-known/agent-card.json` is rewritten in transit so its interface URLs point back at this mesh path; transports the mesh cannot carry (gRPC) are dropped and streaming is advertised off.
+* **Raw Proxy Access**: remote peers reach the agent at `http://localhost:8080/sam/{peer}/a2a/{service}/...`. For the agent card at `.../.well-known/agent-card.json`, the caller's node impersonates the endpoint: it fetches the card from the agent (A2A v1.0 format) and serves a regenerated one whose interface URLs point back at this mesh path; protocol bindings the mesh cannot carry (gRPC) are dropped, streaming is advertised off, and the original signatures are removed since the content changed.
 * **Label-gated egress**: setting `X-Sam-Required-Labels: key=value[,key=value]` on a raw a2a request makes the caller's node verify the provider's control-plane-attested labels and refuse fail-closed (HTTP 403) before any data leaves the node. The header is stripped before forwarding.
 * **Runnable example**: the [A2A Chat use case](../../use-cases/chat-a2a/) walks through hosting an a2a agent on a kind mesh and talking to it with a stock `a2a-sdk` client.
 

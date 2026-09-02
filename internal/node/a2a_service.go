@@ -15,7 +15,6 @@
 package node
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -24,14 +23,15 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/google/sam/api"
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
 func init() {
 	registerEgressMiddleware(api.ServiceTypeStringA2A, egressMiddleware{
-		gateRequest:    a2aEgressGate,
-		modifyResponse: rewriteA2AAgentCard,
+		gateRequest: a2aEgressGate,
+		serveLocal:  a2aServeAgentCard,
 	})
 }
 
@@ -56,13 +56,9 @@ func (s *A2AService) Init(ctx context.Context) error {
 	return nil
 }
 
-// a2aCardBaseURL is the context key carrying the caller-facing mesh base URL
-// of an agent-card fetch, set by a2aEgressGate and consumed by the rewrite.
-type a2aCardBaseURL struct{}
-
 // a2aEgressGate runs the caller-side A2A checks on a raw egress request:
-// the fail-closed labels gate and tagging agent-card fetches for rewrite.
-// On refusal it writes the HTTP error itself and returns ok=false.
+// the fail-closed labels gate. On refusal it writes the HTTP error itself
+// and returns ok=false.
 func a2aEgressGate(node *SamNode, w http.ResponseWriter, r *http.Request, route egressRoute) (*http.Request, bool) {
 	if labelsHeader := r.Header.Get(api.HeaderSamRequiredLabels); labelsHeader != "" {
 		r.Header.Del(api.HeaderSamRequiredLabels)
@@ -82,78 +78,115 @@ func a2aEgressGate(node *SamNode, w http.ResponseWriter, r *http.Request, route 
 			return r, false
 		}
 	}
-	if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/.well-known/agent-card.json") {
-		base := fmt.Sprintf("http://%s/sam/%s/%s/%s", r.Host, route.peerID, route.serviceType, route.serviceName)
-		r = r.WithContext(context.WithValue(r.Context(), a2aCardBaseURL{}, base))
-	}
 	return r, true
 }
 
-// rewriteA2AAgentCard makes a proxied agent card usable by stock A2A clients:
-// interface URLs point back at the mesh path, transports the mesh cannot
-// carry (gRPC) are dropped, and streaming is advertised off until verified.
-func rewriteA2AAgentCard(resp *http.Response) error {
-	base, ok := resp.Request.Context().Value(a2aCardBaseURL{}).(string)
-	if !ok || resp.StatusCode != http.StatusOK {
-		return nil
+// a2aAgentCardPath is the well-known agent card location (A2A spec / RFC 8615).
+const a2aAgentCardPath = ".well-known/agent-card.json"
+
+// maxAgentCardBytes bounds how much of a remote agent card the node ingests.
+const maxAgentCardBytes = 1 << 20
+
+// a2aServeAgentCard impersonates the remote agent's card endpoint: it holds
+// the client request, fetches the card from the agent over the mesh, and
+// serves a regenerated card whose interfaces point at the local mesh URL.
+// Stock A2A clients then talk to the agent through this node unmodified.
+// Non-card requests are left to the streaming egress proxy.
+func a2aServeAgentCard(node *SamNode, rt http.RoundTripper, w http.ResponseWriter, r *http.Request, route egressRoute) bool {
+	if r.Method != http.MethodGet || route.upstreamPath != a2aAgentCardPath {
+		return false
 	}
-	if resp.Header.Get("Content-Encoding") != "" {
-		logger.Warnf("[A2A] agent card response is content-encoded; skipping rewrite")
-		return nil
-	}
-	body, err := io.ReadAll(resp.Body)
-	_ = resp.Body.Close()
+	resp, err := fetchRemoteAgentCard(node, rt, r, route)
 	if err != nil {
-		return err
+		logger.Warnf("[A2A] agent card fetch from %s failed: %v", route.peerID, err)
+		http.Error(w, "Bad Gateway: agent card fetch failed", http.StatusBadGateway)
+		return true
 	}
-	var card map[string]any
-	if err := json.Unmarshal(body, &card); err != nil {
-		return fmt.Errorf("agent card is not valid JSON: %w", err)
+	defer func() { _ = resp.Body.Close() }()
+
+	body := io.LimitReader(resp.Body, maxAgentCardBytes)
+	if resp.StatusCode != http.StatusOK {
+		// The agent's own error; relay it as-is.
+		if ct := resp.Header.Get("Content-Type"); ct != "" {
+			w.Header().Set("Content-Type", ct)
+		}
+		w.WriteHeader(resp.StatusCode)
+		_, _ = io.Copy(w, body)
+		return true
 	}
-	if _, ok := card["url"]; ok {
-		card["url"] = base
+
+	var card a2a.AgentCard
+	if err := json.NewDecoder(body).Decode(&card); err != nil {
+		logger.Warnf("[A2A] agent card from %s is not valid JSON: %v", route.peerID, err)
+		http.Error(w, "Bad Gateway: agent card is not valid JSON", http.StatusBadGateway)
+		return true
 	}
-	if pt, ok := card["preferredTransport"].(string); ok && !a2aTransportOverHTTP(pt) {
-		card["preferredTransport"] = "JSONRPC"
+	base := fmt.Sprintf("http://%s/sam/%s/%s/%s", r.Host, route.peerID, route.serviceType, route.serviceName)
+	if err := regenerateAgentCardForMesh(&card, base); err != nil {
+		logger.Warnf("[A2A] agent card from %s unusable through the mesh: %v", route.peerID, err)
+		http.Error(w, fmt.Sprintf("Bad Gateway: %v", err), http.StatusBadGateway)
+		return true
 	}
-	for _, key := range []string{"additionalInterfaces", "supportedInterfaces"} {
-		ifaces, ok := card[key].([]any)
-		if !ok {
+	out, err := json.Marshal(&card)
+	if err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return true
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Length", strconv.Itoa(len(out)))
+	_, _ = w.Write(out)
+	return true
+}
+
+// fetchRemoteAgentCard performs the mesh-side GET for the agent card, reusing
+// the headers already prepared for egress (biscuit, agent claim, passthrough
+// Authorization) on the incoming request.
+func fetchRemoteAgentCard(node *SamNode, rt http.RoundTripper, r *http.Request, route egressRoute) (*http.Response, error) {
+	ctx := allowLimitedEgressConn(r.Context())
+	if node != nil {
+		node.prepareEgressPeer(ctx, route.peerID)
+	}
+	url := fmt.Sprintf("libp2p://%s/%s/%s/%s", route.peerID, route.serviceType, route.serviceName, a2aAgentCardPath)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header = r.Header.Clone()
+	// The node decodes the card itself, so negotiate identity encoding
+	// regardless of what the held client asked for.
+	req.Header.Del("Accept-Encoding")
+	req.Host = route.peerID
+	return (&http.Client{Transport: rt}).Do(req)
+}
+
+// regenerateAgentCardForMesh rebuilds a fetched agent card for mesh use:
+// interface URLs point back at the mesh path, bindings the mesh cannot carry
+// (gRPC) are dropped, streaming is advertised off until verified, and the
+// original signatures are removed since they no longer match the content.
+func regenerateAgentCardForMesh(card *a2a.AgentCard, base string) error {
+	kept := make([]*a2a.AgentInterface, 0, len(card.SupportedInterfaces))
+	for _, iface := range card.SupportedInterfaces {
+		if iface == nil || !a2aBindingOverHTTP(iface.ProtocolBinding) {
 			continue
 		}
-		kept := make([]any, 0, len(ifaces))
-		for _, entry := range ifaces {
-			iface, ok := entry.(map[string]any)
-			if !ok {
-				continue
-			}
-			transport, _ := iface["transport"].(string)
-			if transport == "" {
-				transport, _ = iface["protocolBinding"].(string)
-			}
-			if !a2aTransportOverHTTP(transport) {
-				continue
-			}
-			iface["url"] = base
-			kept = append(kept, iface)
-		}
-		card[key] = kept
+		iface.URL = base
+		kept = append(kept, iface)
 	}
-	if caps, ok := card["capabilities"].(map[string]any); ok {
-		caps["streaming"] = false
+	if len(kept) == 0 {
+		return fmt.Errorf("agent card advertises no supported interface the mesh can carry (JSONRPC or HTTP+JSON); is the agent serving a pre-1.0 A2A card?")
 	}
-	out, err := json.Marshal(card)
-	if err != nil {
-		return err
-	}
-	resp.Body = io.NopCloser(bytes.NewReader(out))
-	resp.ContentLength = int64(len(out))
-	resp.Header.Set("Content-Length", strconv.Itoa(len(out)))
+	card.SupportedInterfaces = kept
+	card.Capabilities.Streaming = false
+	card.Signatures = nil
 	return nil
 }
 
-// a2aTransportOverHTTP reports whether an A2A transport can traverse the
+// a2aBindingOverHTTP reports whether an A2A protocol binding can traverse the
 // mesh's HTTP-over-libp2p path; gRPC needs its own end-to-end connection.
-func a2aTransportOverHTTP(transport string) bool {
-	return transport == "JSONRPC" || transport == "HTTP+JSON"
+func a2aBindingOverHTTP(binding a2a.TransportProtocol) bool {
+	switch strings.ToUpper(string(binding)) {
+	case string(a2a.TransportProtocolJSONRPC), string(a2a.TransportProtocolHTTPJSON):
+		return true
+	}
+	return false
 }

@@ -7,7 +7,7 @@ weight: 30
 Hold a multi-turn conversation with an [A2A](https://a2a-protocol.org/)
 (Agent2Agent) agent hosted on a remote mesh node — using a **stock,
 unmodified `a2a-sdk` client**. No SAM-specific client code: the mesh's
-agent-card rewrite makes the standard SDK work as-is.
+agent-card regeneration makes the standard SDK work as-is.
 
 Source: [`development/examples/chat-a2a/`](https://github.com/google/sam/tree/main/development/examples/chat-a2a).
 
@@ -25,18 +25,19 @@ agent's own interface URLs — addresses that are only reachable on the
 provider's machine. A stock client would fetch the card through the mesh,
 then try to talk to `http://127.0.0.1:7777/` and fail.
 
-So the caller's node rewrites the card **in transit**: interface URLs are
-pointed back at the mesh path the client fetched from, transports the mesh
-cannot carry (gRPC needs its own end-to-end connection) are dropped, and
-streaming is advertised off. The client follows the rewritten URLs like it
-would for any A2A server — discovery, JSON-RPC `message/send`, and
-`contextId` round-tripping all work unmodified, while the traffic actually
-flows over libp2p between the nodes.
+So the caller's node **impersonates the card endpoint**: it holds the
+client's request, fetches the card from the agent over the mesh, and serves
+a regenerated card — interface URLs point back at the mesh path the client
+fetched from, protocol bindings the mesh cannot carry (gRPC needs its own
+end-to-end connection) are dropped, and streaming is advertised off. The
+client follows the regenerated card like it would for any A2A server —
+discovery, JSON-RPC `message/send`, and `contextId` round-tripping all work
+unmodified, while the traffic actually flows over libp2p between the nodes.
 
 This example proves both halves:
 
-- **Card rewrite** — the bundled REPL is a plain `a2a-sdk` client; it works
-  only because the rewritten card sends it back through the mesh.
+- **Card regeneration** — the bundled REPL is a plain `a2a-sdk` client; it
+  works only because the regenerated card sends it back through the mesh.
 - **Conversation continuity** — the agent keeps one Gemini chat session per
   A2A `contextId`. Tell it your name, ask for it back two turns later: the
   answer shows the context survived the mesh hop. Each turn is still its own
@@ -61,7 +62,7 @@ This example proves both halves:
   LangGraph, a hosted agent) plugs in the same way, one `target_url` line in
   the node config.
 - **Use any stock A2A client** — `chat.py` is just the smallest one. The
-  rewritten card means SDKs, CLIs, and other agents resolve and call the
+  regenerated card means SDKs, CLIs, and other agents resolve and call the
   service without knowing SAM exists.
 - **Let the agent own the conversation** — the same pattern as
   [Gemini Buddy](../gemini-buddy/), but on the standard A2A wire instead of a
@@ -109,7 +110,7 @@ The local node is your entry point: its sidecar API listens on
 Note the peer ID and export it as `PEER`. Discovery is gossip-fed; retry for
 a few seconds after startup if the list comes back empty.
 
-### 5. Watch the card rewrite happen
+### 5. Watch the card regeneration happen
 
 Fetch the agent card through the mesh with nothing but `curl`:
 
@@ -120,7 +121,8 @@ curl -s -H 'X-Sam-Authentication: Bearer devtoken' \
 
 The interface URLs in the response point back at this
 `/sam/{peer}/a2a/chat` path — not at the agent's own `127.0.0.1:7777` — and
-`capabilities.streaming` is `false`. That rewrite is the whole trick.
+`capabilities.streaming` is `false`. That regenerated card is the whole
+trick.
 
 ### 6. Chat
 

@@ -17,12 +17,14 @@ package node
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/google/sam/api"
 )
 
@@ -89,87 +91,103 @@ func TestA2AEgressHookMalformedLabels(t *testing.T) {
 	}
 }
 
-func TestA2AEgressHookTagsCardFetch(t *testing.T) {
+// roundTripFunc fakes the mesh transport for agent-card fetches.
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func cardResponse(status int, body string) *http.Response {
+	return &http.Response{
+		StatusCode: status,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(body)),
+	}
+}
+
+func TestA2AServeAgentCardRegenerates(t *testing.T) {
+	const upstreamCard = `{
+	  "name": "T",
+	  "description": "d",
+	  "version": "1.0.0",
+	  "capabilities": {"streaming": true},
+	  "supportedInterfaces": [
+	    {"url": "http://localhost:7777/", "protocolBinding": "JSONRPC", "protocolVersion": "1.0"},
+	    {"url": "localhost:50051", "protocolBinding": "GRPC", "protocolVersion": "1.0"}
+	  ],
+	  "signatures": [{"protected": "eyJh", "signature": "sig"}],
+	  "defaultInputModes": ["text"],
+	  "defaultOutputModes": ["text"],
+	  "skills": []
+	}`
+	var outbound *http.Request
+	rt := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		outbound = r
+		return cardResponse(http.StatusOK, upstreamCard), nil
+	})
+
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/sam/12D3KooWpeer/a2a/agent/.well-known/agent-card.json", nil)
 	req.Host = "127.0.0.1:8080"
-	r2, ok := applyEgressMiddleware(nil, rec, req)
-	if !ok {
-		t.Fatal("card fetch must pass through")
+	req.Header.Set(api.HeaderSamBiscuit, "b64-biscuit")
+	req.Header.Set("Accept-Encoding", "gzip")
+	if !serveEgressLocally(nil, rt, rec, req) {
+		t.Fatal("agent-card GET must be handled locally")
 	}
-	base, _ := r2.Context().Value(a2aCardBaseURL{}).(string)
-	want := "http://127.0.0.1:8080/sam/12D3KooWpeer/a2a/agent"
-	if base != want {
-		t.Fatalf("card base = %q, want %q", base, want)
-	}
-}
 
-func TestRewriteA2AAgentCard(t *testing.T) {
-	card := `{
-	  "name": "T",
-	  "url": "http://localhost:9999",
-	  "preferredTransport": "GRPC",
-	  "additionalInterfaces": [
-	    {"url": "http://localhost:9999", "transport": "JSONRPC"},
-	    {"url": "localhost:50051", "transport": "GRPC"}
-	  ],
-	  "supportedInterfaces": [
-	    {"url": "http://localhost:9999", "protocolBinding": "JSONRPC"},
-	    {"url": "localhost:50051", "protocolBinding": "GRPC"}
-	  ],
-	  "capabilities": {"streaming": true}
-	}`
+	wantURL := "libp2p://12D3KooWpeer/a2a/agent/.well-known/agent-card.json"
+	if got := outbound.URL.String(); got != wantURL {
+		t.Errorf("outbound fetch URL = %q, want %q", got, wantURL)
+	}
+	if outbound.Header.Get(api.HeaderSamBiscuit) != "b64-biscuit" {
+		t.Error("egress headers must be carried on the card fetch")
+	}
+	if outbound.Header.Get("Accept-Encoding") != "" {
+		t.Error("card fetch must negotiate identity encoding")
+	}
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body: %s", rec.Code, rec.Body.String())
+	}
+	var card a2a.AgentCard
+	if err := json.Unmarshal(rec.Body.Bytes(), &card); err != nil {
+		t.Fatalf("regenerated card is not a valid AgentCard: %v", err)
+	}
 	base := "http://127.0.0.1:8080/sam/12D3KooWpeer/a2a/agent"
-	req := httptest.NewRequest("GET", "/sam/12D3KooWpeer/a2a/agent/.well-known/agent-card.json", nil)
-	req = req.WithContext(context.WithValue(req.Context(), a2aCardBaseURL{}, base))
-	resp := &http.Response{
-		StatusCode: http.StatusOK,
-		Header:     http.Header{},
-		Body:       io.NopCloser(strings.NewReader(card)),
-		Request:    req,
+	if len(card.SupportedInterfaces) != 1 {
+		t.Fatalf("want 1 HTTP interface after dropping gRPC, got %v", card.SupportedInterfaces)
 	}
-	if err := rewriteA2AAgentCard(resp); err != nil {
-		t.Fatal(err)
+	if card.SupportedInterfaces[0].URL != base {
+		t.Errorf("interface url = %q, want %q", card.SupportedInterfaces[0].URL, base)
 	}
-	body, _ := io.ReadAll(resp.Body)
-	var got map[string]any
-	if err := json.Unmarshal(body, &got); err != nil {
-		t.Fatalf("rewritten card is not JSON: %v", err)
+	if card.SupportedInterfaces[0].ProtocolBinding != a2a.TransportProtocolJSONRPC {
+		t.Errorf("binding = %q, want JSONRPC", card.SupportedInterfaces[0].ProtocolBinding)
 	}
-	if got["url"] != base {
-		t.Errorf("url = %v, want %s", got["url"], base)
+	if card.Capabilities.Streaming {
+		t.Error("streaming must be advertised off through the mesh")
 	}
-	if got["preferredTransport"] != "JSONRPC" {
-		t.Errorf("preferredTransport = %v, want JSONRPC", got["preferredTransport"])
+	if len(card.Signatures) != 0 {
+		t.Error("stale signatures must be dropped from the regenerated card")
 	}
-	for _, key := range []string{"additionalInterfaces", "supportedInterfaces"} {
-		ifaces, _ := got[key].([]any)
-		if len(ifaces) != 1 {
-			t.Fatalf("%s: want 1 HTTP interface after dropping gRPC, got %v", key, got[key])
-		}
-		if u := ifaces[0].(map[string]any)["url"]; u != base {
-			t.Errorf("%s url = %v, want %s", key, u, base)
-		}
-	}
-	if s := got["capabilities"].(map[string]any)["streaming"]; s != false {
-		t.Errorf("streaming = %v, want false", s)
+	if card.Name != "T" || card.Version != "1.0.0" {
+		t.Errorf("agent identity fields must survive regeneration: %+v", card)
 	}
 }
 
-func TestRewriteA2AAgentCardNoopWithoutTag(t *testing.T) {
-	orig := `{"name":"T","url":"http://localhost:9999"}`
-	resp := &http.Response{
-		StatusCode: http.StatusOK,
-		Header:     http.Header{},
-		Body:       io.NopCloser(strings.NewReader(orig)),
-		Request:    httptest.NewRequest("GET", "/anything", nil),
-	}
-	if err := rewriteA2AAgentCard(resp); err != nil {
-		t.Fatal(err)
-	}
-	body, _ := io.ReadAll(resp.Body)
-	if string(body) != orig {
-		t.Fatalf("untagged response was modified: %s", body)
+func TestA2AServeAgentCardIgnoresNonCardRequests(t *testing.T) {
+	rt := roundTripFunc(func(*http.Request) (*http.Response, error) {
+		t.Fatal("no mesh fetch expected")
+		return nil, nil
+	})
+	for _, tc := range []struct{ method, path string }{
+		{"POST", "/sam/12D3KooWpeer/a2a/agent/.well-known/agent-card.json"},
+		{"GET", "/sam/12D3KooWpeer/a2a/agent/tasks/1"},
+		{"GET", "/sam/12D3KooWpeer/mcp/svc/.well-known/agent-card.json"},
+	} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(tc.method, tc.path, nil)
+		if serveEgressLocally(nil, rt, rec, req) {
+			t.Errorf("%s %s must stream through the proxy", tc.method, tc.path)
+		}
 	}
 }
 
@@ -186,43 +204,76 @@ func TestA2AEgressHookInvalidPeerID(t *testing.T) {
 	}
 }
 
-func TestRewriteA2AAgentCardSkipsNon200(t *testing.T) {
-	orig := `{"name":"T","url":"http://localhost:9999"}`
-	base := "http://127.0.0.1:8080/sam/12D3KooWpeer/a2a/agent"
+func TestA2AServeAgentCardNoHTTPBindingFailsClosed(t *testing.T) {
+	rt := roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return cardResponse(http.StatusOK,
+			`{"name":"T","supportedInterfaces":[{"url":"localhost:50051","protocolBinding":"GRPC"}]}`), nil
+	})
+	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/sam/12D3KooWpeer/a2a/agent/.well-known/agent-card.json", nil)
-	req = req.WithContext(context.WithValue(req.Context(), a2aCardBaseURL{}, base))
-	resp := &http.Response{
-		StatusCode: http.StatusNotFound,
-		Header:     http.Header{},
-		Body:       io.NopCloser(strings.NewReader(orig)),
-		Request:    req,
+	if !serveEgressLocally(nil, rt, rec, req) {
+		t.Fatal("card GET must be handled locally")
 	}
-	if err := rewriteA2AAgentCard(resp); err != nil {
-		t.Fatal(err)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", rec.Code)
 	}
-	body, _ := io.ReadAll(resp.Body)
-	if string(body) != orig {
-		t.Fatalf("non-200 response was modified: %s", body)
+	if !strings.Contains(rec.Body.String(), "mesh can carry") {
+		t.Errorf("error must name the refusal reason, got: %s", rec.Body.String())
 	}
 }
 
-func TestRewriteA2AAgentCardSkipsContentEncoded(t *testing.T) {
-	orig := `{"name":"T","url":"http://localhost:9999"}`
-	base := "http://127.0.0.1:8080/sam/12D3KooWpeer/a2a/agent"
+func TestA2AServeAgentCardPre10CardFailsClosed(t *testing.T) {
+	// A2A v0.3-shaped card: interfaces live in additionalInterfaces, which the
+	// v1.0 type does not carry, so regeneration must refuse rather than serve
+	// a card with no usable interface.
+	rt := roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return cardResponse(http.StatusOK, `{"name":"T","url":"http://localhost:9999",`+
+			`"preferredTransport":"JSONRPC",`+
+			`"additionalInterfaces":[{"url":"http://localhost:9999","transport":"JSONRPC"}]}`), nil
+	})
+	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/sam/12D3KooWpeer/a2a/agent/.well-known/agent-card.json", nil)
-	req = req.WithContext(context.WithValue(req.Context(), a2aCardBaseURL{}, base))
-	resp := &http.Response{
-		StatusCode: http.StatusOK,
-		Header:     http.Header{"Content-Encoding": []string{"gzip"}},
-		Body:       io.NopCloser(strings.NewReader(orig)),
-		Request:    req,
+	if !serveEgressLocally(nil, rt, rec, req) {
+		t.Fatal("card GET must be handled locally")
 	}
-	if err := rewriteA2AAgentCard(resp); err != nil {
-		t.Fatal(err)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", rec.Code)
 	}
-	body, _ := io.ReadAll(resp.Body)
-	if string(body) != orig {
-		t.Fatalf("content-encoded response was modified: %s", body)
+	if !strings.Contains(rec.Body.String(), "pre-1.0") {
+		t.Errorf("error must hint at the card vintage, got: %s", rec.Body.String())
+	}
+}
+
+func TestA2AServeAgentCardRelaysUpstreamError(t *testing.T) {
+	rt := roundTripFunc(func(*http.Request) (*http.Response, error) {
+		resp := cardResponse(http.StatusNotFound, "no card here")
+		resp.Header.Set("Content-Type", "text/plain")
+		return resp, nil
+	})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/sam/12D3KooWpeer/a2a/agent/.well-known/agent-card.json", nil)
+	if !serveEgressLocally(nil, rt, rec, req) {
+		t.Fatal("card GET must be handled locally")
+	}
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want the agent's own 404", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "no card here") {
+		t.Errorf("agent's error body must be relayed, got: %s", rec.Body.String())
+	}
+}
+
+func TestA2AServeAgentCardFetchErrorIs502(t *testing.T) {
+	rt := roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("peer unreachable")
+	})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/sam/12D3KooWpeer/a2a/agent/.well-known/agent-card.json", nil)
+	if !serveEgressLocally(nil, rt, rec, req) {
+		t.Fatal("card GET must be handled locally")
+	}
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", rec.Code)
 	}
 }
 

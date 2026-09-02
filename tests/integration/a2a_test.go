@@ -82,10 +82,10 @@ func TestA2ACUJ(t *testing.T) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/.well-known/agent-card.json":
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"name":"echo-agent","url":"http://localhost:9999",` +
-				`"preferredTransport":"JSONRPC",` +
-				`"additionalInterfaces":[{"url":"http://localhost:9999","transport":"JSONRPC"},` +
-				`{"url":"localhost:50051","transport":"GRPC"}],` +
+			_, _ = w.Write([]byte(`{"name":"echo-agent",` +
+				`"supportedInterfaces":[` +
+				`{"url":"http://localhost:9999","protocolBinding":"JSONRPC","protocolVersion":"1.0"},` +
+				`{"url":"localhost:50051","protocolBinding":"GRPC","protocolVersion":"1.0"}],` +
 				`"capabilities":{"streaming":true}}`))
 		case r.Method == http.MethodPost:
 			sendCount.Add(1)
@@ -123,12 +123,10 @@ func TestA2ACUJ(t *testing.T) {
 		time.Sleep(200 * time.Millisecond)
 	}
 	var card struct {
-		URL                  string `json:"url"`
-		PreferredTransport   string `json:"preferredTransport"`
-		AdditionalInterfaces []struct {
-			URL       string `json:"url"`
-			Transport string `json:"transport"`
-		} `json:"additionalInterfaces"`
+		SupportedInterfaces []struct {
+			URL             string `json:"url"`
+			ProtocolBinding string `json:"protocolBinding"`
+		} `json:"supportedInterfaces"`
 		Capabilities struct {
 			Streaming bool `json:"streaming"`
 		} `json:"capabilities"`
@@ -136,11 +134,8 @@ func TestA2ACUJ(t *testing.T) {
 	if err := json.Unmarshal(cardBody, &card); err != nil {
 		t.Fatalf("invalid card: %v, body: %s", err, string(cardBody))
 	}
-	if card.URL != meshBase {
-		t.Errorf("card url = %q, want mesh base %q", card.URL, meshBase)
-	}
-	if len(card.AdditionalInterfaces) != 1 || card.AdditionalInterfaces[0].URL != meshBase {
-		t.Errorf("interfaces not rewritten / gRPC not dropped: %s", string(cardBody))
+	if len(card.SupportedInterfaces) != 1 || card.SupportedInterfaces[0].URL != meshBase {
+		t.Errorf("interfaces not regenerated / gRPC not dropped: %s", string(cardBody))
 	}
 	if card.Capabilities.Streaming {
 		t.Error("streaming must be advertised off through the mesh")

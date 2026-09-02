@@ -96,7 +96,7 @@ handler = DefaultRequestHandler(
     agent_card=agent_card,
 )
 # Starlette over FastAPI: the SDK generates the routes, so FastAPI would add nothing.
-# JSON-RPC at "/": the mesh card rewrite drops URL subpaths, so clients land on the root.
+# JSON-RPC at "/": the mesh card regeneration drops URL subpaths, so clients land on the root.
 app = Starlette(
     routes=[
         *create_jsonrpc_routes(request_handler=handler, rpc_url="/"),
