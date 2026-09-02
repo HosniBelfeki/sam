@@ -79,15 +79,18 @@ func TestA2AEgressHookNonA2APassthrough(t *testing.T) {
 }
 
 func TestA2AEgressHookMalformedLabels(t *testing.T) {
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("POST", "/sam/12D3KooWpeer/a2a/agent/", nil)
-	req.Header.Set(api.HeaderSamRequiredLabels, "not-a-label")
-	_, ok := applyEgressMiddleware(nil, rec, req)
-	if ok {
-		t.Fatal("malformed labels must be refused")
-	}
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", rec.Code)
+	// ",," is the fail-open shape: it must not parse to "no requirement".
+	for _, header := range []string{"not-a-label", ",,"} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("POST", "/sam/12D3KooWpeer/a2a/agent/", nil)
+		req.Header.Set(api.HeaderSamRequiredLabels, header)
+		_, ok := applyEgressMiddleware(nil, rec, req)
+		if ok {
+			t.Fatalf("labels header %q must be refused", header)
+		}
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("labels header %q: status = %d, want 400", header, rec.Code)
+		}
 	}
 }
 

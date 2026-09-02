@@ -31,6 +31,12 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
+// testTimeout bounds datalog evaluation in these tests. It is deliberately
+// generous: WithMaxDuration is a wall-clock bound, and under -race on an
+// oversubscribed CI runner a goroutine can be starved long past a sub-second
+// budget purely by scheduling. No test here asserts anything about timing.
+const testTimeout = time.Minute
+
 func TestVerifyBiscuit_Expiration(t *testing.T) {
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -77,7 +83,7 @@ func TestVerifyBiscuit_Expiration(t *testing.T) {
 				t.Fatalf("MintBiscuitToken failed: %v", err)
 			}
 
-			_, err = VerifyBiscuit(biscuitData, dummyPeer, []ed25519.PublicKey{pub}, 500*time.Millisecond)
+			_, err = VerifyBiscuit(biscuitData, dummyPeer, []ed25519.PublicKey{pub}, testTimeout)
 			if tt.expectError && err == nil {
 				t.Errorf("Expected error due to expiration, got nil")
 			}
@@ -123,7 +129,7 @@ func TestMintBiscuitToken_ClaimsTranslation(t *testing.T) {
 		t.Fatalf("Failed to unmarshal biscuit: %v", err)
 	}
 
-	authorizer, err := b.Authorizer(pub, biscuit.WithWorldOptions(datalog.WithMaxDuration(500*time.Millisecond)))
+	authorizer, err := b.Authorizer(pub, biscuit.WithWorldOptions(datalog.WithMaxDuration(testTimeout)))
 	if err != nil {
 		t.Fatalf("Failed to get authorizer: %v", err)
 	}
@@ -216,7 +222,7 @@ func TestVerifyBiscuit_Concurrent(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < 100; j++ {
-				_, err := VerifyBiscuit(biscuitData, dummyPeer, []ed25519.PublicKey{pub}, 500*time.Millisecond)
+				_, err := VerifyBiscuit(biscuitData, dummyPeer, []ed25519.PublicKey{pub}, testTimeout)
 				if err != nil {
 					t.Errorf("Concurrent verification failed: %v", err)
 					return
@@ -260,7 +266,7 @@ func TestMintBiscuitToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	authorizer, err := b.Authorizer(pub, biscuit.WithWorldOptions(datalog.WithMaxDuration(500*time.Millisecond)))
+	authorizer, err := b.Authorizer(pub, biscuit.WithWorldOptions(datalog.WithMaxDuration(testTimeout)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -360,7 +366,7 @@ func TestMintBiscuitToken_VariousClaimsTypes(t *testing.T) {
 				t.Fatalf("Unmarshal biscuit failed: %v", err)
 			}
 
-			authorizer, err := b.Authorizer(pub, AuthorizerOptions(5*time.Second)...)
+			authorizer, err := b.Authorizer(pub, AuthorizerOptions(testTimeout)...)
 			if err != nil {
 				t.Fatalf("Authorizer failed: %v", err)
 			}
@@ -439,7 +445,7 @@ func TestMintBiscuitToken_WithPolicyRoles(t *testing.T) {
 			t.Fatalf("Unmarshal biscuit failed: %v", err)
 		}
 
-		authorizer, err := b.Authorizer(pub, AuthorizerOptions(5*time.Second)...)
+		authorizer, err := b.Authorizer(pub, AuthorizerOptions(testTimeout)...)
 		if err != nil {
 			t.Fatalf("Authorizer failed: %v", err)
 		}
@@ -468,7 +474,7 @@ func TestMintBiscuitToken_WithPolicyRoles(t *testing.T) {
 			t.Fatalf("Unmarshal biscuit failed: %v", err)
 		}
 
-		authorizer, err := b.Authorizer(pub, AuthorizerOptions(5*time.Second)...)
+		authorizer, err := b.Authorizer(pub, AuthorizerOptions(testTimeout)...)
 		if err != nil {
 			t.Fatalf("Authorizer failed: %v", err)
 		}
@@ -504,7 +510,7 @@ func TestMintBiscuitToken_LabelFacts(t *testing.T) {
 
 	// Every declared label is present as its own fact.
 	for k, v := range labels {
-		authorizer, err := b.Authorizer(pub, AuthorizerOptions(5*time.Second)...)
+		authorizer, err := b.Authorizer(pub, AuthorizerOptions(testTimeout)...)
 		if err != nil {
 			t.Fatalf("Authorizer failed: %v", err)
 		}
@@ -526,7 +532,7 @@ func TestMintBiscuitToken_LabelFacts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Unmarshal biscuit failed: %v", err)
 	}
-	authorizer, err := b2.Authorizer(pub, AuthorizerOptions(5*time.Second)...)
+	authorizer, err := b2.Authorizer(pub, AuthorizerOptions(testTimeout)...)
 	if err != nil {
 		t.Fatalf("Authorizer failed: %v", err)
 	}
@@ -566,7 +572,7 @@ func TestVerifyAndExtractPeerID_MultipleTrustedKeys(t *testing.T) {
 	// trustedPublicKeys has pub1 first, pub2 second (pub2 is the signer)
 	trustedKeys := []ed25519.PublicKey{pub1, pub2}
 
-	extractedPeer, err := VerifyAndExtractPeerID(trustedKeys, biscuitData, 5*time.Second)
+	extractedPeer, err := VerifyAndExtractPeerID(trustedKeys, biscuitData, testTimeout)
 	if err != nil {
 		t.Fatalf("VerifyAndExtractPeerID failed with multiple trusted keys: %v", err)
 	}
@@ -603,15 +609,15 @@ func TestExtractPeerIDExpiry(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := VerifyAndExtractPeerID(trustedKeys, fresh, 5*time.Second); err != nil {
+	if _, err := VerifyAndExtractPeerID(trustedKeys, fresh, testTimeout); err != nil {
 		t.Errorf("unexpired token rejected: %v", err)
 	}
-	if _, err := VerifyAndExtractPeerID(trustedKeys, expired, 5*time.Second); err == nil {
+	if _, err := VerifyAndExtractPeerID(trustedKeys, expired, testTimeout); err == nil {
 		t.Error("expired token accepted by the expiry-enforcing variant")
 	}
 
 	// The refresh flow depends on the exempt variant staying permissive.
-	if got, err := VerifyExpiredAndExtractPeerID(trustedKeys, expired, 5*time.Second); err != nil {
+	if got, err := VerifyExpiredAndExtractPeerID(trustedKeys, expired, testTimeout); err != nil {
 		t.Errorf("expired token rejected by the refresh variant: %v", err)
 	} else if got != dummyPeer {
 		t.Errorf("got peer %s, want %s", got, dummyPeer)

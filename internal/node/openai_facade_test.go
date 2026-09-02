@@ -478,6 +478,92 @@ func TestParseRequiredLabels(t *testing.T) {
 	}
 }
 
+// An empty requirement set turns the label gate off (VerifyPeerLabels returns
+// immediately, and rankProviders skips the label filter), so the only input
+// allowed to produce one is a genuinely blank specification.
+func TestParseRequiredLabels_BlankSpecMeansNoRequirement(t *testing.T) {
+	for _, in := range []string{"", " ", "	", "  	 "} {
+		got, err := parseRequiredLabels(in)
+		if err != nil || got != nil {
+			t.Errorf("parseRequiredLabels(%q): got %v, %v; want nil, nil", in, got, err)
+		}
+	}
+}
+
+// Regression: a specification that carries content but names no label used to
+// parse to zero requirements with no error, silently disabling a fail-closed
+// control for a caller who asked to be constrained. It must be an error.
+func TestParseRequiredLabels_ContentfulSpecNamingNoLabelFailsClosed(t *testing.T) {
+	for _, in := range []string{",", ",,", ",,,", " , ", "	,	", " ,, "} {
+		got, err := parseRequiredLabels(in)
+		if err == nil {
+			t.Errorf("parseRequiredLabels(%q): got %v, nil; want an error, because zero requirements means an unconstrained request", in, got)
+		}
+		if got != nil {
+			t.Errorf("parseRequiredLabels(%q): labels must be nil on error, got %v", in, got)
+		}
+	}
+}
+
+// The stricter rule must not reach empty entries that merely sit next to real
+// ones: a trailing comma is a normal way to write a list and stays harmless.
+func TestParseRequiredLabels_EmptyEntriesBesideRealOnesStayTolerated(t *testing.T) {
+	tests := []struct {
+		in   string
+		want map[string]string
+	}{
+		{"region=eu,", map[string]string{"region": "eu"}},
+		{",region=eu", map[string]string{"region": "eu"}},
+		{" region=eu , , team=platform ,,", map[string]string{"region": "eu", "team": "platform"}},
+	}
+	for _, tt := range tests {
+		got, err := parseRequiredLabels(tt.in)
+		if err != nil {
+			t.Errorf("parseRequiredLabels(%q): unexpected error %v", tt.in, err)
+			continue
+		}
+		if len(got) != len(tt.want) {
+			t.Errorf("parseRequiredLabels(%q): got %v, want %v", tt.in, got, tt.want)
+			continue
+		}
+		for k, v := range tt.want {
+			if got[k] != v {
+				t.Errorf("parseRequiredLabels(%q): got[%q] = %q, want %q", tt.in, k, got[k], v)
+			}
+		}
+	}
+}
+
+// The boundary behaviour the parser fix exists for: a caller who asked to be
+// constrained is refused, not quietly served by an arbitrary provider.
+func TestFacade_Completions_ContentfulRequiredLabelsNamingNoLabelIsRejected(t *testing.T) {
+	f := newTestFacade()
+	f.discover = func(_ context.Context) ([]*api.DiscoveredProvider, error) {
+		return []*api.DiscoveredProvider{{PeerId: "peerUS", SrvName: "srvUS"}}, nil
+	}
+	f.remoteModels = func(_ context.Context, _, _ string) ([]string, error) {
+		return []string{"m1"}, nil
+	}
+	forwarded := false
+	f.forward = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		forwarded = true
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+		strings.NewReader(`{"model":"m1","messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set(api.HeaderSamRequiredLabels, ",,")
+	rec := httptest.NewRecorder()
+	f.handleCompletions(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status: got %d, want %d (body %s)", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	if forwarded {
+		t.Error("request must not reach a provider: the caller asked for a label constraint that named no label")
+	}
+}
+
 func TestRankProviders_LabelMatchIsExactAndCaseSensitive(t *testing.T) {
 	f := newTestFacade()
 	provider := modelProvider{peerID: "peerEU", service: "srv", labels: map[string]string{"region": "eu-de"}}
