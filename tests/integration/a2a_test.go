@@ -16,8 +16,9 @@ package integration_test
 
 import (
 	"bytes"
-	"encoding/json"
+	"context"
 	"io"
+	"iter"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -28,13 +29,40 @@ import (
 
 	"google.golang.org/protobuf/encoding/protojson"
 
+	"github.com/a2aproject/a2a-go/v2/a2a"
+	"github.com/a2aproject/a2a-go/v2/a2aclient"
+	"github.com/a2aproject/a2a-go/v2/a2aclient/agentcard"
+	"github.com/a2aproject/a2a-go/v2/a2asrv"
 	"github.com/google/sam/api"
 )
 
-// TestA2ACUJ covers the "A2A agent behind the mesh" CUJ: node A (attested
-// region=eu) hosts an a2a service; node B's raw egress proxy serves it with
-// a rewritten agent card, admits a region=eu-labelled request, and refuses a
-// region=us-east-1 request fail-closed before any payload leaves node B.
+// headerRoundTripper stamps fixed headers (mesh auth, labels) on every
+// request so the stock A2A SDK client needs no SAM-specific code.
+type headerRoundTripper struct {
+	headers map[string]string
+}
+
+func (h headerRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) {
+	r = r.Clone(r.Context())
+	for k, v := range h.headers {
+		r.Header.Set(k, v)
+	}
+	return http.DefaultTransport.RoundTrip(r)
+}
+
+func meshHTTPClient(token string, extra map[string]string) *http.Client {
+	headers := map[string]string{api.HeaderSamAuthentication: "Bearer " + token}
+	for k, v := range extra {
+		headers[k] = v
+	}
+	return &http.Client{Transport: headerRoundTripper{headers: headers}}
+}
+
+// TestA2ACUJ covers the "A2A agent behind the mesh" CUJ with the official
+// SDK on both ends: node A (attested region=eu) hosts a stock a2asrv agent;
+// a stock a2aclient bootstraps from the regenerated card served by node B,
+// holds a message exchange, and a region-mismatched request is refused
+// fail-closed before any payload leaves node B.
 func TestA2ACUJ(t *testing.T) {
 	nodeBin := buildBinary(t, "./cmd/sam-node")
 	_, hubAddr := startMockRouter(t)
@@ -72,117 +100,113 @@ func TestA2ACUJ(t *testing.T) {
 	}
 	peerA := addrA[idx+len("/p2p/"):]
 
-	// Fake A2A agent on node A's side: serves its card and echoes message/send.
+	// Stock-SDK A2A agent on node A's side: a2asrv serving its card and
+	// echoing message/send. The card deliberately advertises a gRPC
+	// interface, streaming, and a stale signature: the mesh must drop all
+	// three on regeneration.
 	var sendCount atomic.Int32
 	var sawLabelsHeader atomic.Bool
+	echo := a2asrv.AgentExecutorFunc(func(ctx context.Context, ec *a2asrv.ExecutorContext) iter.Seq2[a2a.Event, error] {
+		return func(yield func(a2a.Event, error) bool) {
+			sendCount.Add(1)
+			yield(a2a.NewMessageForTask(a2a.MessageRoleAgent, ec, a2a.NewTextPart("echo from eu")), nil)
+		}
+	})
+	agentCard := &a2a.AgentCard{
+		Name:         "echo-agent",
+		Description:  "test a2a agent",
+		Version:      "1.0.0",
+		Capabilities: a2a.AgentCapabilities{Streaming: true},
+		SupportedInterfaces: []*a2a.AgentInterface{
+			{URL: "http://localhost:9999", ProtocolBinding: a2a.TransportProtocolJSONRPC, ProtocolVersion: "1.0"},
+			{URL: "localhost:50051", ProtocolBinding: a2a.TransportProtocolGRPC, ProtocolVersion: "1.0"},
+		},
+		Signatures: []a2a.AgentCardSignature{{Protected: "eyJhbGciOiJFUzI1NiJ9", Signature: "c3RhbGU"}},
+	}
+	mux := http.NewServeMux()
+	mux.Handle(a2asrv.WellKnownAgentCardPath, a2asrv.NewStaticAgentCardHandler(agentCard))
+	mux.Handle("/", a2asrv.NewJSONRPCHandler(a2asrv.NewHandler(echo)))
 	agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get(api.HeaderSamRequiredLabels) != "" {
 			sawLabelsHeader.Store(true)
 		}
-		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/.well-known/agent-card.json":
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"name":"echo-agent",` +
-				`"supportedInterfaces":[` +
-				`{"url":"http://localhost:9999","protocolBinding":"JSONRPC","protocolVersion":"1.0"},` +
-				`{"url":"localhost:50051","protocolBinding":"GRPC","protocolVersion":"1.0"}],` +
-				`"capabilities":{"streaming":true}}`))
-		case r.Method == http.MethodPost:
-			sendCount.Add(1)
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"kind":"message",` +
-				`"messageId":"m1","role":"agent","parts":[{"kind":"text","text":"echo from eu"}]}}`))
-		default:
-			http.Error(w, "not found", http.StatusNotFound)
-		}
+		mux.ServeHTTP(w, r)
 	}))
 	defer agent.Close()
 
 	registerA2AService(t, apiAddrA, apiToken, "echo-agent", agent.URL)
 
 	meshBase := "http://" + apiAddrB + "/sam/" + peerA + "/a2a/echo-agent"
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
 
-	// CUJ step 1: the agent card comes back rewritten for mesh use. Poll:
-	// the first fetch can race connectivity establishment.
+	// CUJ step 1: a stock SDK resolver bootstraps from the regenerated card.
+	// Poll: the first fetch can race connectivity establishment.
+	resolver := agentcard.NewResolver(meshHTTPClient(apiToken, nil))
+	var card *a2a.AgentCard
 	deadline := time.Now().Add(30 * time.Second)
-	var cardBody []byte
 	for {
-		req, _ := http.NewRequest("GET", meshBase+"/.well-known/agent-card.json", nil)
-		req.Header.Set(api.HeaderSamAuthentication, "Bearer "+apiToken)
-		resp, err := http.DefaultClient.Do(req)
+		var err error
+		card, err = resolver.Resolve(ctx, meshBase)
 		if err == nil {
-			cardBody, _ = io.ReadAll(resp.Body)
-			_ = resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
-				break
-			}
+			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("timeout fetching agent card, last body: %s", string(cardBody))
+			t.Fatalf("timeout resolving agent card through the mesh: %v", err)
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	var card struct {
-		SupportedInterfaces []struct {
-			URL             string `json:"url"`
-			ProtocolBinding string `json:"protocolBinding"`
-		} `json:"supportedInterfaces"`
-		Capabilities struct {
-			Streaming bool `json:"streaming"`
-		} `json:"capabilities"`
-	}
-	if err := json.Unmarshal(cardBody, &card); err != nil {
-		t.Fatalf("invalid card: %v, body: %s", err, string(cardBody))
-	}
 	if len(card.SupportedInterfaces) != 1 || card.SupportedInterfaces[0].URL != meshBase {
-		t.Errorf("interfaces not regenerated / gRPC not dropped: %s", string(cardBody))
+		t.Errorf("interfaces not regenerated / gRPC not dropped: %+v", card.SupportedInterfaces)
+	}
+	if card.SupportedInterfaces[0].ProtocolBinding != a2a.TransportProtocolJSONRPC {
+		t.Errorf("binding = %q, want JSONRPC", card.SupportedInterfaces[0].ProtocolBinding)
 	}
 	if card.Capabilities.Streaming {
 		t.Error("streaming must be advertised off through the mesh")
 	}
+	if len(card.Signatures) != 0 {
+		t.Error("stale signatures must be dropped from the regenerated card")
+	}
 
-	// CUJ step 2: message/send constrained to region=eu is admitted.
-	sendBody := `{"jsonrpc":"2.0","id":1,"method":"message/send","params":{"message":` +
-		`{"kind":"message","messageId":"c1","role":"user","parts":[{"kind":"text","text":"hi"}]}}}`
+	// CUJ step 2: a stock SDK client built from that card, constrained to
+	// region=eu, is admitted and gets the echo back.
+	euClient, err := a2aclient.NewFromCard(ctx, card,
+		a2aclient.WithJSONRPCTransport(meshHTTPClient(apiToken, map[string]string{api.HeaderSamRequiredLabels: "region=eu"})))
+	if err != nil {
+		t.Fatalf("stock client rejected the regenerated card: %v", err)
+	}
+	req := &a2a.SendMessageRequest{Message: a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("hi"))}
 	deadline = time.Now().Add(30 * time.Second)
+	var result a2a.SendMessageResult
 	for {
-		req, _ := http.NewRequest("POST", meshBase+"/", strings.NewReader(sendBody))
-		req.Header.Set(api.HeaderSamAuthentication, "Bearer "+apiToken)
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set(api.HeaderSamRequiredLabels, "region=eu")
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatalf("labelled message/send failed: %v", err)
-		}
-		body, _ := io.ReadAll(resp.Body)
-		_ = resp.Body.Close()
-		if resp.StatusCode == http.StatusOK {
-			if !strings.Contains(string(body), "echo from eu") {
-				t.Fatalf("unexpected message/send response: %s", string(body))
-			}
+		result, err = euClient.SendMessage(ctx, req)
+		if err == nil {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("labelled message/send status: %d, body: %s", resp.StatusCode, string(body))
+			t.Fatalf("labelled message/send failed: %v", err)
 		}
 		time.Sleep(200 * time.Millisecond)
+	}
+	reply, ok := result.(*a2a.Message)
+	if !ok {
+		t.Fatalf("send result = %T, want *a2a.Message", result)
+	}
+	if len(reply.Parts) == 0 || reply.Parts[0].Text() != "echo from eu" {
+		t.Fatalf("unexpected reply: %+v", reply)
 	}
 
 	// CUJ step 3: a mismatched label refuses fail-closed BEFORE egress —
 	// the agent backend must never see the request.
 	before := sendCount.Load()
-	req, _ := http.NewRequest("POST", meshBase+"/", strings.NewReader(sendBody))
-	req.Header.Set(api.HeaderSamAuthentication, "Bearer "+apiToken)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set(api.HeaderSamRequiredLabels, "region=us-east-1")
-	respUS, err := http.DefaultClient.Do(req)
+	usClient, err := a2aclient.NewFromCard(ctx, card,
+		a2aclient.WithJSONRPCTransport(meshHTTPClient(apiToken, map[string]string{api.HeaderSamRequiredLabels: "region=us-east-1"})))
 	if err != nil {
-		t.Fatalf("mismatched-label message/send failed: %v", err)
+		t.Fatalf("client construction failed: %v", err)
 	}
-	usBody, _ := io.ReadAll(respUS.Body)
-	_ = respUS.Body.Close()
-	if respUS.StatusCode != http.StatusForbidden {
-		t.Fatalf("mismatched label must fail closed with 403: got %d, body: %s", respUS.StatusCode, string(usBody))
+	if _, err := usClient.SendMessage(ctx, req); err == nil {
+		t.Fatal("mismatched label must fail closed")
 	}
 	if sendCount.Load() != before {
 		t.Fatal("payload reached the agent despite label refusal")

@@ -91,9 +91,13 @@ const maxAgentCardBytes = 1 << 20
 // the client request, fetches the card from the agent over the mesh, and
 // serves a regenerated card whose interfaces point at the local mesh URL.
 // Stock A2A clients then talk to the agent through this node unmodified.
-// Non-card requests are left to the streaming egress proxy.
+// The card is served both at the well-known path (resolvers that append it,
+// e.g. the python SDK) and at the bare service root (resolvers that treat a
+// pathful base URL as the card location, e.g. a2a-go; a root GET is not part
+// of any A2A binding, JSON-RPC being POST-only). Everything else is left to
+// the streaming egress proxy.
 func a2aServeAgentCard(node *SamNode, rt http.RoundTripper, w http.ResponseWriter, r *http.Request, route egressRoute) bool {
-	if r.Method != http.MethodGet || route.upstreamPath != a2aAgentCardPath {
+	if r.Method != http.MethodGet || (route.upstreamPath != a2aAgentCardPath && route.upstreamPath != "") {
 		return false
 	}
 	resp, err := fetchRemoteAgentCard(node, rt, r, route)
@@ -178,6 +182,17 @@ func regenerateAgentCardForMesh(card *a2a.AgentCard, base string) error {
 	card.SupportedInterfaces = kept
 	card.Capabilities.Streaming = false
 	card.Signatures = nil
+	// Required list fields must stay arrays: encoding/json marshals nil
+	// slices as null, which strict SDK card parsers (pydantic) reject.
+	if card.Skills == nil {
+		card.Skills = []a2a.AgentSkill{}
+	}
+	if card.DefaultInputModes == nil {
+		card.DefaultInputModes = []string{}
+	}
+	if card.DefaultOutputModes == nil {
+		card.DefaultOutputModes = []string{}
+	}
 	return nil
 }
 

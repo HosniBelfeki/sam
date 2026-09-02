@@ -118,7 +118,7 @@ spec:
                 {"name": "sam-admin", "allowed_services": ["*"], "allowed_targets": ["*"]},
                 {"name": "sam:role:sambox", "allowed_services": ["*"], "allowed_targets": ["*"]},
                 {"name": "sam:role:router", "allowed_services": ["*"], "allowed_targets": ["*"]},
-                {"name": "sam:role:node", "allowed_services": {{ toJson .Values.bootstrap.nodeServices }}, "allowed_targets": ["*"]}
+                {"name": "sam:role:node", "allowed_services": {{ toJson .Values.bootstrap.nodeServices }}, "allowed_targets": ["*"], "allowed_labels": {{ toJson .Values.bootstrap.nodeLabels }}}
               ],
               "bindings": {{ toJson $bindings }}
             }' \

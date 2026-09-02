@@ -173,6 +173,67 @@ func TestA2AServeAgentCardRegenerates(t *testing.T) {
 	}
 }
 
+func TestA2AServeAgentCardMinimalCardStaysParseable(t *testing.T) {
+	// An upstream card that omits skills/defaultInputModes/defaultOutputModes:
+	// the regenerated card must keep them as arrays, not null, or strict SDK
+	// parsers (pydantic) refuse the whole card.
+	rt := roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return cardResponse(http.StatusOK, `{"name":"minimal",`+
+			`"supportedInterfaces":[{"url":"http://localhost:7777","protocolBinding":"JSONRPC"}],`+
+			`"capabilities":{}}`), nil
+	})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/sam/12D3KooWpeer/a2a/agent/.well-known/agent-card.json", nil)
+	if !serveEgressLocally(nil, rt, rec, req) {
+		t.Fatal("card GET must be handled locally")
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body: %s", rec.Code, rec.Body.String())
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("regenerated card is not JSON: %v", err)
+	}
+	for _, key := range []string{"skills", "defaultInputModes", "defaultOutputModes", "supportedInterfaces"} {
+		if _, ok := raw[key].([]any); !ok {
+			t.Errorf("%s = %v (%T), must be a JSON array", key, raw[key], raw[key])
+		}
+	}
+}
+
+func TestA2AServeAgentCardAtServiceRoot(t *testing.T) {
+	// a2a-go's stock resolver treats a pathful base URL as the card URL
+	// itself, so the bare service root must serve the card too; the fetch
+	// upstream still targets the agent's well-known path.
+	var outbound *http.Request
+	rt := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		outbound = r
+		return cardResponse(http.StatusOK,
+			`{"name":"T","supportedInterfaces":[{"url":"http://localhost:7777","protocolBinding":"JSONRPC"}]}`), nil
+	})
+	for _, path := range []string{"/sam/12D3KooWpeer/a2a/agent", "/sam/12D3KooWpeer/a2a/agent/"} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("GET", path, nil)
+		req.Host = "127.0.0.1:8080"
+		if !serveEgressLocally(nil, rt, rec, req) {
+			t.Fatalf("GET %s must serve the card", path)
+		}
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s status = %d, body: %s", path, rec.Code, rec.Body.String())
+		}
+		if want := "libp2p://12D3KooWpeer/a2a/agent/.well-known/agent-card.json"; outbound.URL.String() != want {
+			t.Errorf("upstream fetch URL = %q, want %q", outbound.URL.String(), want)
+		}
+		var card a2a.AgentCard
+		if err := json.Unmarshal(rec.Body.Bytes(), &card); err != nil {
+			t.Fatalf("GET %s: invalid card: %v", path, err)
+		}
+		if len(card.SupportedInterfaces) != 1 || card.SupportedInterfaces[0].URL != "http://127.0.0.1:8080/sam/12D3KooWpeer/a2a/agent" {
+			t.Errorf("GET %s: interfaces = %+v", path, card.SupportedInterfaces)
+		}
+	}
+}
+
 func TestA2AServeAgentCardIgnoresNonCardRequests(t *testing.T) {
 	rt := roundTripFunc(func(*http.Request) (*http.Response, error) {
 		t.Fatal("no mesh fetch expected")
@@ -180,6 +241,7 @@ func TestA2AServeAgentCardIgnoresNonCardRequests(t *testing.T) {
 	})
 	for _, tc := range []struct{ method, path string }{
 		{"POST", "/sam/12D3KooWpeer/a2a/agent/.well-known/agent-card.json"},
+		{"POST", "/sam/12D3KooWpeer/a2a/agent"},
 		{"GET", "/sam/12D3KooWpeer/a2a/agent/tasks/1"},
 		{"GET", "/sam/12D3KooWpeer/mcp/svc/.well-known/agent-card.json"},
 	} {
