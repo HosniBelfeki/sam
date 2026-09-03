@@ -1275,9 +1275,26 @@ func (n *SamNode) handleBannedEvent(event *api.MeshEvent) {
 	// Drop any prior admission, otherwise the relay ACL keeps honouring it.
 	if p, err := peer.Decode(event.PeerId); err == nil {
 		n.authPeers.Delete(p)
+		// The in-memory cache above is bounded and does not survive a restart,
+		// and the BANNED event is published once with no replay, so the ban has
+		// to be written down or the connection gater silently stops enforcing
+		// it (see Store.SaveBannedPeer).
+		n.persistBannedPeer(p)
 		if n.Host != nil {
 			_ = n.Host.Network().ClosePeer(p)
 		}
+	}
+}
+
+// persistBannedPeer writes a ban to the local store, mirroring
+// persistTrustedKeys: a failure is logged and does not abort the in-memory
+// eviction, which is still the fastest way to stop honouring the peer.
+func (n *SamNode) persistBannedPeer(p peer.ID) {
+	if n.Store == nil {
+		return
+	}
+	if err := n.Store.SaveBannedPeer(p); err != nil {
+		logger.Errorf("Failed to persist ban for peer %s: %v", p, err)
 	}
 }
 

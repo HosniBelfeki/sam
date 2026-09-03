@@ -312,6 +312,26 @@ const (
 	bucketBannedPeers = "banned_peers"
 )
 
+// SaveBannedPeer persists a peer ban, so a ban learned from a BANNED mesh
+// event survives restarts. The control plane publishes that event exactly once,
+// at the moment of the ban (see /admin/revoke), and gossip has no replay: a
+// node that only held the ban in memory would silently start dialling and
+// accepting the peer again after any restart, for as long as the peer's
+// biscuit remains valid. This mirrors SaveTrustedKeys, which persists the
+// other security-relevant state learned from a mesh event.
+//
+// The key is the decoded peer's canonical String(), the same form IsBanned
+// looks up, so the two can never disagree about a peer's identity.
+func (s *Store) SaveBannedPeer(p peer.ID) error {
+	return s.db.Update(func(tx *bbolt.Tx) error {
+		b, err := tx.CreateBucketIfNotExists([]byte(bucketBannedPeers))
+		if err != nil {
+			return err
+		}
+		return b.Put([]byte(p.String()), []byte("true"))
+	})
+}
+
 // IsBanned checks local store to see if this peer is banned.
 func (s *Store) IsBanned(p peer.ID) bool {
 	var banned bool
