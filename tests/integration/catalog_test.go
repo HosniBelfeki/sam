@@ -278,7 +278,7 @@ func TestCatalogRoutingAndFailover(t *testing.T) {
 		t.Fatalf("failed to discover peers (router + 2 nodes) in time")
 	}
 
-	respData := callMCP(t, mcpAddrA, "send_message", map[string]any{"peer_id": "target-peer", "message": "hello"})
+	respData := callMCP(t, mcpAddrA, "get_mesh_info", map[string]any{})
 	t.Logf("First call response: %s", respData)
 
 	// Now kill Node B and assert failover to Node C
@@ -289,6 +289,6 @@ func TestCatalogRoutingAndFailover(t *testing.T) {
 	// Wait a bit for catalog update or failover to happen on next call
 	time.Sleep(500 * time.Millisecond)
 
-	respData2 := callMCP(t, mcpAddrA, "send_message", map[string]any{"peer_id": "target-peer", "message": "hello"})
+	respData2 := callMCP(t, mcpAddrA, "get_mesh_info", map[string]any{})
 	t.Logf("Second call response: %s", respData2)
 }

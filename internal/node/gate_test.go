@@ -214,8 +214,8 @@ func TestHandleMCPStream_DumbPipeProxy(t *testing.T) {
 
 	// Dumb pipe: infra tools are NOT present.
 	for _, n := range names {
-		if n == "send_message" {
-			t.Errorf("expected infra tool send_message to be absent in dumb pipe; got %v", names)
+		if n == "get_mesh_info" {
+			t.Errorf("expected infra tool get_mesh_info to be absent in dumb pipe; got %v", names)
 		}
 	}
 }

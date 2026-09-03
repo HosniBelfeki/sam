@@ -123,11 +123,6 @@ func (n *SamNode) HandleMCPStream(s network.Stream, reqCtx RequestContext) {
 	}, nil)
 
 	mcp.AddTool(server, &mcp.Tool{
-		Name:        "send_message",
-		Description: "Send a message to another agent in the mesh",
-	}, n.handleSendMessage)
-
-	mcp.AddTool(server, &mcp.Tool{
 		Name:        "list_local_services",
 		Description: "List services registered on the local node. Optionally filter by type.",
 	}, n.handleListLocalServices)

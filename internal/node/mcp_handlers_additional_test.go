@@ -26,27 +26,6 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-func TestHandleSendMessage(t *testing.T) {
-	ctx := context.Background()
-	node, cleanup := startBareNode(t, ctx)
-	defer cleanup()
-
-	res, _, err := node.handleSendMessage(context.Background(), &mcp.CallToolRequest{}, SendMessageParams{
-		PeerID:  "123",
-		Message: "Hello",
-	})
-	if err != nil {
-		t.Fatalf("handleSendMessage failed: %v", err)
-	}
-	if len(res.Content) == 0 {
-		t.Fatalf("expected content")
-	}
-	text := res.Content[0].(*mcp.TextContent).Text
-	if text != "Simulated sending message to 123: Hello" {
-		t.Errorf("unexpected response: %q", text)
-	}
-}
-
 func TestHandleDiscoverRemoteServices(t *testing.T) {
 	ctx := context.Background()
 	node, cleanup := startBareNode(t, ctx)

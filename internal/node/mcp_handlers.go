@@ -29,23 +29,6 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// SendMessageParams defines the parameters for the send_message tool.
-type SendMessageParams struct {
-	PeerID  string `json:"peer_id" jsonschema:"The Peer ID of the target agent"`
-	Message string `json:"message" jsonschema:"The message content"`
-}
-
-// handleSendMessage implements the send_message tool.
-func (n *SamNode) handleSendMessage(ctx context.Context, req *mcp.CallToolRequest, params SendMessageParams) (*mcp.CallToolResult, any, error) {
-	response := fmt.Sprintf("Simulated sending message to %s: %s", params.PeerID, params.Message)
-
-	return &mcp.CallToolResult{
-		Content: []mcp.Content{
-			&mcp.TextContent{Text: response},
-		},
-	}, nil, nil
-}
-
 // ListLocalServicesParams defines the parameters for the list_local_services tool.
 type ListLocalServicesParams struct {
 	Type string `json:"type,omitempty" jsonschema:"Optional service type filter (mcp, inference, a2a). Empty means all types."`
