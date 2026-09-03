@@ -321,13 +321,15 @@ const (
 // other security-relevant state learned from a mesh event.
 //
 // The key is the decoded peer's canonical String(), the same form IsBanned
-// looks up, so the two can never disagree about a peer's identity.
+// looks up, so the two can never disagree about a peer's identity. An empty
+// peer is rejected rather than written: bbolt answers ErrKeyRequired for an
+// empty key, and a caller trying to ban nothing has a bug worth hearing about.
 func (s *Store) SaveBannedPeer(p peer.ID) error {
+	if p == "" {
+		return errors.New("cannot ban an empty peer ID")
+	}
 	return s.db.Update(func(tx *bbolt.Tx) error {
-		b, err := tx.CreateBucketIfNotExists([]byte(bucketBannedPeers))
-		if err != nil {
-			return err
-		}
+		b := tx.Bucket([]byte(bucketBannedPeers))
 		return b.Put([]byte(p.String()), []byte("true"))
 	})
 }

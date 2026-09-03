@@ -465,3 +465,38 @@ func TestGetDefaultDataDir(t *testing.T) {
 		t.Error("Expected non-empty directory path")
 	}
 }
+
+func TestSaveBannedPeer(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Logf("failed to close store: %v", err)
+		}
+	}()
+
+	pID, err := peer.Decode("12D3KooWBysiyDVxxj7Lq8KvhFnZVhqKdZHtwRaJu7hvGwSZFMNg")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if store.IsBanned(pID) {
+		t.Fatalf("peer %s must not start out banned", pID)
+	}
+	if err := store.SaveBannedPeer(pID); err != nil {
+		t.Fatalf("SaveBannedPeer: %v", err)
+	}
+	// The writer and IsBanned must agree on the key, or the gater would read
+	// past a ban that was recorded.
+	if !store.IsBanned(pID) {
+		t.Errorf("IsBanned must see a ban written by SaveBannedPeer")
+	}
+
+	// Banning nothing is a caller bug, not an empty record: bbolt would answer
+	// ErrKeyRequired for the empty key anyway.
+	if err := store.SaveBannedPeer(""); err == nil {
+		t.Error("SaveBannedPeer must reject an empty peer ID")
+	}
+}
