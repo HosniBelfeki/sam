@@ -65,12 +65,6 @@ func NewMCPServer(node *SamNode) *mcp.Server {
 		Version: "0.1.0",
 	}, &mcp.ServerOptions{Instructions: meshInstructions})
 
-	// Add the send_message tool.
-	mcp.AddTool(mcpServer, &mcp.Tool{
-		Name:        "send_message",
-		Description: "Send a message to another agent in the mesh",
-	}, node.handleSendMessage)
-
 	// Add list_local_services tool
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "list_local_services",
