@@ -22,7 +22,6 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/libp2p/go-libp2p/core/peer"
 	"go.etcd.io/bbolt"
 	bbolterrors "go.etcd.io/bbolt/errors"
 )
@@ -77,9 +76,6 @@ func NewStore(dir string) (*Store, error) {
 
 	err = db.Update(func(tx *bbolt.Tx) error {
 		if _, err := tx.CreateBucketIfNotExists([]byte(bucketIdentity)); err != nil {
-			return err
-		}
-		if _, err := tx.CreateBucketIfNotExists([]byte(bucketBannedPeers)); err != nil {
 			return err
 		}
 		return nil
@@ -308,44 +304,8 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
-const (
-	bucketBannedPeers = "banned_peers"
-)
-
-// SaveBannedPeer persists a peer ban, so a ban learned from a BANNED mesh
-// event survives restarts. The control plane publishes that event exactly once,
-// at the moment of the ban (see /admin/revoke), and gossip has no replay: a
-// node that only held the ban in memory would silently start dialling and
-// accepting the peer again after any restart, for as long as the peer's
-// biscuit remains valid. This mirrors SaveTrustedKeys, which persists the
-// other security-relevant state learned from a mesh event.
-//
-// The key is the decoded peer's canonical String(), the same form IsBanned
-// looks up, so the two can never disagree about a peer's identity. An empty
-// peer is rejected rather than written: bbolt answers ErrKeyRequired for an
-// empty key, and a caller trying to ban nothing has a bug worth hearing about.
-func (s *Store) SaveBannedPeer(p peer.ID) error {
-	if p == "" {
-		return errors.New("cannot ban an empty peer ID")
-	}
-	return s.db.Update(func(tx *bbolt.Tx) error {
-		b := tx.Bucket([]byte(bucketBannedPeers))
-		return b.Put([]byte(p.String()), []byte("true"))
-	})
-}
-
-// IsBanned checks local store to see if this peer is banned.
-func (s *Store) IsBanned(p peer.ID) bool {
-	var banned bool
-	_ = s.db.View(func(tx *bbolt.Tx) error {
-		b := tx.Bucket([]byte(bucketBannedPeers))
-		if b == nil {
-			return nil
-		}
-		if b.Get([]byte(p.String())) != nil {
-			banned = true
-		}
-		return nil
-	})
-	return banned
-}
+// Peer bans are deliberately not kept here. A ban on disk cannot be undone by
+// the control plane -- there is no unban event -- and it says nothing about a
+// node that was offline when the ban was published. Both are handled instead by
+// reconciling against the ban set in /info on every start (see SyncMeshConfig),
+// with MeshEvent_BANNED as the sub-second path for nodes that are already up.

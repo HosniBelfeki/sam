@@ -27,7 +27,6 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/protocol"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"go.etcd.io/bbolt"
 )
 
 func TestConnectionGater(t *testing.T) {
@@ -82,20 +81,49 @@ func TestConnectionGater(t *testing.T) {
 		t.Errorf("expected InterceptSecured to deny peer2 (in revoked cache)")
 	}
 
-	// Case 3: Peer is in persistent store (banned)
-	err = store.db.Update(func(tx *bbolt.Tx) error {
-		b := tx.Bucket([]byte(bucketBannedPeers))
-		return b.Put([]byte(peer3.String()), []byte("true"))
-	})
+	// Case 3: a peer the control plane does not ban stays reachable, even
+	// after another peer has been banned.
+	if !gater.InterceptPeerDial(peer3) {
+		t.Errorf("expected InterceptPeerDial to allow peer3")
+	}
+	if !gater.InterceptSecured(network.DirInbound, peer3, nil) {
+		t.Errorf("expected InterceptSecured to allow peer3")
+	}
+}
+
+// The revocation cache is seeded from the control plane's ban set at startup
+// (Options.BannedPeerIDs, filled by SyncMeshConfig). Without that a restarted
+// node would enforce no ban at all until the next MeshEvent_BANNED, which for
+// a ban published while it was down never arrives.
+func TestGaterEnforcesSeededBans(t *testing.T) {
+	priv, _, _ := crypto.GenerateEd25519Key(nil)
+	banned, err := peer.IDFromPrivateKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherPriv, _, _ := crypto.GenerateEd25519Key(nil)
+	allowed, err := peer.IDFromPrivateKey(otherPriv)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if gater.InterceptPeerDial(peer3) {
-		t.Errorf("expected InterceptPeerDial to deny peer3 (in store)")
+	cache, err := lru.New[string, int64](100)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if gater.InterceptSecured(network.DirInbound, peer3, nil) {
-		t.Errorf("expected InterceptSecured to deny peer3 (in store)")
+	node := &SamNode{revokedPeers: cache}
+	// Mirrors what NewSamNode does with Options.BannedPeerIDs.
+	node.revokedPeers.Add(banned.String(), time.Now().Unix())
+
+	gater := &nodeConnGate{node: node}
+	if gater.InterceptPeerDial(banned) {
+		t.Error("a peer in the control plane's ban set must not be dialled")
+	}
+	if gater.InterceptSecured(network.DirInbound, banned, nil) {
+		t.Error("a peer in the control plane's ban set must not be accepted")
+	}
+	if !gater.InterceptPeerDial(allowed) {
+		t.Error("seeding a ban must not deny unrelated peers")
 	}
 }
 
@@ -283,74 +311,5 @@ func TestHandleMCPStream_ForwarderRoutesCalls(t *testing.T) {
 	// newFakeMCPHandler echoes "fake-result:<tool-name>" using the un-namespaced form.
 	if tc.Text != "fake-result:echo" {
 		t.Errorf("forwarder did not pass un-namespaced name; got %q", tc.Text)
-	}
-}
-
-// A BANNED mesh event is published once, at the moment of the ban, and gossip
-// has no replay. The connection gater is what stops a node dialling or
-// accepting a banned peer, and it consults the in-memory revocation cache and
-// the local store. The cache is bounded and dies with the process, so unless
-// the ban is written down the gater silently stops enforcing it after any
-// restart — while the peer's already-issued biscuit is still valid.
-//
-// This is the durability guarantee SaveTrustedKeys already gives the sibling
-// KEY_ROTATION event.
-func TestBannedEventSurvivesRestart(t *testing.T) {
-	dir := t.TempDir()
-
-	store, err := NewStore(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cache, err := lru.New[string, int64](100)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	priv, _, _ := crypto.GenerateEd25519Key(nil)
-	banned, err := peer.IDFromPrivateKey(priv)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	node := &SamNode{Store: store, revokedPeers: cache}
-	node.handleBannedEvent(&api.MeshEvent{
-		Type:      api.MeshEvent_BANNED,
-		PeerId:    banned.String(),
-		Timestamp: time.Now().UnixMilli(),
-	})
-
-	// Before the restart the in-memory cache alone is enough.
-	if gater := (&nodeConnGate{node: node}); gater.InterceptPeerDial(banned) {
-		t.Fatal("the gater must deny a peer that was just banned")
-	}
-
-	// Restart: the process is gone, so the cache is gone with it. Only what
-	// the node wrote down is left, and bbolt holds an exclusive lock, so the
-	// store has to be closed before it can be reopened.
-	if err := store.Close(); err != nil {
-		t.Fatalf("close store: %v", err)
-	}
-	reopened, err := NewStore(dir)
-	if err != nil {
-		t.Fatalf("reopen store: %v", err)
-	}
-	defer func() {
-		if err := reopened.Close(); err != nil {
-			t.Logf("failed to close reopened store: %v", err)
-		}
-	}()
-
-	freshCache, err := lru.New[string, int64](100)
-	if err != nil {
-		t.Fatal(err)
-	}
-	restarted := &nodeConnGate{node: &SamNode{Store: reopened, revokedPeers: freshCache}}
-
-	if restarted.InterceptPeerDial(banned) {
-		t.Error("after a restart the gater still dials a banned peer: the ban did not survive")
-	}
-	if restarted.InterceptSecured(network.DirInbound, banned, nil) {
-		t.Error("after a restart the gater still accepts a banned peer: the ban did not survive")
 	}
 }
