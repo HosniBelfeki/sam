@@ -299,6 +299,16 @@ func NewSamNode(cfg Options) (*SamNode, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create revocation cache: %w", err)
 	}
+	// Seed from the control plane's ban set so the gater enforces existing
+	// bans from the first connection, instead of waiting for an event that
+	// was already published while this node was down.
+	for _, id := range cfg.BannedPeerIDs {
+		if _, err := peer.Decode(id); err != nil {
+			logger.Warnf("Ignoring undecodable banned peer ID %q from the control plane: %v", id, err)
+			continue
+		}
+		node.revokedPeers.Add(id, time.Now().Unix())
+	}
 	node.peerLabelGate, err = lru.New[string, time.Time](labelGateCacheSize)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create label gate cache: %w", err)
@@ -1273,28 +1283,14 @@ func (n *SamNode) handleBannedEvent(event *api.MeshEvent) {
 		n.revokedPeers.Add(event.PeerId, event.Timestamp)
 	}
 	// Drop any prior admission, otherwise the relay ACL keeps honouring it.
+	// The cache entry above is not written to disk: a restarted node picks the
+	// ban back up from the control plane's ban set in /info (see
+	// SyncMeshConfig), which is also how an unban reaches it.
 	if p, err := peer.Decode(event.PeerId); err == nil {
 		n.authPeers.Delete(p)
-		// The in-memory cache above is bounded and does not survive a restart,
-		// and the BANNED event is published once with no replay, so the ban has
-		// to be written down or the connection gater silently stops enforcing
-		// it (see Store.SaveBannedPeer).
-		n.persistBannedPeer(p)
 		if n.Host != nil {
 			_ = n.Host.Network().ClosePeer(p)
 		}
-	}
-}
-
-// persistBannedPeer writes a ban to the local store, mirroring
-// persistTrustedKeys: a failure is logged and does not abort the in-memory
-// eviction, which is still the fastest way to stop honouring the peer.
-func (n *SamNode) persistBannedPeer(p peer.ID) {
-	if n.Store == nil {
-		return
-	}
-	if err := n.Store.SaveBannedPeer(p); err != nil {
-		logger.Errorf("Failed to persist ban for peer %s: %v", p, err)
 	}
 }
 
