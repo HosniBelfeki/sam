@@ -18,6 +18,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"math"
 	"net/http"
 	"sort"
 	"strconv"
@@ -170,8 +171,8 @@ func parseExposition(r interface{ Read([]byte) (int, error) }) ([]Series, error)
 			continue
 		}
 		value, err := strconv.ParseFloat(fields[0], 64)
-		if err != nil {
-			// NaN and +Inf are legal values that carry no information here.
+		if err != nil || math.IsNaN(value) || math.IsInf(value, 0) {
+			// NaN and infinity are legal values that carry no information here.
 			continue
 		}
 

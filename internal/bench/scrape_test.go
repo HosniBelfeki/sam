@@ -16,6 +16,7 @@ package bench
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -82,6 +83,27 @@ func TestParseExpositionKeepsCommasInsideLabelValues(t *testing.T) {
 	}
 	if got := series[0].Labels["b"]; got != "z" {
 		t.Errorf("label b = %q, want %q", got, "z")
+	}
+}
+
+func TestParseExpositionNonFinite(t *testing.T) {
+	series, err := parseExposition(strings.NewReader("unavailable NaN\npositive +Inf\nnegative -Inf\nfinite 3\nzero 0\nfinite_negative -2.5\n"))
+	if err != nil {
+		t.Fatalf("parseExposition: %v", err)
+	}
+
+	metrics := (&Snapshot{Series: series}).Flatten()
+	want := map[string]float64{"finite": 3, "zero": 0, "finite_negative": -2.5}
+	if len(metrics) != len(want) {
+		t.Fatalf("metrics = %v, want %v", metrics, want)
+	}
+	for name, value := range want {
+		if got, ok := metrics[name]; !ok || got != value {
+			t.Errorf("metric %q = %v (found %v), want %v", name, got, ok, value)
+		}
+	}
+	if _, err := json.Marshal(metrics); err != nil {
+		t.Fatalf("json.Marshal: %v", err)
 	}
 }
 
