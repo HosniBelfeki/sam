@@ -308,7 +308,7 @@ func NewSamNode(cfg Options) (*SamNode, error) {
 			logger.Warnf("Ignoring undecodable banned peer ID %q from the control plane: %v", id, err)
 			continue
 		}
-		node.revokedPeers.Add(p.String(), time.Now().Unix())
+		node.revokedPeers.Add(p.String(), time.Now().UnixMilli())
 	}
 	node.peerLabelGate, err = lru.New[string, time.Time](labelGateCacheSize)
 	if err != nil {
@@ -1278,27 +1278,29 @@ func (n *SamNode) listenForControlPlaneEvents(ctx context.Context) {
 }
 
 func (n *SamNode) handleBannedEvent(event *api.MeshEvent) {
+	p, err := peer.Decode(event.PeerId)
+	if err != nil {
+		logger.Warnf("[Mesh Event] Ignoring BANNED event with undecodable peer ID %q: %v", event.PeerId, err)
+		return
+	}
+	canonicalID := p.String()
+
 	n.mu.Lock()
 	if n.peerLastEventTime == nil {
 		n.peerLastEventTime = make(map[string]int64)
 	}
-	if event.Timestamp < n.peerLastEventTime[event.PeerId] {
-		logger.Warnf("[Mesh Event] Dropping out-of-order BANNED event for peer %s (event timestamp: %d, last processed: %d)", event.PeerId, event.Timestamp, n.peerLastEventTime[event.PeerId])
+	if event.Timestamp < n.peerLastEventTime[canonicalID] {
+		logger.Warnf("[Mesh Event] Dropping out-of-order BANNED event for peer %s (event timestamp: %d, last processed: %d)", canonicalID, event.Timestamp, n.peerLastEventTime[canonicalID])
 		n.mu.Unlock()
 		return
 	}
-	n.peerLastEventTime[event.PeerId] = event.Timestamp
-
+	n.peerLastEventTime[canonicalID] = event.Timestamp
 	n.mu.Unlock()
 
-	logger.Infow("[Mesh Event] peer banned", "event", meshEventBanned, "peer", event.PeerId)
+	logger.Infow("[Mesh Event] peer banned", "event", meshEventBanned, "peer", canonicalID)
 
-	p, err := peer.Decode(event.PeerId)
-	if err != nil {
-		return
-	}
 	if n.revokedPeers != nil {
-		n.revokedPeers.Add(p.String(), event.Timestamp)
+		n.revokedPeers.Add(canonicalID, event.Timestamp)
 	}
 	// Drop any prior admission, otherwise the relay ACL keeps honouring it.
 	// The cache entry above is not written to disk: a restarted node picks the

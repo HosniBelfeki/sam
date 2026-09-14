@@ -16,7 +16,10 @@ package node
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
+	"os/exec"
 	"sort"
 	"sync"
 	"time"
@@ -27,6 +30,13 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+// commandSessionLimit caps the subprocesses one command-backed MCP service
+// runs at once. Every mesh stream now costs a process, so without a bound an
+// authorized peer holding streams open could fork the node out of memory.
+const commandSessionLimit = 16
+
+var errTooManyCommandSessions = errors.New("too many concurrent sessions to command backend")
+
 // MCPService extends baseService to handle MCP protocol proxying.
 type MCPService struct {
 	baseService
@@ -34,6 +44,52 @@ type MCPService struct {
 	toolsMu      sync.Mutex
 	cachedTools  []string
 	toolsExpires time.Time
+
+	// sessions is the slot pool for command-backend subprocesses. Nil until
+	// first use, when it gets commandSessionLimit slots; a preset channel
+	// (tests) is kept as is.
+	sessionsOnce sync.Once
+	sessions     chan struct{}
+}
+
+func (m *MCPService) sessionSlots() chan struct{} {
+	m.sessionsOnce.Do(func() {
+		if m.sessions == nil {
+			m.sessions = make(chan struct{}, commandSessionLimit)
+		}
+	})
+	return m.sessions
+}
+
+// boundedTransport takes a slot from slots on Connect and gives it back once
+// the connection's Close has reaped the child.
+type boundedTransport struct {
+	mcp.Transport
+	slots chan struct{}
+}
+
+func (t *boundedTransport) Connect(ctx context.Context) (mcp.Connection, error) {
+	select {
+	case t.slots <- struct{}{}:
+	default:
+		return nil, errTooManyCommandSessions
+	}
+	conn, err := t.Transport.Connect(ctx)
+	if err != nil {
+		<-t.slots
+		return nil, err
+	}
+	return &boundedConn{Connection: conn, release: sync.OnceFunc(func() { <-t.slots })}, nil
+}
+
+type boundedConn struct {
+	mcp.Connection
+	release func()
+}
+
+func (c *boundedConn) Close() error {
+	defer c.release()
+	return c.Connection.Close()
 }
 
 // Probe reports whether the backend actually speaks MCP, by completing an
@@ -75,18 +131,30 @@ func (m *MCPService) Teardown() error {
 }
 
 // backendTransport builds a fresh MCP transport to this service's backend.
-// Command backends share the stdio bridge, which multiplexes sessions the
-// same way concurrent remote streams already do.
+// Command backends get their own subprocess per call (mcp.CommandTransport),
+// not a shared one: the go-sdk client numbers requests from 1 per
+// connection, so a shared process risked one session reading another's
+// reply. Stdio MCP is single-session by spec, so this mirrors the URL
+// case's fresh-transport-per-session shape rather than giving the bridge a
+// per-session id space. Cost: a fresh process per call instead of one
+// long-lived one, so slow-starting backends pay startup repeatedly.
 func (m *MCPService) backendTransport() (mcp.Transport, error) {
 	switch x := m.backend.(type) {
 	case *api.RegisterServiceRequest_TargetUrl:
 		return &mcp.StreamableClientTransport{Endpoint: x.TargetUrl}, nil
 	case *api.RegisterServiceRequest_Command:
-		bridge, ok := m.handler.(*StdioBridge)
-		if !ok {
-			return nil, fmt.Errorf("expected *StdioBridge handler for command-backed MCP service %q, got %T", m.info.GetName(), m.handler)
+		if x.Command == nil || len(x.Command.Command) == 0 {
+			return nil, fmt.Errorf("missing command for command-backed MCP service %q", m.info.GetName())
 		}
-		return newBridgeTransport(bridge), nil
+		cmd := exec.Command(x.Command.Command[0], x.Command.Command[1:]...)
+		cmd.Env = os.Environ()
+		for k, v := range x.Command.Env {
+			cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, v))
+		}
+		return &boundedTransport{
+			Transport: &mcp.CommandTransport{Command: cmd},
+			slots:     m.sessionSlots(),
+		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported backend type %T for MCP service %q", m.backend, m.info.GetName())
 	}

@@ -136,6 +136,43 @@ func TestHandleBannedEvent(t *testing.T) {
 	}
 }
 
+func TestBannedPeerCanonicalisation(t *testing.T) {
+	priv, _, err := crypto.GenerateEd25519Key(nil)
+	if err != nil {
+		t.Fatalf("failed to generate key: %v", err)
+	}
+	p, err := peer.IDFromPrivateKey(priv)
+	if err != nil {
+		t.Fatalf("failed to derive peer ID: %v", err)
+	}
+	canonicalID := p.String()
+	cidv1ID := peer.ToCid(p).String()
+
+	revokedCache, err := lru.New[string, int64](10)
+	if err != nil {
+		t.Fatalf("failed to create revocation cache: %v", err)
+	}
+	node := &SamNode{
+		revokedPeers:      revokedCache,
+		peerLastEventTime: make(map[string]int64),
+		BiscuitTimeout:    500 * time.Millisecond,
+	}
+
+	ts := time.Now().UnixMilli()
+	node.handleBannedEvent(&api.MeshEvent{
+		Type:      api.MeshEvent_BANNED,
+		PeerId:    cidv1ID,
+		Timestamp: ts,
+	})
+
+	if !node.revokedPeers.Contains(canonicalID) {
+		t.Errorf("revokedPeers missing canonical ID %q (event used %q)", canonicalID, cidv1ID)
+	}
+	if got := node.peerLastEventTime[canonicalID]; got != ts {
+		t.Errorf("peerLastEventTime[%q] = %d, want %d", canonicalID, got, ts)
+	}
+}
+
 func TestHandleKeyRotationEvent(t *testing.T) {
 	node := &SamNode{BiscuitTimeout: 500 * time.Millisecond}
 
@@ -458,6 +495,41 @@ func TestNewSamNode_BiscuitTimeout(t *testing.T) {
 			t.Errorf("BiscuitTimeout = %v, want 10s", node.BiscuitTimeout)
 		}
 	})
+}
+
+func TestNewSamNode_BannedPeerCanonicalisation(t *testing.T) {
+	bannedPriv, _, err := crypto.GenerateEd25519Key(nil)
+	if err != nil {
+		t.Fatalf("failed to generate key: %v", err)
+	}
+	p, err := peer.IDFromPrivateKey(bannedPriv)
+	if err != nil {
+		t.Fatalf("failed to derive peer ID: %v", err)
+	}
+	canonicalID := p.String()
+	cidv1ID := peer.ToCid(p).String()
+
+	priv, _, err := crypto.GenerateKeyPair(crypto.Ed25519, -1)
+	if err != nil {
+		t.Fatalf("failed to generate node key: %v", err)
+	}
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	node, err := NewSamNode(Options{
+		PrivKey:       priv,
+		Store:         store,
+		BannedPeerIDs: []string{cidv1ID},
+	})
+	if err != nil {
+		t.Fatalf("NewSamNode: %v", err)
+	}
+	if !node.revokedPeers.Contains(canonicalID) {
+		t.Errorf("revokedPeers missing canonical ID %q (seeded with %q)", canonicalID, cidv1ID)
+	}
 }
 
 func TestNewSamNode_DHTOptions(t *testing.T) {

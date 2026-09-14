@@ -1475,7 +1475,12 @@ func (s *Server) HandleEnrollStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	canonical := canonicalPeerID(peerID)
+	pID, err := peer.Decode(peerID)
+	if err != nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	canonical := pID.String()
 
 	ctx := r.Context()
 	enrollReq, err := s.store.GetEnrollmentRequest(ctx, canonical)
@@ -1861,7 +1866,12 @@ func (s *Server) HandleAdminRevoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	canonical := canonicalPeerID(req.PeerId)
+	pID, err := peer.Decode(req.PeerId)
+	if err != nil {
+		http.Error(w, "Invalid Peer ID", http.StatusBadRequest)
+		return
+	}
+	canonical := pID.String()
 
 	// Retrieve the node from storage to verify it exists
 	node, err := s.store.GetNode(ctx, canonical)
@@ -2134,7 +2144,12 @@ func (s *Server) HandleUserRevoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	canonical := canonicalPeerID(peerID)
+	pID, err := peer.Decode(peerID)
+	if err != nil {
+		http.Error(w, "Invalid Peer ID", http.StatusBadRequest)
+		return
+	}
+	canonical := pID.String()
 
 	ctx := r.Context()
 	node, err := s.store.GetNode(ctx, canonical)

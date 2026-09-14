@@ -540,11 +540,12 @@ func canonicalizeNodePeerIDs(ctx context.Context, s *SQLStore, tx *sql.Tx) error
 	if err != nil {
 		return fmt.Errorf("failed to read nodes: %w", err)
 	}
+	defer func() { _ = rows.Close() }()
+
 	var pending []nodeRow
 	for rows.Next() {
 		var r nodeRow
 		if err := rows.Scan(&r.rawPeerID, &r.banned); err != nil {
-			_ = rows.Close()
 			return fmt.Errorf("failed to scan node: %w", err)
 		}
 		canonical, err := api.CanonicalPeerID(r.rawPeerID)
@@ -559,11 +560,7 @@ func canonicalizeNodePeerIDs(ctx context.Context, s *SQLStore, tx *sql.Tx) error
 		pending = append(pending, r)
 	}
 	if err := rows.Err(); err != nil {
-		_ = rows.Close()
 		return fmt.Errorf("failed to read nodes: %w", err)
-	}
-	if err := rows.Close(); err != nil {
-		return fmt.Errorf("failed to close nodes: %w", err)
 	}
 
 	for _, r := range pending {
@@ -602,11 +599,12 @@ func canonicalizeEnrollmentRequestPeerIDs(ctx context.Context, s *SQLStore, tx *
 	if err != nil {
 		return fmt.Errorf("failed to read enrollment requests: %w", err)
 	}
+	defer func() { _ = rows.Close() }()
+
 	var pending []requestRow
 	for rows.Next() {
 		var r requestRow
 		if err := rows.Scan(&r.id, &r.rawPeerID, &r.createdAt); err != nil {
-			_ = rows.Close()
 			return fmt.Errorf("failed to scan enrollment request: %w", err)
 		}
 		canonical, err := api.CanonicalPeerID(r.rawPeerID)
@@ -621,11 +619,7 @@ func canonicalizeEnrollmentRequestPeerIDs(ctx context.Context, s *SQLStore, tx *
 		pending = append(pending, r)
 	}
 	if err := rows.Err(); err != nil {
-		_ = rows.Close()
 		return fmt.Errorf("failed to read enrollment requests: %w", err)
-	}
-	if err := rows.Close(); err != nil {
-		return fmt.Errorf("failed to close enrollment requests: %w", err)
 	}
 
 	for _, r := range pending {
@@ -666,11 +660,12 @@ func canonicalizeRouterPeerIDs(ctx context.Context, s *SQLStore, tx *sql.Tx) err
 	if err != nil {
 		return fmt.Errorf("failed to read routers: %w", err)
 	}
+	defer func() { _ = rows.Close() }()
+
 	var pending []routerRow
 	for rows.Next() {
 		var r routerRow
 		if err := rows.Scan(&r.rawPeerID, &r.lastRenewal); err != nil {
-			_ = rows.Close()
 			return fmt.Errorf("failed to scan router: %w", err)
 		}
 		canonical, err := api.CanonicalPeerID(r.rawPeerID)
@@ -685,11 +680,7 @@ func canonicalizeRouterPeerIDs(ctx context.Context, s *SQLStore, tx *sql.Tx) err
 		pending = append(pending, r)
 	}
 	if err := rows.Err(); err != nil {
-		_ = rows.Close()
 		return fmt.Errorf("failed to read routers: %w", err)
-	}
-	if err := rows.Close(); err != nil {
-		return fmt.Errorf("failed to close routers: %w", err)
 	}
 
 	for _, r := range pending {
