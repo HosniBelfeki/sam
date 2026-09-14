@@ -23,7 +23,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/protocol"
 )
 
@@ -76,14 +75,6 @@ const (
 	// if their current Biscuit token is close to expiration and needs to be proactively refreshed.
 	TokenRefreshCheckInterval = 10 * time.Minute
 )
-
-func CanonicalPeerID(s string) (string, error) {
-	p, err := peer.Decode(s)
-	if err != nil {
-		return "", err
-	}
-	return p.String(), nil
-}
 
 // EnrollChallenge is the payload a bootstrap enrollee signs to prove
 // possession of the private half of BootstrapEnrollRequest.public_key at

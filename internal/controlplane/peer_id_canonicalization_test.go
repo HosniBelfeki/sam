@@ -17,6 +17,8 @@ package controlplane
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/base64"
 	"net/http"
 	"strconv"
@@ -26,6 +28,8 @@ import (
 
 	"github.com/google/sam/api"
 	"github.com/google/sam/internal/storage"
+	"github.com/libp2p/go-libp2p"
+	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"google.golang.org/protobuf/proto"
@@ -131,12 +135,15 @@ func TestBannedNodeCannotRegisterUnderAnAlias(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		reqData, _ := proto.Marshal(&api.EnrollRequest{
+		reqData, err := proto.Marshal(&api.EnrollRequest{
 			Jwt:           mintToken(map[string]interface{}{"sub": sub}),
 			PeerId:        peerID,
 			PublicKey:     pubBytes,
 			RequestedRole: api.RoleNode,
 		})
+		if err != nil {
+			t.Fatalf("failed to marshal enroll request: %v", err)
+		}
 		resp, err := client.Post(baseURL+"/register", "application/x-protobuf", bytes.NewReader(reqData))
 		if err != nil {
 			t.Fatalf("/register failed: %v", err)
@@ -155,8 +162,14 @@ func TestBannedNodeCannotRegisterUnderAnAlias(t *testing.T) {
 		t.Fatalf("node was not stored under its canonical id: %v", err)
 	}
 
-	revokeData, _ := proto.Marshal(&api.TokenRevokeRequest{PeerId: id.String()})
-	req, _ := http.NewRequest(http.MethodPost, baseURL+"/admin/revoke", bytes.NewReader(revokeData))
+	revokeData, err := proto.Marshal(&api.TokenRevokeRequest{PeerId: id.String()})
+	if err != nil {
+		t.Fatalf("failed to marshal revoke request: %v", err)
+	}
+	req, err := http.NewRequest(http.MethodPost, baseURL+"/admin/revoke", bytes.NewReader(revokeData))
+	if err != nil {
+		t.Fatalf("failed to create revoke request: %v", err)
+	}
 	req.Header.Set("Authorization", "Bearer super-secret-admin-token")
 	resp, err := client.Do(req)
 	if err != nil {
@@ -195,8 +208,14 @@ func TestRevokeBansTheIdentityNotTheSpelling(t *testing.T) {
 			name: "admin revoke",
 			revoke: func(t *testing.T, baseURL, peerID, userToken, adminToken string, client *http.Client) int {
 				t.Helper()
-				body, _ := proto.Marshal(&api.TokenRevokeRequest{PeerId: peerID})
-				req, _ := http.NewRequest(http.MethodPost, baseURL+"/admin/revoke", bytes.NewReader(body))
+				body, err := proto.Marshal(&api.TokenRevokeRequest{PeerId: peerID})
+				if err != nil {
+					t.Fatalf("failed to marshal revoke request: %v", err)
+				}
+				req, err := http.NewRequest(http.MethodPost, baseURL+"/admin/revoke", bytes.NewReader(body))
+				if err != nil {
+					t.Fatalf("failed to create revoke request: %v", err)
+				}
 				req.Header.Set("Authorization", "Bearer "+adminToken)
 				resp, err := client.Do(req)
 				if err != nil {
@@ -210,7 +229,10 @@ func TestRevokeBansTheIdentityNotTheSpelling(t *testing.T) {
 			name: "user revoke",
 			revoke: func(t *testing.T, baseURL, peerID, userToken, adminToken string, client *http.Client) int {
 				t.Helper()
-				req, _ := http.NewRequest(http.MethodPost, baseURL+"/user/revoke?id="+peerID, nil)
+				req, err := http.NewRequest(http.MethodPost, baseURL+"/user/revoke?id="+peerID, nil)
+				if err != nil {
+					t.Fatalf("failed to create user revoke request: %v", err)
+				}
 				req.Header.Set("Authorization", "Bearer "+userToken)
 				resp, err := client.Do(req)
 				if err != nil {
@@ -323,7 +345,10 @@ func TestEnrollStatusReachesTheRecordThroughAnAlias(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to sign challenge: %v", err)
 		}
-		req, _ := http.NewRequest(http.MethodGet, baseURL+"/enroll/status?peer_id="+query, nil)
+		req, err := http.NewRequest(http.MethodGet, baseURL+"/enroll/status?peer_id="+query, nil)
+		if err != nil {
+			t.Fatalf("failed to create enroll status request: %v", err)
+		}
 		req.Header.Set(api.HeaderChallengeTimestamp, strconv.FormatInt(ts, 10))
 		req.Header.Set(api.HeaderChallengeSignature, base64.RawURLEncoding.EncodeToString(sig))
 		resp, err := client.Do(req)
@@ -345,24 +370,46 @@ func TestEnrollStatusReachesTheRecordThroughAnAlias(t *testing.T) {
 	}
 }
 
-func TestCanonicalPeerIDIsBestEffort(t *testing.T) {
-	_, id := newTestKey(t)
-	alias := cidAlias(t, id)
+func TestPublishEventValidatesPeerID(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
-	for _, tc := range []struct {
-		name string
-		in   string
-		want string
-	}{
-		{name: "canonical id is stable", in: id.String(), want: id.String()},
-		{name: "alias folds to canonical", in: alias, want: id.String()},
-		{name: "empty stays empty", in: "", want: ""},
-		{name: "undecodable passes through", in: "peer-node-a", want: "peer-node-a"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := canonicalPeerID(tc.in); got != tc.want {
-				t.Errorf("canonicalPeerID(%q) = %q, want %q", tc.in, got, tc.want)
-			}
-		})
+	store, err := storage.NewSQLStore("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("failed to generate key: %v", err)
+	}
+	if err := store.SaveInitialKey(ctx, priv, pub); err != nil {
+		t.Fatalf("failed to save key: %v", err)
+	}
+
+	h, err := libp2p.New(libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"))
+	if err != nil {
+		t.Fatalf("failed to create host: %v", err)
+	}
+	defer func() { _ = h.Close() }()
+
+	ps, err := pubsub.NewGossipSub(ctx, h)
+	if err != nil {
+		t.Fatalf("failed to create pubsub: %v", err)
+	}
+
+	adapter, err := NewP2PMeshAdapter(h, ps, store)
+	if err != nil {
+		t.Fatalf("failed to create P2PMeshAdapter: %v", err)
+	}
+	defer func() { _ = adapter.Close() }()
+
+	if err := adapter.PublishEvent(ctx, api.MeshEvent_POLICY_UPDATE, "", nil); err != nil {
+		t.Errorf("empty peer ID should be accepted: %v", err)
+	}
+
+	if err := adapter.PublishEvent(ctx, api.MeshEvent_BANNED, "peer-node-a", nil); err == nil {
+		t.Error("expected an error for an undecodable peer ID, got nil")
 	}
 }

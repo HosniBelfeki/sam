@@ -1477,7 +1477,7 @@ func (s *Server) HandleEnrollStatus(w http.ResponseWriter, r *http.Request) {
 
 	pID, err := peer.Decode(peerID)
 	if err != nil {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		http.Error(w, "Unauthorized, Invalid Peer ID", http.StatusUnauthorized)
 		return
 	}
 	canonical := pID.String()
