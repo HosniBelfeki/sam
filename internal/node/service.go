@@ -121,6 +121,11 @@ func (b *baseService) Teardown() error {
 
 func NewServiceFromRequest(req *api.RegisterServiceRequest) (Service, error) {
 	info := req.Service
+	// Init indexes Command[0] before backendTransport ever runs; reject here so
+	// no service type can be constructed in a state that panics on Register.
+	if c, ok := req.Backend.(*api.RegisterServiceRequest_Command); ok && len(c.Command.GetCommand()) == 0 {
+		return nil, fmt.Errorf("service %q: command backend has no command", info.GetName())
+	}
 	switch info.Type {
 	case api.ServiceType_SERVICE_TYPE_MCP:
 		return &MCPService{baseService: baseService{info: info, backend: req.Backend}}, nil
