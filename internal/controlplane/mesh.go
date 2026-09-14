@@ -139,7 +139,7 @@ func (p *P2PMeshAdapter) PublishEvent(ctx context.Context, eventType api.MeshEve
 
 	event := &api.MeshEvent{
 		Type:         eventType,
-		PeerId:       peerID,
+		PeerId:       canonicalPeerID(peerID),
 		Timestamp:    time.Now().UnixMilli(),
 		NewPublicKey: payload,
 	}
@@ -163,6 +163,17 @@ func (p *P2PMeshAdapter) PublishEvent(ctx context.Context, eventType api.MeshEve
 
 	logger.Infof("[P2PMeshAdapter] Published MeshEvent %v to topic %s (peerID: %s)", eventType, api.GossipEvents, peerID)
 	return nil
+}
+
+func canonicalPeerID(peerID string) string {
+	if peerID == "" {
+		return ""
+	}
+	canonical, err := api.CanonicalPeerID(peerID)
+	if err != nil {
+		return peerID
+	}
+	return canonical
 }
 
 func (p *P2PMeshAdapter) DiscoverServices(ctx context.Context, serviceType string) ([]*ServiceAnnouncement, error) {

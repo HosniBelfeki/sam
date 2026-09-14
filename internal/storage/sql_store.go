@@ -113,9 +113,10 @@ func (s *SQLStore) isPostgres() bool {
 }
 
 type migration struct {
-	version  int
-	sqlite   []string
-	postgres []string
+	version     int
+	sqlite      []string
+	postgres    []string
+	dataMigrate func(ctx context.Context, s *SQLStore, tx *sql.Tx) error
 }
 
 var migrations = []migration{
@@ -369,6 +370,10 @@ var migrations = []migration{
 			)`,
 		},
 	},
+	{
+		version:     9,
+		dataMigrate: migrateCanonicalPeerIDs,
+	},
 }
 
 func (s *SQLStore) initSchema() error {
@@ -412,6 +417,12 @@ func (s *SQLStore) initSchemaDefault() error {
 						continue
 					}
 					return fmt.Errorf("migration version %d failed: query %q failed: %w", m.version, query, err)
+				}
+			}
+
+			if m.dataMigrate != nil {
+				if err := m.dataMigrate(context.Background(), s, tx); err != nil {
+					return fmt.Errorf("migration version %d data step failed: %w", m.version, err)
 				}
 			}
 
@@ -470,6 +481,12 @@ func (s *SQLStore) initSchemaPostgres() error {
 			}
 		}
 
+		if m.dataMigrate != nil {
+			if err := m.dataMigrate(context.Background(), s, tx); err != nil {
+				return fmt.Errorf("migration version %d data step failed: %w", m.version, err)
+			}
+		}
+
 		insertQuery := s.rebind("INSERT INTO schema_migrations (version) VALUES (?)")
 		if _, err := tx.Exec(insertQuery, m.version); err != nil {
 			return fmt.Errorf("failed to update schema_migrations version: %w", err)
@@ -500,6 +517,205 @@ func (s *SQLStore) rebind(query string) string {
 		}
 	}
 	return result.String()
+}
+
+func migrateCanonicalPeerIDs(ctx context.Context, s *SQLStore, tx *sql.Tx) error {
+	if err := canonicalizeNodePeerIDs(ctx, s, tx); err != nil {
+		return err
+	}
+	if err := canonicalizeEnrollmentRequestPeerIDs(ctx, s, tx); err != nil {
+		return err
+	}
+	return canonicalizeRouterPeerIDs(ctx, s, tx)
+}
+
+func canonicalizeNodePeerIDs(ctx context.Context, s *SQLStore, tx *sql.Tx) error {
+	type nodeRow struct {
+		rawPeerID       string
+		canonicalPeerID string
+		banned          bool
+	}
+
+	rows, err := tx.QueryContext(ctx, `SELECT peer_id, banned FROM nodes`)
+	if err != nil {
+		return fmt.Errorf("failed to read nodes: %w", err)
+	}
+	var pending []nodeRow
+	for rows.Next() {
+		var r nodeRow
+		if err := rows.Scan(&r.rawPeerID, &r.banned); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("failed to scan node: %w", err)
+		}
+		canonical, err := api.CanonicalPeerID(r.rawPeerID)
+		if err != nil {
+			logger.Warnw("Ignoring node with undecodable peer ID", "peer_id", r.rawPeerID)
+			continue
+		}
+		if canonical == r.rawPeerID {
+			continue
+		}
+		r.canonicalPeerID = canonical
+		pending = append(pending, r)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return fmt.Errorf("failed to read nodes: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("failed to close nodes: %w", err)
+	}
+
+	for _, r := range pending {
+		var canonicalBanned bool
+		err := tx.QueryRowContext(ctx, s.rebind(`SELECT banned FROM nodes WHERE peer_id = ?`), r.canonicalPeerID).Scan(&canonicalBanned)
+		switch {
+		case err == sql.ErrNoRows:
+			if _, err := tx.ExecContext(ctx, s.rebind(`UPDATE nodes SET peer_id = ? WHERE peer_id = ?`), r.canonicalPeerID, r.rawPeerID); err != nil {
+				return fmt.Errorf("failed to rename node %q: %w", r.rawPeerID, err)
+			}
+		case err != nil:
+			return fmt.Errorf("failed to look up node %q: %w", r.canonicalPeerID, err)
+		default:
+			if r.banned && !canonicalBanned {
+				if _, err := tx.ExecContext(ctx, s.rebind(`UPDATE nodes SET banned = ? WHERE peer_id = ?`), true, r.canonicalPeerID); err != nil {
+					return fmt.Errorf("failed to carry the ban over to node %q: %w", r.canonicalPeerID, err)
+				}
+			}
+			if _, err := tx.ExecContext(ctx, s.rebind(`DELETE FROM nodes WHERE peer_id = ?`), r.rawPeerID); err != nil {
+				return fmt.Errorf("failed to drop aliased node %q: %w", r.rawPeerID, err)
+			}
+		}
+	}
+	return nil
+}
+
+func canonicalizeEnrollmentRequestPeerIDs(ctx context.Context, s *SQLStore, tx *sql.Tx) error {
+	type requestRow struct {
+		id              string
+		rawPeerID       string
+		canonicalPeerID string
+		createdAt       int64
+	}
+
+	rows, err := tx.QueryContext(ctx, `SELECT id, peer_id, created_at FROM enrollment_requests`)
+	if err != nil {
+		return fmt.Errorf("failed to read enrollment requests: %w", err)
+	}
+	var pending []requestRow
+	for rows.Next() {
+		var r requestRow
+		if err := rows.Scan(&r.id, &r.rawPeerID, &r.createdAt); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("failed to scan enrollment request: %w", err)
+		}
+		canonical, err := api.CanonicalPeerID(r.rawPeerID)
+		if err != nil {
+			logger.Warnw("Ignoring enrollment request with undecodable peer ID", "peer_id", r.rawPeerID)
+			continue
+		}
+		if canonical == r.rawPeerID {
+			continue
+		}
+		r.canonicalPeerID = canonical
+		pending = append(pending, r)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return fmt.Errorf("failed to read enrollment requests: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("failed to close enrollment requests: %w", err)
+	}
+
+	for _, r := range pending {
+		var canonicalID string
+		var canonicalCreatedAt int64
+		err := tx.QueryRowContext(ctx, s.rebind(`SELECT id, created_at FROM enrollment_requests WHERE peer_id = ?`), r.canonicalPeerID).Scan(&canonicalID, &canonicalCreatedAt)
+		switch {
+		case err == sql.ErrNoRows:
+			if _, err := tx.ExecContext(ctx, s.rebind(`UPDATE enrollment_requests SET peer_id = ? WHERE id = ?`), r.canonicalPeerID, r.id); err != nil {
+				return fmt.Errorf("failed to rename enrollment request %q: %w", r.id, err)
+			}
+		case err != nil:
+			return fmt.Errorf("failed to look up enrollment request for %q: %w", r.canonicalPeerID, err)
+		case r.createdAt > canonicalCreatedAt:
+			if _, err := tx.ExecContext(ctx, s.rebind(`DELETE FROM enrollment_requests WHERE id = ?`), canonicalID); err != nil {
+				return fmt.Errorf("failed to drop superseded enrollment request %q: %w", canonicalID, err)
+			}
+			if _, err := tx.ExecContext(ctx, s.rebind(`UPDATE enrollment_requests SET peer_id = ? WHERE id = ?`), r.canonicalPeerID, r.id); err != nil {
+				return fmt.Errorf("failed to rename enrollment request %q: %w", r.id, err)
+			}
+		default:
+			if _, err := tx.ExecContext(ctx, s.rebind(`DELETE FROM enrollment_requests WHERE id = ?`), r.id); err != nil {
+				return fmt.Errorf("failed to drop aliased enrollment request %q: %w", r.id, err)
+			}
+		}
+	}
+	return nil
+}
+
+func canonicalizeRouterPeerIDs(ctx context.Context, s *SQLStore, tx *sql.Tx) error {
+	type routerRow struct {
+		rawPeerID       string
+		canonicalPeerID string
+		lastRenewal     int64
+	}
+
+	rows, err := tx.QueryContext(ctx, `SELECT peer_id, last_lease_renewal FROM routers`)
+	if err != nil {
+		return fmt.Errorf("failed to read routers: %w", err)
+	}
+	var pending []routerRow
+	for rows.Next() {
+		var r routerRow
+		if err := rows.Scan(&r.rawPeerID, &r.lastRenewal); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("failed to scan router: %w", err)
+		}
+		canonical, err := api.CanonicalPeerID(r.rawPeerID)
+		if err != nil {
+			logger.Warnw("Ignoring router with undecodable peer ID", "peer_id", r.rawPeerID)
+			continue
+		}
+		if canonical == r.rawPeerID {
+			continue
+		}
+		r.canonicalPeerID = canonical
+		pending = append(pending, r)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return fmt.Errorf("failed to read routers: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("failed to close routers: %w", err)
+	}
+
+	for _, r := range pending {
+		var canonicalRenewal int64
+		err := tx.QueryRowContext(ctx, s.rebind(`SELECT last_lease_renewal FROM routers WHERE peer_id = ?`), r.canonicalPeerID).Scan(&canonicalRenewal)
+		switch {
+		case err == sql.ErrNoRows:
+			if _, err := tx.ExecContext(ctx, s.rebind(`UPDATE routers SET peer_id = ? WHERE peer_id = ?`), r.canonicalPeerID, r.rawPeerID); err != nil {
+				return fmt.Errorf("failed to rename router %q: %w", r.rawPeerID, err)
+			}
+		case err != nil:
+			return fmt.Errorf("failed to look up router %q: %w", r.canonicalPeerID, err)
+		case r.lastRenewal > canonicalRenewal:
+			if _, err := tx.ExecContext(ctx, s.rebind(`DELETE FROM routers WHERE peer_id = ?`), r.canonicalPeerID); err != nil {
+				return fmt.Errorf("failed to drop superseded router %q: %w", r.canonicalPeerID, err)
+			}
+			if _, err := tx.ExecContext(ctx, s.rebind(`UPDATE routers SET peer_id = ? WHERE peer_id = ?`), r.canonicalPeerID, r.rawPeerID); err != nil {
+				return fmt.Errorf("failed to rename router %q: %w", r.rawPeerID, err)
+			}
+		default:
+			if _, err := tx.ExecContext(ctx, s.rebind(`DELETE FROM routers WHERE peer_id = ?`), r.rawPeerID); err != nil {
+				return fmt.Errorf("failed to drop aliased router %q: %w", r.rawPeerID, err)
+			}
+		}
+	}
+	return nil
 }
 
 // GetCurrentKey implements Store.

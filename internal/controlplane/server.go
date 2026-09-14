@@ -483,25 +483,26 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid Peer ID", http.StatusBadRequest)
 		return
 	}
+	canonical := pID.String()
 
 	// A ban names the device key and the identity behind it; check both, or
 	// a banned node re-enrolls from a freshly generated keypair.
-	if banned, err := s.store.IsNodeBanned(ctx, req.PeerId); err != nil {
-		logger.Errorf("Failed to check node ban for %s: %v", req.PeerId, err)
+	if banned, err := s.store.IsNodeBanned(ctx, canonical); err != nil {
+		logger.Errorf("Failed to check node ban for %s: %v", canonical, err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	} else if banned {
-		logger.Warnw("Banned node attempted enrollment", "peer_id", req.PeerId)
+		logger.Warnw("Banned node attempted enrollment", "peer_id", canonical)
 		http.Error(w, "Node is banned", http.StatusForbidden)
 		return
 	}
 	if key := oidcIdentityKey(claims); key != "" {
 		if banned, err := s.store.IsIdentityBanned(ctx, key); err != nil {
-			logger.Errorf("Failed to check identity ban for %s: %v", req.PeerId, err)
+			logger.Errorf("Failed to check identity ban for %s: %v", canonical, err)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
 		} else if banned {
-			logger.Warnw("Banned identity attempted enrollment", "peer_id", req.PeerId, "identity", key)
+			logger.Warnw("Banned identity attempted enrollment", "peer_id", canonical, "identity", key)
 			http.Error(w, "Identity is banned", http.StatusForbidden)
 			return
 		}
@@ -536,7 +537,7 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resolvedRoles := resolveRoles(pID.String(), claims, bindings)
+	resolvedRoles := resolveRoles(canonical, claims, bindings)
 	var customAccessRoles []string
 	resolvedMap := make(map[string]bool)
 	for _, r := range resolvedRoles {
@@ -561,7 +562,7 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request) {
 	// The node declared these labels itself, so they are only worth signing if
 	// a role it resolves to says it may carry them.
 	if err := api.LabelPatternsAllow(allowedLabelPatterns(finalRoles, policyRoles), req.Labels); err != nil {
-		logger.Warnw("Rejected undeclarable label at enrollment", "peer_id", req.PeerId, "error", err)
+		logger.Warnw("Rejected undeclarable label at enrollment", "peer_id", canonical, "error", err)
 		http.Error(w, "Label not permitted: "+err.Error(), http.StatusForbidden)
 		return
 	}
@@ -583,7 +584,7 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	biscuitData, _, err := identity.MintBiscuitToken(privKey, claims, token, pID, biscuitExpiry, finalRoles, policyRoles, req.Labels)
 	if err != nil {
-		logger.Errorw("Biscuit minting failed", "peer_id", req.PeerId, "error", err)
+		logger.Errorw("Biscuit minting failed", "peer_id", canonical, "error", err)
 		http.Error(w, "Failed to mint biscuit: "+err.Error(), http.StatusForbidden)
 		return
 	}
@@ -598,7 +599,7 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 
 	nodeRecord := &storage.EnrolledNode{
-		PeerID:         req.PeerId,
+		PeerID:         canonical,
 		PublicKey:      req.PublicKey,
 		Biscuit:        biscuitData,
 		Role:           primaryRole,
@@ -702,11 +703,12 @@ func (s *Server) HandleRefresh(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid biscuit: "+err.Error(), http.StatusUnauthorized)
 		return
 	}
+	canonical := pID.String()
 
 	// Fetch node record
-	nodeRecord, err := s.store.GetNode(ctx, pID.String())
+	nodeRecord, err := s.store.GetNode(ctx, canonical)
 	if err == storage.ErrNotFound {
-		logger.Warnw("Node not found for refresh", "peer_id", pID.String())
+		logger.Warnw("Node not found for refresh", "peer_id", canonical)
 		http.Error(w, "Node not enrolled", http.StatusUnauthorized)
 		return
 	} else if err != nil {
@@ -717,11 +719,11 @@ func (s *Server) HandleRefresh(w http.ResponseWriter, r *http.Request) {
 
 	if err := nodeRecord.CheckAdmission(time.Now()); err != nil {
 		if errors.Is(err, storage.ErrNodeBanned) {
-			logger.Warnw("Banned node attempted refresh", "peer_id", pID.String())
+			logger.Warnw("Banned node attempted refresh", "peer_id", canonical)
 			http.Error(w, "Node is banned", http.StatusForbidden)
 			return
 		}
-		logger.Warnw("Session expired for node", "peer_id", pID.String(), "expires_at", nodeRecord.ExpiresAt)
+		logger.Warnw("Session expired for node", "peer_id", canonical, "expires_at", nodeRecord.ExpiresAt)
 		http.Error(w, "Session expired, please re-enroll interactively", http.StatusUnauthorized)
 		return
 	}
@@ -734,8 +736,8 @@ func (s *Server) HandleRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := verifyFreshChallenge(pubKey, api.RefreshChallenge(nodeRecord.PeerID, req.Timestamp), req.Timestamp, req.ChallengeSignature); err != nil {
-		logger.Warnw("Refresh challenge verification failed", "peer_id", nodeRecord.PeerID, "error", err)
+	if err := verifyFreshChallenge(pubKey, api.RefreshChallenge(canonical, req.Timestamp), req.Timestamp, req.ChallengeSignature); err != nil {
+		logger.Warnw("Refresh challenge verification failed", "peer_id", canonical, "error", err)
 		http.Error(w, "Challenge verification failed: "+err.Error(), http.StatusUnauthorized)
 		return
 	}
@@ -780,7 +782,7 @@ func (s *Server) HandleRefresh(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
 		}
-		resolvedRoles := resolveRoles(pID.String(), claims, bindings)
+		resolvedRoles := resolveRoles(canonical, claims, bindings)
 		var customAccessRoles []string
 		resolvedMap := make(map[string]bool)
 		for _, r := range resolvedRoles {
@@ -904,6 +906,7 @@ func (s *Server) HandleRouterLease(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid Peer ID", http.StatusBadRequest)
 		return
 	}
+	canonical := pID.String()
 
 	// Fetch all valid public keys from CP to authorize router biscuit
 	validKeys, err := s.store.GetAllValidKeys(r.Context())
@@ -921,7 +924,7 @@ func (s *Server) HandleRouterLease(w http.ResponseWriter, r *http.Request) {
 	// Verify Biscuit and enforce expected remote peer id
 	b, verifyingKey, err := identity.VerifyBiscuitAndGetKey(req.Biscuit, pID, cpPubKeys, s.config.BiscuitTimeout)
 	if err != nil {
-		logger.Warnf("Router %s failed biscuit verification: %v", req.PeerId, err)
+		logger.Warnf("Router %s failed biscuit verification: %v", canonical, err)
 		http.Error(w, "Biscuit verification failed: "+err.Error(), http.StatusUnauthorized)
 		return
 	}
@@ -943,7 +946,7 @@ func (s *Server) HandleRouterLease(w http.ResponseWriter, r *http.Request) {
 	authorizer.AddPolicy(api.AllowIfTruePolicy)
 
 	if err := authorizer.Authorize(); err != nil {
-		logger.Warnf("Router %s lacks router role in its biscuit: %v\nWorld state:\n%s", req.PeerId, err, authorizer.PrintWorld())
+		logger.Warnf("Router %s lacks router role in its biscuit: %v\nWorld state:\n%s", canonical, err, authorizer.PrintWorld())
 		http.Error(w, "Unauthorized: entity is not a router", http.StatusForbidden)
 		return
 	}
@@ -951,7 +954,7 @@ func (s *Server) HandleRouterLease(w http.ResponseWriter, r *http.Request) {
 	// A lease is what /info serves to every joining node, and biscuits stay
 	// valid offline until their TTL: revocation has to cut off renewals here,
 	// as /refresh and /policies already do.
-	routerRecord, err := s.store.GetNode(r.Context(), pID.String())
+	routerRecord, err := s.store.GetNode(r.Context(), canonical)
 	if err == storage.ErrNotFound {
 		http.Error(w, "Router not enrolled", http.StatusUnauthorized)
 		return
@@ -962,11 +965,11 @@ func (s *Server) HandleRouterLease(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := routerRecord.CheckAdmission(time.Now()); err != nil {
 		if errors.Is(err, storage.ErrNodeBanned) {
-			logger.Warnw("Revoked router attempted lease renewal", "peer_id", pID.String())
+			logger.Warnw("Revoked router attempted lease renewal", "peer_id", canonical)
 			http.Error(w, "Router is banned", http.StatusForbidden)
 			return
 		}
-		logger.Warnw("Router with expired session attempted lease renewal", "peer_id", pID.String())
+		logger.Warnw("Router with expired session attempted lease renewal", "peer_id", canonical)
 		http.Error(w, "Session expired, please re-enroll", http.StatusUnauthorized)
 		return
 	}
@@ -989,7 +992,7 @@ func (s *Server) HandleRouterLease(w http.ResponseWriter, r *http.Request) {
 	// Expose lease renewal
 	expiresAt := time.Now().Add(s.config.LeaseDuration)
 	lease := &storage.RouterLease{
-		PeerID:         req.PeerId,
+		PeerID:         canonical,
 		Addresses:      req.Addresses,
 		LastRenewal:    time.Now(),
 		ExpiresAt:      expiresAt,
@@ -1252,6 +1255,7 @@ func (s *Server) HandleEnroll(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid Peer ID", http.StatusBadRequest)
 		return
 	}
+	canonical := pID.String()
 
 	// Proof of possession: peer_id must be the submitted key's own, and the
 	// caller must hold its private half. This gates the existing-request
@@ -1263,12 +1267,12 @@ func (s *Server) HandleEnroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !pID.MatchesPublicKey(enrolleeKey) {
-		logger.Warnw("Enrollment peer_id does not match public_key", "peer_id", req.PeerId)
+		logger.Warnw("Enrollment peer_id does not match public_key", "peer_id", canonical)
 		s.writeEnrollError(w, api.EnrollmentStatus_ENROLLMENT_STATUS_REJECTED, "peer_id is not derived from public_key")
 		return
 	}
-	if err := verifyFreshChallenge(enrolleeKey, api.EnrollChallenge(req.PeerId, req.Timestamp), req.Timestamp, req.ChallengeSignature); err != nil {
-		logger.Warnw("Enroll challenge verification failed", "peer_id", req.PeerId, "error", err)
+	if err := verifyFreshChallenge(enrolleeKey, api.EnrollChallenge(canonical, req.Timestamp), req.Timestamp, req.ChallengeSignature); err != nil {
+		logger.Warnw("Enroll challenge verification failed", "peer_id", canonical, "error", err)
 		s.writeEnrollError(w, api.EnrollmentStatus_ENROLLMENT_STATUS_REJECTED, "Invalid enrollment challenge: "+err.Error())
 		return
 	}
@@ -1276,18 +1280,18 @@ func (s *Server) HandleEnroll(w http.ResponseWriter, r *http.Request) {
 	// Bootstrap enrollments carry no OIDC identity, but the device-key ban
 	// still applies, and before the existing-request lookup: a banned node
 	// must not replay its old approved enrollment either.
-	if banned, err := s.store.IsNodeBanned(ctx, req.PeerId); err != nil {
-		logger.Errorf("Failed to check node ban for %s: %v", req.PeerId, err)
+	if banned, err := s.store.IsNodeBanned(ctx, canonical); err != nil {
+		logger.Errorf("Failed to check node ban for %s: %v", canonical, err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	} else if banned {
-		logger.Warnw("Banned node attempted bootstrap enrollment", "peer_id", req.PeerId)
+		logger.Warnw("Banned node attempted bootstrap enrollment", "peer_id", canonical)
 		s.writeEnrollError(w, api.EnrollmentStatus_ENROLLMENT_STATUS_REJECTED, "Node is banned")
 		return
 	}
 
 	// 2. Check for existing enrollment request
-	existingReq, err := s.store.GetEnrollmentRequest(ctx, req.PeerId)
+	existingReq, err := s.store.GetEnrollmentRequest(ctx, canonical)
 	if err == nil {
 		// Request already exists, return status
 		var resp *api.BootstrapEnrollResponse
@@ -1315,7 +1319,7 @@ func (s *Server) HandleEnroll(w http.ResponseWriter, r *http.Request) {
 	// 3. Create new enrollment request
 	enrollReq := &storage.EnrollmentRequest{
 		ID:        cryptoRandUUID(),
-		PeerID:    req.PeerId,
+		PeerID:    canonical,
 		PublicKey: req.PublicKey,
 		TokenID:   tokenRecord.ID,
 		Status:    api.EnrollmentStatus_ENROLLMENT_STATUS_PENDING,
@@ -1345,7 +1349,7 @@ func (s *Server) HandleEnroll(w http.ResponseWriter, r *http.Request) {
 		// allowed_labels is the only thing standing between a self-declared
 		// label and a signed one. Manual approval attests them separately.
 		if err := api.LabelPatternsAllow(allowedLabelPatterns([]string{tokenRecord.Role}, policyRoles), req.Labels); err != nil {
-			logger.Warnw("Rejected undeclarable label at bootstrap enrollment", "peer_id", req.PeerId, "error", err)
+			logger.Warnw("Rejected undeclarable label at bootstrap enrollment", "peer_id", canonical, "error", err)
 			s.writeEnrollError(w, api.EnrollmentStatus_ENROLLMENT_STATUS_REJECTED, "Label not permitted: "+err.Error())
 			return
 		}
@@ -1369,7 +1373,7 @@ func (s *Server) HandleEnroll(w http.ResponseWriter, r *http.Request) {
 		}
 
 		nodeRecord := &storage.EnrolledNode{
-			PeerID:         req.PeerId,
+			PeerID:         canonical,
 			PublicKey:      req.PublicKey,
 			Biscuit:        biscuitBytes,
 			Role:           tokenRecord.Role,
@@ -1471,8 +1475,10 @@ func (s *Server) HandleEnrollStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	canonical := canonicalPeerID(peerID)
+
 	ctx := r.Context()
-	enrollReq, err := s.store.GetEnrollmentRequest(ctx, peerID)
+	enrollReq, err := s.store.GetEnrollmentRequest(ctx, canonical)
 	if err == storage.ErrNotFound {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
@@ -1484,12 +1490,12 @@ func (s *Server) HandleEnrollStatus(w http.ResponseWriter, r *http.Request) {
 
 	pubKey, err := crypto.UnmarshalPublicKey(enrollReq.PublicKey)
 	if err != nil {
-		logger.Errorf("Corrupted public key stored for enrollment %s: %v", peerID, err)
+		logger.Errorf("Corrupted public key stored for enrollment %s: %v", canonical, err)
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
-	if err := verifyFreshChallenge(pubKey, api.EnrollStatusChallenge(peerID, ts), ts, sig); err != nil {
-		logger.Warnw("Enroll status challenge verification failed", "peer_id", peerID, "error", err)
+	if err := verifyFreshChallenge(pubKey, api.EnrollStatusChallenge(canonical, ts), ts, sig); err != nil {
+		logger.Warnw("Enroll status challenge verification failed", "peer_id", canonical, "error", err)
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -1754,6 +1760,7 @@ func (s *Server) HandleAdminEnrollmentAction(w http.ResponseWriter, r *http.Requ
 			http.Error(w, "Invalid Peer ID stored in request", http.StatusInternalServerError)
 			return
 		}
+		canonical := pID.String()
 
 		// No policy fetch needed.
 
@@ -1796,7 +1803,7 @@ func (s *Server) HandleAdminEnrollmentAction(w http.ResponseWriter, r *http.Requ
 		}
 
 		nodeRecord := &storage.EnrolledNode{
-			PeerID:         enrollReq.PeerID,
+			PeerID:         canonical,
 			PublicKey:      enrollReq.PublicKey,
 			Biscuit:        biscuitBytes,
 			Role:           tokenRecord.Role,
@@ -1854,8 +1861,10 @@ func (s *Server) HandleAdminRevoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	canonical := canonicalPeerID(req.PeerId)
+
 	// Retrieve the node from storage to verify it exists
-	node, err := s.store.GetNode(ctx, req.PeerId)
+	node, err := s.store.GetNode(ctx, canonical)
 	if err == storage.ErrNotFound {
 		http.Error(w, "Node not found", http.StatusNotFound)
 		return
@@ -1866,13 +1875,13 @@ func (s *Server) HandleAdminRevoke(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.banNode(ctx, node); err != nil {
-		logger.Errorf("Failed to ban/revoke node %s: %v", req.PeerId, err)
+		logger.Errorf("Failed to ban/revoke node %s: %v", canonical, err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
-	if err := s.getMeshAdapter().PublishEvent(ctx, api.MeshEvent_BANNED, req.PeerId, nil); err != nil {
-		logger.Warnf("Failed to publish BANNED event for node %s to mesh: %v", req.PeerId, err)
+	if err := s.getMeshAdapter().PublishEvent(ctx, api.MeshEvent_BANNED, node.PeerID, nil); err != nil {
+		logger.Warnf("Failed to publish BANNED event for node %s to mesh: %v", node.PeerID, err)
 	}
 
 	resp := &api.TokenRevokeResponse{
@@ -2125,8 +2134,10 @@ func (s *Server) HandleUserRevoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	canonical := canonicalPeerID(peerID)
+
 	ctx := r.Context()
-	node, err := s.store.GetNode(ctx, peerID)
+	node, err := s.store.GetNode(ctx, canonical)
 	if err == storage.ErrNotFound {
 		http.Error(w, "Node not found", http.StatusNotFound)
 		return
@@ -2148,8 +2159,8 @@ func (s *Server) HandleUserRevoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.getMeshAdapter().PublishEvent(ctx, api.MeshEvent_BANNED, peerID, nil); err != nil {
-		logger.Warnf("Failed to publish BANNED event for node %s to mesh: %v", peerID, err)
+	if err := s.getMeshAdapter().PublishEvent(ctx, api.MeshEvent_BANNED, node.PeerID, nil); err != nil {
+		logger.Warnf("Failed to publish BANNED event for node %s to mesh: %v", node.PeerID, err)
 	}
 
 	w.WriteHeader(http.StatusOK)

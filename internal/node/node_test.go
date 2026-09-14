@@ -105,22 +105,34 @@ func TestAnnounceFilter(t *testing.T) {
 }
 
 func TestHandleBannedEvent(t *testing.T) {
-	revokedCache, _ := lru.New[string, int64](10)
-	node := &SamNode{
-		revokedPeers:   revokedCache,
-		BiscuitTimeout: 500 * time.Millisecond,
+	priv, _, err := crypto.GenerateEd25519Key(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	banned, err := peer.IDFromPrivateKey(priv)
+	if err != nil {
+		t.Fatal(err)
 	}
 
-	event := &api.MeshEvent{
-		Type:      api.MeshEvent_BANNED,
-		PeerId:    "12D3KooWAFv4iJst5G6MjwXhZ66K5zS1tP7A9vSg4vK8f1T7X8t9",
-		Timestamp: time.Now().UnixMilli(),
-	}
+	for _, spelling := range []string{banned.String(), peer.ToCid(banned).String()} {
+		revokedCache, _ := lru.New[string, int64](10)
+		node := &SamNode{
+			revokedPeers:   revokedCache,
+			BiscuitTimeout: 500 * time.Millisecond,
+		}
 
-	node.handleBannedEvent(event)
+		node.handleBannedEvent(&api.MeshEvent{
+			Type:      api.MeshEvent_BANNED,
+			PeerId:    spelling,
+			Timestamp: time.Now().UnixMilli(),
+		})
 
-	if !node.revokedPeers.Contains(event.PeerId) {
-		t.Error("Expected peer to be added to revokedPeers")
+		if !node.revokedPeers.Contains(banned.String()) {
+			t.Errorf("peer announced as %q is not revoked under its canonical id", spelling)
+		}
+		if gater := (&nodeConnGate{node: node}); gater.InterceptPeerDial(banned) {
+			t.Errorf("peer announced as %q was not blocked by the gater", spelling)
+		}
 	}
 }
 

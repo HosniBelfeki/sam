@@ -127,7 +127,8 @@ func (d *Discovery) observe(msg *pubsub.Message) {
 	}
 
 	typeStr, _ := api.ServiceTypeToString(ann.GetType())
-	entryKey := ann.GetPeerId() + "|" + typeStr + "|" + ann.GetServiceName()
+	signer := claimed.String()
+	entryKey := signer + "|" + typeStr + "|" + ann.GetServiceName()
 
 	d.viewMu.Lock()
 	defer d.viewMu.Unlock()
@@ -135,7 +136,7 @@ func (d *Discovery) observe(msg *pubsub.Message) {
 		d.evictOldestLocked()
 	}
 	d.providers[entryKey] = Provider{
-		PeerID:  ann.GetPeerId(),
+		PeerID:  signer,
 		Type:    ann.GetType(),
 		Service: ann.GetServiceName(),
 		Keys:    ann.GetKeys(),

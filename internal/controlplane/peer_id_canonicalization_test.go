@@ -1,0 +1,368 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package controlplane
+
+import (
+	"bytes"
+	"context"
+	"encoding/base64"
+	"net/http"
+	"strconv"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/google/sam/api"
+	"github.com/google/sam/internal/storage"
+	"github.com/libp2p/go-libp2p/core/crypto"
+	"github.com/libp2p/go-libp2p/core/peer"
+	"google.golang.org/protobuf/proto"
+)
+
+func cidAlias(t *testing.T, id peer.ID) string {
+	t.Helper()
+	alias := peer.ToCid(id).String()
+	if alias == id.String() {
+		t.Fatalf("peer.ToCid(%s) did not produce a second spelling", id)
+	}
+	decoded, err := peer.Decode(alias)
+	if err != nil {
+		t.Fatalf("alias %q does not decode: %v", alias, err)
+	}
+	if decoded != id {
+		t.Fatalf("alias %q decodes to %s, want %s", alias, decoded, id)
+	}
+	return alias
+}
+
+func newTestKey(t *testing.T) (crypto.PrivKey, peer.ID) {
+	t.Helper()
+	priv, _, err := crypto.GenerateKeyPair(crypto.Ed25519, -1)
+	if err != nil {
+		t.Fatalf("failed to generate key: %v", err)
+	}
+	id, err := peer.IDFromPrivateKey(priv)
+	if err != nil {
+		t.Fatalf("failed to derive peer id: %v", err)
+	}
+	return priv, id
+}
+
+type recordingMesh struct {
+	mu     sync.Mutex
+	banned []string
+}
+
+func (m *recordingMesh) PublishEvent(ctx context.Context, eventType api.MeshEvent_Type, peerID string, payload []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if eventType == api.MeshEvent_BANNED {
+		m.banned = append(m.banned, peerID)
+	}
+	return nil
+}
+
+func (m *recordingMesh) DiscoverServices(ctx context.Context, serviceType string) ([]*ServiceAnnouncement, error) {
+	return nil, nil
+}
+
+func (m *recordingMesh) GetNodeStatus(ctx context.Context, peerID string) (*NodeStatus, error) {
+	return nil, nil
+}
+
+func (m *recordingMesh) Close() error {
+	return nil
+}
+
+func (m *recordingMesh) bannedPeers() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]string(nil), m.banned...)
+}
+
+func enrollNodeRow(t *testing.T, store storage.Store, peerID string, pubKey []byte, ownerID string) {
+	t.Helper()
+	err := store.EnrollNode(context.Background(), &storage.EnrolledNode{
+		PeerID:    peerID,
+		PublicKey: pubKey,
+		Biscuit:   []byte("biscuit"),
+		Role:      api.RoleNode,
+		OwnerID:   ownerID,
+		ExpiresAt: time.Now().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("failed to enroll node %q: %v", peerID, err)
+	}
+}
+
+func TestBannedNodeCannotRegisterUnderAnAlias(t *testing.T) {
+	issuer, mintToken := startCustomMockOIDC(t)
+	srv, store, baseURL := setupTestServer(t, issuer)
+	defer func() {
+		_ = srv.Close()
+		_ = store.Close()
+	}()
+	srv.config.AdminToken = "super-secret-admin-token"
+
+	ctx := context.Background()
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	if err := store.SaveMeshPolicy(ctx, nil, []*api.PolicyBinding{
+		{Role: api.RoleNode, Members: []string{api.SystemAuthenticated}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	register := func(t *testing.T, priv crypto.PrivKey, peerID, sub string) int {
+		t.Helper()
+		pubBytes, err := crypto.MarshalPublicKey(priv.GetPublic())
+		if err != nil {
+			t.Fatal(err)
+		}
+		reqData, _ := proto.Marshal(&api.EnrollRequest{
+			Jwt:           mintToken(map[string]interface{}{"sub": sub}),
+			PeerId:        peerID,
+			PublicKey:     pubBytes,
+			RequestedRole: api.RoleNode,
+		})
+		resp, err := client.Post(baseURL+"/register", "application/x-protobuf", bytes.NewReader(reqData))
+		if err != nil {
+			t.Fatalf("/register failed: %v", err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		return resp.StatusCode
+	}
+
+	priv, id := newTestKey(t)
+	alias := cidAlias(t, id)
+
+	if status := register(t, priv, id.String(), "alias-attacker"); status != http.StatusOK {
+		t.Fatalf("initial registration: got %d, want 200", status)
+	}
+	if _, err := store.GetNode(ctx, id.String()); err != nil {
+		t.Fatalf("node was not stored under its canonical id: %v", err)
+	}
+
+	revokeData, _ := proto.Marshal(&api.TokenRevokeRequest{PeerId: id.String()})
+	req, _ := http.NewRequest(http.MethodPost, baseURL+"/admin/revoke", bytes.NewReader(revokeData))
+	req.Header.Set("Authorization", "Bearer super-secret-admin-token")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("/admin/revoke failed: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("/admin/revoke: got %d, want 200", resp.StatusCode)
+	}
+
+	if status := register(t, priv, alias, "alias-attacker"); status != http.StatusForbidden {
+		t.Errorf("re-registration under an alias: got %d, want 403", status)
+	}
+	if status := register(t, priv, alias, "a-brand-new-identity"); status != http.StatusForbidden {
+		t.Errorf("re-registration under an alias with a fresh identity: got %d, want 403", status)
+	}
+	if _, err := store.GetNode(ctx, alias); err != storage.ErrNotFound {
+		t.Errorf("the alias grew a row of its own: err = %v", err)
+	}
+
+	otherPriv, otherID := newTestKey(t)
+	if status := register(t, otherPriv, cidAlias(t, otherID), "somebody-else"); status != http.StatusOK {
+		t.Errorf("unbanned identity under an alias: got %d, want 200", status)
+	}
+	if _, err := store.GetNode(ctx, otherID.String()); err != nil {
+		t.Errorf("unbanned identity was not stored under its canonical id: %v", err)
+	}
+}
+
+func TestRevokeBansTheIdentityNotTheSpelling(t *testing.T) {
+	cases := []struct {
+		name   string
+		revoke func(t *testing.T, baseURL, peerID, userToken, adminToken string, client *http.Client) int
+	}{
+		{
+			name: "admin revoke",
+			revoke: func(t *testing.T, baseURL, peerID, userToken, adminToken string, client *http.Client) int {
+				t.Helper()
+				body, _ := proto.Marshal(&api.TokenRevokeRequest{PeerId: peerID})
+				req, _ := http.NewRequest(http.MethodPost, baseURL+"/admin/revoke", bytes.NewReader(body))
+				req.Header.Set("Authorization", "Bearer "+adminToken)
+				resp, err := client.Do(req)
+				if err != nil {
+					t.Fatalf("/admin/revoke failed: %v", err)
+				}
+				defer func() { _ = resp.Body.Close() }()
+				return resp.StatusCode
+			},
+		},
+		{
+			name: "user revoke",
+			revoke: func(t *testing.T, baseURL, peerID, userToken, adminToken string, client *http.Client) int {
+				t.Helper()
+				req, _ := http.NewRequest(http.MethodPost, baseURL+"/user/revoke?id="+peerID, nil)
+				req.Header.Set("Authorization", "Bearer "+userToken)
+				resp, err := client.Do(req)
+				if err != nil {
+					t.Fatalf("/user/revoke failed: %v", err)
+				}
+				defer func() { _ = resp.Body.Close() }()
+				return resp.StatusCode
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			issuer, mintToken := startCustomMockOIDC(t)
+			srv, store, baseURL := setupTestServer(t, issuer)
+			defer func() {
+				_ = srv.Close()
+				_ = store.Close()
+			}()
+			srv.config.AdminToken = "super-secret-admin-token"
+
+			mesh := &recordingMesh{}
+			srv.SetMeshAdapter(mesh)
+
+			ctx := context.Background()
+			client := &http.Client{Timeout: 5 * time.Second}
+
+			user := &storage.User{
+				ID:        "owner-sub",
+				Email:     "owner@example.com",
+				Role:      "user",
+				CreatedAt: time.Now(),
+			}
+			if err := store.SaveUser(ctx, user); err != nil {
+				t.Fatalf("failed to save user: %v", err)
+			}
+
+			priv, id := newTestKey(t)
+			alias := cidAlias(t, id)
+			pubBytes, err := crypto.MarshalPublicKey(priv.GetPublic())
+			if err != nil {
+				t.Fatal(err)
+			}
+			enrollNodeRow(t, store, id.String(), pubBytes, user.ID)
+
+			token := mintToken(map[string]interface{}{
+				"iss":   issuer,
+				"sub":   user.ID,
+				"email": user.Email,
+				"aud":   "sam-mesh-audience",
+			})
+			if status := tc.revoke(t, baseURL, alias, token, "super-secret-admin-token", client); status != http.StatusOK {
+				t.Fatalf("revoking through an alias: got %d, want 200", status)
+			}
+
+			node, err := store.GetNode(ctx, id.String())
+			if err != nil {
+				t.Fatalf("canonical row is gone: %v", err)
+			}
+			if !node.Banned {
+				t.Error("the ban did not land on the identity the alias names")
+			}
+			if _, err := store.GetNode(ctx, alias); err != storage.ErrNotFound {
+				t.Errorf("the revoke created a row under the alias: err = %v", err)
+			}
+
+			banned := mesh.bannedPeers()
+			if len(banned) != 1 {
+				t.Fatalf("published %d BANNED events, want 1: %v", len(banned), banned)
+			}
+			if banned[0] != id.String() {
+				t.Errorf("BANNED event names %q, want the canonical %q", banned[0], id.String())
+			}
+		})
+	}
+}
+
+func TestEnrollStatusReachesTheRecordThroughAnAlias(t *testing.T) {
+	issuer, _ := startCustomMockOIDC(t)
+	srv, store, baseURL := setupTestServer(t, issuer)
+	defer func() {
+		_ = srv.Close()
+		_ = store.Close()
+	}()
+
+	ctx := context.Background()
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	priv, id := newTestKey(t)
+	alias := cidAlias(t, id)
+	pubBytes, err := crypto.MarshalPublicKey(priv.GetPublic())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateEnrollmentRequest(ctx, &storage.EnrollmentRequest{
+		ID:        "req-1",
+		PeerID:    id.String(),
+		PublicKey: pubBytes,
+		TokenID:   "token-1",
+		Status:    api.EnrollmentStatus_ENROLLMENT_STATUS_PENDING,
+		CreatedAt: time.Now(),
+	}); err != nil {
+		t.Fatalf("failed to create enrollment request: %v", err)
+	}
+
+	status := func(t *testing.T, query, signed string) int {
+		t.Helper()
+		ts := time.Now().UnixMilli()
+		sig, err := priv.Sign(api.EnrollStatusChallenge(signed, ts))
+		if err != nil {
+			t.Fatalf("failed to sign challenge: %v", err)
+		}
+		req, _ := http.NewRequest(http.MethodGet, baseURL+"/enroll/status?peer_id="+query, nil)
+		req.Header.Set(api.HeaderChallengeTimestamp, strconv.FormatInt(ts, 10))
+		req.Header.Set(api.HeaderChallengeSignature, base64.RawURLEncoding.EncodeToString(sig))
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("/enroll/status failed: %v", err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		return resp.StatusCode
+	}
+
+	if got := status(t, id.String(), id.String()); got != http.StatusOK {
+		t.Errorf("canonical poll: got %d, want 200", got)
+	}
+	if got := status(t, alias, id.String()); got != http.StatusOK {
+		t.Errorf("poll through an alias: got %d, want 200", got)
+	}
+	if got := status(t, alias, alias); got != http.StatusUnauthorized {
+		t.Errorf("challenge signed over the alias: got %d, want 401", got)
+	}
+}
+
+func TestCanonicalPeerIDIsBestEffort(t *testing.T) {
+	_, id := newTestKey(t)
+	alias := cidAlias(t, id)
+
+	for _, tc := range []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "canonical id is stable", in: id.String(), want: id.String()},
+		{name: "alias folds to canonical", in: alias, want: id.String()},
+		{name: "empty stays empty", in: "", want: ""},
+		{name: "undecodable passes through", in: "peer-node-a", want: "peer-node-a"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := canonicalPeerID(tc.in); got != tc.want {
+				t.Errorf("canonicalPeerID(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}

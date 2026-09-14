@@ -303,11 +303,12 @@ func NewSamNode(cfg Options) (*SamNode, error) {
 	// bans from the first connection, instead of waiting for an event that
 	// was already published while this node was down.
 	for _, id := range cfg.BannedPeerIDs {
-		if _, err := peer.Decode(id); err != nil {
+		p, err := peer.Decode(id)
+		if err != nil {
 			logger.Warnf("Ignoring undecodable banned peer ID %q from the control plane: %v", id, err)
 			continue
 		}
-		node.revokedPeers.Add(id, time.Now().Unix())
+		node.revokedPeers.Add(p.String(), time.Now().Unix())
 	}
 	node.peerLabelGate, err = lru.New[string, time.Time](labelGateCacheSize)
 	if err != nil {
@@ -1292,18 +1293,20 @@ func (n *SamNode) handleBannedEvent(event *api.MeshEvent) {
 
 	logger.Infow("[Mesh Event] peer banned", "event", meshEventBanned, "peer", event.PeerId)
 
+	p, err := peer.Decode(event.PeerId)
+	if err != nil {
+		return
+	}
 	if n.revokedPeers != nil {
-		n.revokedPeers.Add(event.PeerId, event.Timestamp)
+		n.revokedPeers.Add(p.String(), event.Timestamp)
 	}
 	// Drop any prior admission, otherwise the relay ACL keeps honouring it.
 	// The cache entry above is not written to disk: a restarted node picks the
 	// ban back up from the control plane's ban set in /info (see
 	// SyncMeshConfig), which is also how an unban reaches it.
-	if p, err := peer.Decode(event.PeerId); err == nil {
-		n.authPeers.Delete(p)
-		if n.Host != nil {
-			_ = n.Host.Network().ClosePeer(p)
-		}
+	n.authPeers.Delete(p)
+	if n.Host != nil {
+		_ = n.Host.Network().ClosePeer(p)
 	}
 }
 
