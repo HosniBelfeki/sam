@@ -18,6 +18,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -26,6 +27,7 @@ import (
 
 	"github.com/google/sam/api"
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // TestEchoHelperProcess is a subprocess entry point (self-re-exec, as
@@ -227,5 +229,87 @@ func TestMCPService_BackendTransport_CommandBackendRejectsMissingCommand(t *test
 				t.Fatal("backendTransport: got nil error, want an error for a missing command")
 			}
 		})
+	}
+}
+
+// The same request through the constructor RegisterService actually uses:
+// Init indexes Command[0] before backendTransport is ever called, so the
+// rejection has to happen at construction for every service type that can
+// carry a command backend, or Register panics.
+func TestNewServiceFromRequest_RejectsCommandBackendWithoutCommand(t *testing.T) {
+	backends := map[string]*api.RegisterServiceRequest_Command{
+		"nil CommandBackend":  {Command: nil},
+		"empty command slice": {Command: &api.CommandBackend{Command: []string{}}},
+	}
+	types := []api.ServiceType{
+		api.ServiceType_SERVICE_TYPE_MCP,
+		api.ServiceType_SERVICE_TYPE_INFERENCE,
+		api.ServiceType_SERVICE_TYPE_A2A,
+	}
+	for name, backend := range backends {
+		for _, st := range types {
+			t.Run(name+"/"+st.String(), func(t *testing.T) {
+				svc, err := NewServiceFromRequest(&api.RegisterServiceRequest{
+					Service: &api.ServiceInfo{Type: st, Name: "broken"},
+					Backend: backend,
+				})
+				if err == nil {
+					_ = svc.Teardown()
+					t.Fatal("NewServiceFromRequest: got nil error, want rejection of a command backend with no command")
+				}
+			})
+		}
+	}
+}
+
+// One process per session means an authorized peer holding streams open is
+// now a fork bomb unless the service caps them. Fill every slot, then check
+// the next Connect fails fast and that closing a session frees exactly one.
+func TestMCPService_BackendTransport_CommandSessionsAreBounded(t *testing.T) {
+	m := newEchoCommandMCPService(t)
+	// Two slots instead of commandSessionLimit: each Connect spawns this
+	// race-instrumented test binary, which is what the test's time goes to.
+	m.sessions = make(chan struct{}, 2)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	connect := func() (mcp.Connection, error) {
+		tr, err := m.backendTransport()
+		if err != nil {
+			t.Fatalf("backendTransport: %v", err)
+		}
+		return tr.Connect(ctx)
+	}
+
+	var open []mcp.Connection
+	defer func() {
+		for _, c := range open {
+			_ = c.Close()
+		}
+	}()
+	for i := 0; i < cap(m.sessions); i++ {
+		conn, err := connect()
+		if err != nil {
+			t.Fatalf("Connect #%d (under the cap): %v", i+1, err)
+		}
+		open = append(open, conn)
+	}
+
+	if _, err := connect(); !errors.Is(err, errTooManyCommandSessions) {
+		t.Fatalf("Connect #%d (over the cap): err = %v, want errTooManyCommandSessions", cap(m.sessions)+1, err)
+	}
+
+	if err := open[0].Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	open = open[1:]
+	conn, err := connect()
+	if err != nil {
+		t.Fatalf("Connect after one Close: %v", err)
+	}
+	open = append(open, conn)
+
+	if _, err := connect(); !errors.Is(err, errTooManyCommandSessions) {
+		t.Fatalf("Connect with the freed slot reused: err = %v, want errTooManyCommandSessions", err)
 	}
 }
