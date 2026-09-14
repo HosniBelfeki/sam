@@ -28,6 +28,20 @@ tests:
       - lengthEqual:
           path: spec.rules
           count: 3
+      # Every path a node calls on its own must be on the allow-list, or the
+      # node's periodic push silently 404s at the gateway.
+      - contains:
+          path: spec.rules[0].matches
+          content:
+            path:
+              type: Exact
+              value: /refresh
+      - contains:
+          path: spec.rules[0].matches
+          content:
+            path:
+              type: Exact
+              value: /nodes/catalog
 
   - it: empty consolePath leaves the console unrouted
     set:

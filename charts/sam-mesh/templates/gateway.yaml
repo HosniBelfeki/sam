@@ -59,6 +59,9 @@ spec:
     - path:
         type: Exact
         value: /refresh
+    - path:
+        type: Exact
+        value: /nodes/catalog
     backendRefs:
     - name: {{ $fullName }}-control-plane
       port: {{ .Values.controlPlane.service.port }}

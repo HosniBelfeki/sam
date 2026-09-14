@@ -77,7 +77,7 @@ with no default, because the right GatewayClass is provider-specific
 
 The route exposes only the control plane's enrollment surface (`/register`,
 `/info`, `/keys`, `/routers/lease`, `/policies`, `/enroll`, `/enroll/status`,
-`/refresh`) and the console under `gateway.consolePath`; everything else,
+`/refresh`, `/nodes/catalog`) and the console under `gateway.consolePath`; everything else,
 including `/admin` and `/user`, is unrouted. `gateway.adminRoute: true`
 additionally routes `/admin` — a dev convenience, leave it off in production.
 
