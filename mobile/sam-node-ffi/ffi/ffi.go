@@ -67,6 +67,10 @@ type MobileConfig struct {
 	// Local attenuation, same shape as the config file's block. Go matches
 	// these keys to the yaml-tagged fields case-insensitively.
 	Attenuation api.Attenuation `json:"attenuation"`
+	// Egress mirrors the config file's egress block: the operator's floor on
+	// the peers this node calls (api.Egress). JSON spelling is requireLabels,
+	// matched case-insensitively to the Go field, not the yaml require_labels.
+	Egress api.Egress `json:"egress"`
 }
 
 // MobileService is one statically declared service.
@@ -191,6 +195,7 @@ func StartNode(configJSON string) error {
 		Attenuation: config.Attenuation,
 		Services:    services,
 		Labels:      config.Labels,
+		Egress:      config.Egress,
 	})
 	if err != nil {
 		_ = store.Close()
