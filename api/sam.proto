@@ -252,6 +252,14 @@ message TokenRefreshResponse {
   string error_message = 3;
 }
 
+// NodeCatalogReport is the body of POST /nodes/catalog: a node's
+// self-reported list of locally registered services. The reporting peer is
+// taken from the presented biscuit, never from the body, so a node can only
+// ever describe itself. Display-only; carries no authorization weight.
+message NodeCatalogReport {
+  repeated ServiceInfo services = 1;
+}
+
 message TokenRevokeRequest {
   string peer_id = 1;
 }

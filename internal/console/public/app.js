@@ -244,6 +244,7 @@ async function loadData() {
             setTableMessage('table-enrollments', 4, 'Restricted to administrators.');
         }
         renderNodesTable(data.enrolled_nodes || []);
+        renderServicesTable(data.node_catalog || {}, buildLabelsByPeer(data.enrolled_nodes || []));
         renderRoutersTable(data.active_routers || []);
         renderRouterTopography(data.active_routers || []);
         renderBootstrapTokensTable(data.bootstrap_tokens || []);
@@ -332,16 +333,49 @@ function renderUsersTable(users) {
     `).join('');
 }
 
+// Renders an operator-declared labels map (e.g. {component: "stvv", role:
+// "producer"}, from sam-node.yaml's labels: key) as a compact key=value
+// list - the closest thing to a node mnemonic that exists today, since SAM
+// has no dedicated name/alias field. Returns '' if there are none.
+function formatLabels(labels) {
+    const entries = Object.entries(labels || {});
+    if (entries.length === 0) {
+        return '';
+    }
+    return entries.map(([k, v]) => `${k}=${v}`).join(', ');
+}
+
+// A peer ID cell: the raw ID (still the real, authoritative identifier)
+// with its operator-declared labels shown underneath when present.
+function peerCell(peerID, labels) {
+    const labelText = formatLabels(labels);
+    const sub = labelText
+        ? `<div class="cell-subtext">${escapeHTML(labelText)}</div>`
+        : '';
+    return `<code>${escapeHTML(peerID)}</code>${sub}`;
+}
+
+// Builds a peer ID -> labels lookup from the enrolled_nodes list, so other
+// tables (e.g. Services) can show the same labels next to a bare peer ID
+// without a second fetch.
+function buildLabelsByPeer(nodes) {
+    const byPeer = {};
+    for (const node of nodes || []) {
+        byPeer[node.PeerID] = node.Labels || {};
+    }
+    return byPeer;
+}
+
 function renderNodesTable(nodes) {
     const tbody = document.getElementById('table-nodes');
     if (nodes.length === 0) {
         tbody.innerHTML = `<tr><td colspan="4" class="text-center">No enrolled nodes found</td></tr>`;
         return;
     }
-    
+
     tbody.innerHTML = nodes.map(node => `
         <tr>
-            <td><code>${escapeHTML(node.PeerID)}</code></td>
+            <td>${peerCell(node.PeerID, node.Labels)}</td>
             <td>${escapeHTML(node.Role)}</td>
             <td>${escapeHTML(node.OwnerID)}</td>
             <td>
@@ -349,6 +383,39 @@ function renderNodesTable(nodes) {
                     <button class="btn btn-sm btn-danger" onclick="revokeDevice('${escapeHTML(node.PeerID)}')">Revoke</button>
                 </div>
             </td>
+        </tr>
+    `).join('');
+}
+
+// node_catalog is {peerID: {services: [{name, type, description}], reported_at}},
+// already restricted server-side to nodes that are still admitted; type is
+// the short name ("mcp", "inference", "a2a") rendered by the control plane.
+function renderServicesTable(nodeCatalog, labelsByPeer) {
+    const tbody = document.getElementById('table-services');
+    const peerIDs = Object.keys(nodeCatalog || {});
+    const rows = [];
+    for (const peerID of peerIDs) {
+        const entry = nodeCatalog[peerID] || {};
+        const services = entry.services || [];
+        for (const svc of services) {
+            if (svc) {
+                rows.push({ peerID, reportedAt: entry.reported_at, svc });
+            }
+        }
+    }
+
+    if (rows.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="5" class="text-center">No nodes have reported any services yet</td></tr>`;
+        return;
+    }
+
+    tbody.innerHTML = rows.map(({ peerID, reportedAt, svc }) => `
+        <tr>
+            <td>${escapeHTML(svc.name || '')}</td>
+            <td>${escapeHTML(svc.type || 'unknown')}</td>
+            <td>${escapeHTML(svc.description || '')}</td>
+            <td>${peerCell(peerID, (labelsByPeer || {})[peerID])}</td>
+            <td>${reportedAt ? escapeHTML(new Date(reportedAt).toLocaleString()) : '-'}</td>
         </tr>
     `).join('');
 }

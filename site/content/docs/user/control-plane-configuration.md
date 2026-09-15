@@ -203,7 +203,19 @@ Administrators can immediately revoke any active session to disable a node's abi
 
 ---
 
-## 6. Headless Node Enrollment (Bootstrap Token Flow)
+## 6. Node Service Catalog
+
+Each enrolled node periodically self-reports its locally registered services so the admin console's **Services** view can show what is running where, without the Control Plane joining the P2P mesh.
+
+* **Endpoint**: `POST /nodes/catalog`
+* **Authentication**: The node's own Biscuit as a `Bearer` token. The reporting peer is taken from the verified token, never from the body, so a node can only ever describe itself; reports from banned or expired enrollments are rejected.
+* **Payload**: An `api.NodeCatalogReport` protobuf (`application/x-protobuf`) with up to 512 services per report.
+* **Cadence**: Every minute by default (`node.Options.CatalogReportInterval`), with jitter.
+* **Semantics**: A live-status cache, not authoritative state. It is display-only and never feeds authorization; the cache is in-memory and rebuilt by the nodes' next reports after a Control Plane restart. If you front the Control Plane with a Gateway allow-list, `/nodes/catalog` must be routed like the other node-facing endpoints.
+
+---
+
+## 7. Headless Node Enrollment (Bootstrap Token Flow)
 
 To enroll a headless server, router, or background daemon that cannot complete interactive OIDC authentication, SAM supports a **Bootstrap Token** flow.
 

@@ -86,6 +86,16 @@ type Options struct {
 	// is tight enough that even simple interpreted-language MCP servers can
 	// miss it on first spawn.
 	BackendProbeTimeout time.Duration
+	// CatalogReportInterval specifies how often the node self-reports its
+	// locally registered services to the control plane (POST
+	// /nodes/catalog), so an admin can see mesh-wide service topology
+	// without the control plane needing DHT/P2P access to every node
+	// itself. Zero uses the default.
+	CatalogReportInterval time.Duration
+	// CatalogReportInitialDelay is how long after Start the first catalog
+	// report is sent, so services configured at startup have registered by
+	// then. Zero uses the default.
+	CatalogReportInitialDelay time.Duration
 }
 
 // Default applies default values to Options if they are not specified.
@@ -135,6 +145,12 @@ func (o *Options) Default() {
 	}
 	if o.PolicySyncInterval == 0 {
 		o.PolicySyncInterval = 1 * time.Hour
+	}
+	if o.CatalogReportInterval <= 0 {
+		o.CatalogReportInterval = 1 * time.Minute
+	}
+	if o.CatalogReportInitialDelay <= 0 {
+		o.CatalogReportInitialDelay = 5 * time.Second
 	}
 	if o.PolicySyncJitter <= 0 {
 		o.PolicySyncJitter = 10 * time.Second

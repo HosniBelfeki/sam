@@ -631,6 +631,10 @@ func (n *SamNode) Start(ctx context.Context) error {
 	// Periodically sync mesh policy
 	n.startPolicySyncLoop(ctx, n.config.PolicySyncInterval)
 
+	// Periodically self-report local services to the control plane, so an
+	// admin can see mesh-wide service topology.
+	n.startCatalogReportLoop(ctx, n.config.CatalogReportInitialDelay, n.config.CatalogReportInterval)
+
 	return nil
 }
 
@@ -2206,6 +2210,72 @@ func (n *SamNode) syncMeshPolicy(ctx context.Context) error {
 
 	logger.Infof("Successfully synchronized mesh policy (generated %d rules)", len(rules))
 	return nil
+}
+
+// reportNodeCatalog self-reports this node's local service list to the
+// control plane (see internal/controlplane/catalog.go's HandleNodeCatalog),
+// so an admin console can show mesh-wide service topology.
+func (n *SamNode) reportNodeCatalog(ctx context.Context) error {
+	controlPlaneURL, err := n.Store.LoadControlPlaneURL()
+	if err != nil || controlPlaneURL == "" {
+		return fmt.Errorf("control plane URL not found in store")
+	}
+
+	token := n.GetIdentity()
+	if len(token) == 0 {
+		return fmt.Errorf("node has no identity token to report its catalog")
+	}
+
+	services := n.ListLocalServices(api.ServiceType_SERVICE_TYPE_UNSPECIFIED)
+	if err := ReportNodeCatalog(ctx, controlPlaneURL, token, services); err != nil {
+		return fmt.Errorf("failed to report node catalog: %w", err)
+	}
+	return nil
+}
+
+// startCatalogReportLoop reports the local catalog once after initialDelay
+// and then every interval, each wait stretched by up to a tenth of interval
+// so a fleet started together does not hit the control plane in lockstep.
+// A failure is logged at Warn once and at Debug while it persists: the
+// usual causes (control plane unreachable, path not routed) do not change
+// from one tick to the next.
+func (n *SamNode) startCatalogReportLoop(ctx context.Context, initialDelay, interval time.Duration) {
+	if interval <= 0 {
+		interval = 1 * time.Minute
+	}
+	if initialDelay <= 0 {
+		initialDelay = 5 * time.Second
+	}
+
+	go func() {
+		wait := initialDelay
+		failures := 0
+		for {
+			timer := time.NewTimer(wait + time.Duration(rand.Int63n(int64(interval/10)+1)))
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
+			wait = interval
+
+			err := n.reportNodeCatalog(ctx)
+			switch {
+			case err != nil && failures == 0:
+				logger.Warnf("Node catalog report failed: %v", err)
+			case err != nil:
+				logger.Debugf("Node catalog report still failing (%d consecutive): %v", failures+1, err)
+			case failures > 0:
+				logger.Infof("Node catalog report recovered after %d failures", failures)
+			}
+			if err != nil {
+				failures++
+			} else {
+				failures = 0
+			}
+		}
+	}()
 }
 
 func (n *SamNode) startPolicySyncLoop(ctx context.Context, interval time.Duration) {
