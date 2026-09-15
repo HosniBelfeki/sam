@@ -89,6 +89,9 @@ func (s *Server) catalogViewFor(nodes []storage.EnrolledNode, now time.Time) map
 		}
 		services := make([]catalogService, 0, len(entry.Services))
 		for _, svc := range entry.Services {
+			if svc == nil {
+				continue
+			}
 			typeName, err := api.ServiceTypeToString(svc.GetType())
 			if err != nil {
 				typeName = "unknown"
@@ -171,8 +174,16 @@ func (s *Server) HandleNodeCatalog(w http.ResponseWriter, r *http.Request) {
 	}
 
 	nodeRecord, err := s.store.GetNode(ctx, peerID.String())
-	if err != nil || nodeRecord == nil || nodeRecord.CheckAdmission(time.Now()) != nil {
-		http.Error(w, "Node not enrolled or not admitted", http.StatusUnauthorized)
+	if err == storage.ErrNotFound || (err == nil && nodeRecord == nil) {
+		http.Error(w, "Node not enrolled", http.StatusUnauthorized)
+		return
+	} else if err != nil {
+		logger.Errorf("Failed to retrieve node record: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	if err := nodeRecord.CheckAdmission(time.Now()); err != nil {
+		http.Error(w, "Node not admitted: "+err.Error(), http.StatusUnauthorized)
 		return
 	}
 
