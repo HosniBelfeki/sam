@@ -241,9 +241,9 @@ func (s *agentMCPServers) forAgent(agentID string) *mcp.Server {
 }
 
 // CallMCPTool opens a stream to a remote peer, performs the handshake, and calls a tool.
-// CallMCPTool opens a stream to a remote peer, performs the handshake, and calls a tool.
 // requiredLabels, when non-empty, fail-closed verifies the peer's control-plane-attested
-// labels (see checkPeerLabels) before the tool is invoked; nil means no requirement.
+// labels (see checkPeerLabels) before the tool is invoked; nil means no caller
+// requirement, though the operator's egress floor, if configured, is still enforced.
 func (n *SamNode) CallMCPTool(ctx context.Context, targetPeer peer.ID, toolName string, params any, requiredLabels map[string]string) (*mcp.CallToolResult, error) {
 	var res *mcp.CallToolResult
 	var err error
@@ -378,7 +378,10 @@ func (n *SamNode) ConnectMCPSession(ctx context.Context, targetPeer peer.ID, tar
 		return nil, nil, fmt.Errorf("%w by %s: %s", ErrAuthRejected, targetPeer, resp.Error)
 	}
 
-	if len(requiredLabels) > 0 {
+	// The gate runs when the caller requires labels or when the operator's
+	// egress floor does: a caller that requires nothing is still held to the
+	// floor (checkPeerLabels ANDs both).
+	if len(requiredLabels) > 0 || len(n.egressFloor()) > 0 {
 		if err := n.checkPeerLabels(resp.Biscuit, targetPeer, requiredLabels); err != nil {
 			cleanup()
 			return nil, nil, err

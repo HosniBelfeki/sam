@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/google/sam/api"
+	"github.com/google/sam/internal/identity"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
 )
@@ -842,5 +843,102 @@ func TestDatapathHeadersAndRoutingTable(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// The operator's egress floor holds at the /sam/ chokepoint itself, so an agent
+// that skips the facade and dials /sam/<peer>/... raw is still gated: the
+// provider's biscuit must attest every pair of the floor before anything is
+// forwarded, whatever the caller did or did not ask for (see #385).
+func TestEgressProxyEnforcesFloor(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	nodeA, cleanupA := startBareNode(t, ctx) // provider
+	defer cleanupA()
+	nodeB, cleanupB := startBareNode(t, ctx) // egress side, holds the floor
+	defer cleanupB()
+
+	rootPub, rootPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("gen root key: %v", err)
+	}
+
+	// nodeB authenticates to nodeA as an unrestricted caller.
+	if err := buildAndSaveBiscuit(nodeB, rootPriv); err != nil {
+		t.Fatalf("buildAndSaveBiscuit: %v", err)
+	}
+	nodeA.keysMu.Lock()
+	nodeA.trustedKeys = append(nodeA.trustedKeys, TrustedKey{Key: rootPub, ReceivedAt: time.Now()})
+	nodeA.keysMu.Unlock()
+
+	// nodeA attests jurisdiction=eu and nothing else.
+	nodeAIdentity, err := identity.MintBootstrapBiscuitToken(rootPriv, nodeA.Host.ID(), api.RoleNode, time.Now().Add(time.Hour), nil, map[string]string{"jurisdiction": "eu"})
+	if err != nil {
+		t.Fatalf("mint nodeA identity: %v", err)
+	}
+	nodeA.SetIdentityCache(nodeAIdentity)
+	nodeB.keysMu.Lock()
+	nodeB.trustedKeys = append(nodeB.trustedKeys, TrustedKey{Key: rootPub, ReceivedAt: time.Now()})
+	nodeB.keysMu.Unlock()
+
+	if err := nodeB.Host.Connect(ctx, peer.AddrInfo{ID: nodeA.Host.ID(), Addrs: nodeA.Host.Addrs()}); err != nil {
+		t.Fatal(err)
+	}
+
+	const expectedBody = `{"status":"floored"}`
+	dummyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(expectedBody))
+	}))
+	defer dummyServer.Close()
+
+	serviceInfo := &api.ServiceInfo{Type: api.ServiceType_SERVICE_TYPE_MCP, Name: "dummy-tool"}
+	targetURL, _ := url.Parse(dummyServer.URL)
+	nodeA.services.insertService(&testService{
+		info:    serviceInfo,
+		handler: httputil.NewSingleHostReverseProxy(targetURL),
+	})
+
+	proxyServer := httptest.NewServer(createEgressProxy(nodeB))
+	defer proxyServer.Close()
+	// The caller stays silent: no X-Sam-Required-Labels anywhere.
+	rawURL := fmt.Sprintf("%s/sam/%s/mcp/dummy-tool/api/v1/test", proxyServer.URL, nodeA.Host.ID())
+
+	get := func() *http.Response {
+		t.Helper()
+		resp, err := http.Get(rawURL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}
+
+	// nodeA attests the whole floor: egress proceeds.
+	nodeB.nodeConfig = &NodeConfigComplete{EgressRequireLabels: map[string]string{"jurisdiction": "eu"}}
+	var resp *http.Response
+	for i := 0; i < 3; i++ {
+		resp = get()
+		if resp.StatusCode == http.StatusOK {
+			break
+		}
+		_ = resp.Body.Close()
+		time.Sleep(time.Second)
+	}
+	body, err := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK || string(body) != expectedBody {
+		t.Fatalf("egress inside the floor must pass: status %d, body %q", resp.StatusCode, body)
+	}
+
+	// One pair short of the floor: refused at the chokepoint, nothing forwarded.
+	nodeB.nodeConfig = &NodeConfigComplete{EgressRequireLabels: map[string]string{"jurisdiction": "eu", "compliance": "gdpr"}}
+	resp = get()
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("egress outside the floor must be 403 at the chokepoint, got %d", resp.StatusCode)
 	}
 }

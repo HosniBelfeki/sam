@@ -896,3 +896,85 @@ func TestRankProvidersEnforcesEgressFloor(t *testing.T) {
 		}
 	})
 }
+
+// Ranking is a hint; the gate on the forward path is the enforcement. Gossip is
+// unauthenticated, so an unlabelled remote survives ranking and the biscuit
+// gate is the only check left before the body leaves the node — it must run
+// even when the caller required nothing, or the floor is waived by silence.
+func TestFacade_Completions_FloorGatesSilentCaller(t *testing.T) {
+	newFloorFacade := func() *openAIFacade {
+		f := newTestFacade()
+		f.egressFloor = func() map[string]string { return map[string]string{"jurisdiction": "eu"} }
+		f.viewProviders = func(string) []modelProvider {
+			return []modelProvider{{peerID: "peerX", service: "srv"}}
+		}
+		return f
+	}
+	silentRequest := func() *http.Request {
+		// No X-Sam-Required-Labels header: the caller requires nothing.
+		return httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"m1"}`))
+	}
+
+	t.Run("an unattested floor blocks the forward", func(t *testing.T) {
+		f := newFloorFacade()
+		var gateRequired map[string]string
+		gateCalled := false
+		f.verifyPeerLabels = func(_ context.Context, _ string, required map[string]string) error {
+			gateCalled = true
+			gateRequired = required
+			return fmt.Errorf("floor not attested")
+		}
+		forwarded := false
+		f.forward = http.HandlerFunc(func(http.ResponseWriter, *http.Request) { forwarded = true })
+
+		rec := httptest.NewRecorder()
+		f.handleCompletions(rec, silentRequest())
+
+		if !gateCalled {
+			t.Fatal("the gate must run for a caller that required nothing")
+		}
+		if gateRequired != nil {
+			t.Errorf("the caller required nothing, so the gate must see required=nil, got %v", gateRequired)
+		}
+		if forwarded {
+			t.Error("the body must not leave the node when the floor is unattested")
+		}
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Errorf("status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+		}
+	})
+
+	t.Run("an attested floor forwards", func(t *testing.T) {
+		f := newFloorFacade()
+		f.verifyPeerLabels = func(context.Context, string, map[string]string) error { return nil }
+		forwarded := false
+		f.forward = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			forwarded = true
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true}`))
+		})
+
+		rec := httptest.NewRecorder()
+		f.handleCompletions(rec, silentRequest())
+
+		if rec.Code != http.StatusOK || !forwarded {
+			t.Errorf("an attested floor must not block: status = %d, forwarded = %v", rec.Code, forwarded)
+		}
+	})
+
+	t.Run("a floor with no gate seam fails closed", func(t *testing.T) {
+		f := newFloorFacade() // verifyPeerLabels stays nil
+		forwarded := false
+		f.forward = http.HandlerFunc(func(http.ResponseWriter, *http.Request) { forwarded = true })
+
+		rec := httptest.NewRecorder()
+		f.handleCompletions(rec, silentRequest())
+
+		if forwarded {
+			t.Error("no gate available must mean no egress, not ungated egress")
+		}
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Errorf("status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+		}
+	})
+}

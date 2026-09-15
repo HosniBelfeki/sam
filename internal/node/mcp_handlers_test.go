@@ -744,6 +744,70 @@ func TestCallMCPTool_LabelEnforcement(t *testing.T) {
 	}
 }
 
+// The operator's egress floor gates MCP egress even when the caller supplies no
+// required_labels: silence must not waive the floor (see #385).
+func TestCallMCPTool_EgressFloorEnforcement(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	nodeA, cleanupA := startBareNode(t, ctx)
+	defer cleanupA()
+	nodeB, cleanupB := startBareNode(t, ctx)
+	defer cleanupB()
+
+	if err := nodeA.Host.Connect(ctx, peer.AddrInfo{ID: nodeB.Host.ID(), Addrs: nodeB.Host.Addrs()}); err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+
+	rootPub, rootPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("gen root key: %v", err)
+	}
+
+	// nodeA authenticates to nodeB as an unrestricted caller.
+	if err := buildAndSaveBiscuit(nodeA, rootPriv); err != nil {
+		t.Fatalf("buildAndSaveBiscuit: %v", err)
+	}
+	nodeB.keysMu.Lock()
+	nodeB.trustedKeys = append(nodeB.trustedKeys, TrustedKey{Key: rootPub, ReceivedAt: time.Now()})
+	nodeB.keysMu.Unlock()
+
+	// nodeB attests region=eu-de and nothing else.
+	nodeBIdentity, err := identity.MintBootstrapBiscuitToken(rootPriv, nodeB.Host.ID(), api.RoleNode, time.Now().Add(time.Hour), nil, map[string]string{"region": "eu-de"})
+	if err != nil {
+		t.Fatalf("mint nodeB identity: %v", err)
+	}
+	nodeB.SetIdentityCache(nodeBIdentity)
+	nodeA.keysMu.Lock()
+	nodeA.trustedKeys = append(nodeA.trustedKeys, TrustedKey{Key: rootPub, ReceivedAt: time.Now()})
+	nodeA.keysMu.Unlock()
+
+	hostedSrv := httptest.NewServer(newFakeMCPHandler(t, []*mcp.Tool{
+		{Name: "review_pr", Description: "Run a code review", InputSchema: map[string]any{"type": "object"}},
+	}))
+	defer hostedSrv.Close()
+
+	if err := nodeB.RegisterService(ctx, &api.RegisterServiceRequest{
+		Service: &api.ServiceInfo{Type: api.ServiceType_SERVICE_TYPE_MCP, Name: "code-reviewer"},
+		Backend: &api.RegisterServiceRequest_TargetUrl{TargetUrl: hostedSrv.URL},
+	}); err != nil {
+		t.Fatalf("RegisterService: %v", err)
+	}
+	defer func() { _ = nodeB.UnregisterService(ctx, "code-reviewer") }()
+
+	// Floor satisfied by nodeB's attestation; the caller requires nothing.
+	nodeA.nodeConfig = &NodeConfigComplete{EgressRequireLabels: map[string]string{"region": "eu-de"}}
+	if _, err := nodeA.CallMCPTool(ctx, nodeB.Host.ID(), "mcp://code-reviewer/review_pr", map[string]any{}, nil); err != nil {
+		t.Fatalf("CallMCPTool inside the floor should succeed: %v", err)
+	}
+
+	// Floor nodeB does not attest; the caller staying silent must not waive it.
+	nodeA.nodeConfig = &NodeConfigComplete{EgressRequireLabels: map[string]string{"jurisdiction": "eu"}}
+	if _, err := nodeA.CallMCPTool(ctx, nodeB.Host.ID(), "mcp://code-reviewer/review_pr", map[string]any{}, nil); err == nil {
+		t.Fatal("CallMCPTool outside the floor with no caller requirement must fail")
+	}
+}
+
 func TestNewMCPHandler_RegistersFindRemoteTools(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
