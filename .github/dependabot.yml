@@ -29,6 +29,15 @@ updates:
       interval: "weekly"
 
   - package-ecosystem: "docker"
-    directory: "/"
+    directories:
+      - "/"
+      - "/tests/e2e/docker"
+      - "/tests/e2e/docker/*"
+      - "/development/examples/*"
+      - "/development/examples/code-reviewer-pool/*"
     schedule:
       interval: "weekly"
+    groups:
+      docker-digests:
+        patterns:
+          - "*"

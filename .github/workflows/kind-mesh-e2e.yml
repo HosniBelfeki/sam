@@ -50,9 +50,9 @@ jobs:
         run: |
           sudo sysctl fs.inotify.max_user_watches=524288 || true
           sudo sysctl fs.inotify.max_user_instances=512 || true
-          go install sigs.k8s.io/kind@latest
+          go install sigs.k8s.io/kind@v0.33.0
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
-          curl -sSLo /tmp/kubectl "https://dl.k8s.io/release/$(curl -sL https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          curl -sSLo /tmp/kubectl "https://dl.k8s.io/release/v1.37.0/bin/linux/amd64/kubectl"
           sudo install -m 0755 /tmp/kubectl /usr/local/bin/kubectl
           kind version
           kubectl version --client

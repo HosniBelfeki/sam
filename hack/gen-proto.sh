@@ -16,7 +16,8 @@
 set -e
 
 echo "Installing protobuf Go plugins..."
-go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+# Keep in sync with the google.golang.org/protobuf version in go.mod.
+go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.12
 
 echo "Generating Go protobuf code..."
 mkdir -p api
