@@ -528,6 +528,51 @@ func TestHandleTokenLogin(t *testing.T) {
 	})
 }
 
+// A deletion cookie must carry the same attributes as the cookie it clears,
+// or browsers may keep the original session cookie alive after logout.
+func TestHandleLogoutCookieAttributes(t *testing.T) {
+	controlPlane := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer controlPlane.Close()
+
+	srv, err := NewServer(Config{
+		ControlPlaneURL: controlPlane.URL,
+		AdminToken:      "test-admin-token",
+		StaticDir:       t.TempDir(),
+		BasePath:        "/console",
+	})
+	if err != nil {
+		t.Fatalf("failed to create server: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/console/auth/logout", nil)
+	rec := httptest.NewRecorder()
+	srv.HandleLogout(rec, req)
+
+	var cookie *http.Cookie
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == "sam_session" {
+			cookie = c
+		}
+	}
+	if cookie == nil {
+		t.Fatal("logout did not set a sam_session deletion cookie")
+	}
+	if cookie.MaxAge >= 0 {
+		t.Errorf("MaxAge = %d, want negative to delete the cookie", cookie.MaxAge)
+	}
+	if !cookie.HttpOnly {
+		t.Error("deletion cookie is not HttpOnly, unlike the session cookie it clears")
+	}
+	if cookie.SameSite != http.SameSiteLaxMode {
+		t.Errorf("SameSite = %v, want Lax to match the session cookie", cookie.SameSite)
+	}
+	if cookie.Path != "/console/" {
+		t.Errorf("cookie path = %q, want %q", cookie.Path, "/console/")
+	}
+}
+
 // BasePath is concatenated into cookie paths, redirect URLs and mux patterns, so malformed
 // flag values (trailing slash, missing leading slash) must be normalized where the flag is read.
 func TestNormalizeBasePath(t *testing.T) {

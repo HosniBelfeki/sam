@@ -23,6 +23,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -213,6 +214,33 @@ func TestVerifyJWT(t *testing.T) {
 		_, _, err = VerifyJWT(ctx, tokenStr, allowedAudiences, providers)
 		if err == nil {
 			t.Fatal("expected error for bad signature")
+		}
+	})
+
+	t.Run("tampered payload yields no claims", func(t *testing.T) {
+		// Forge a token by swapping the payload of a validly signed token
+		// while keeping the original signature: the routing claims still
+		// parse, but verification must reject it and no claims may escape.
+		tokenStr := signToken(t, key, testKID, validClaims())
+		parts := strings.Split(tokenStr, ".")
+		forgedClaims := validClaims()
+		forgedClaims["sub"] = "attacker"
+		payload, err := json.Marshal(forgedClaims)
+		if err != nil {
+			t.Fatalf("failed to marshal forged claims: %v", err)
+		}
+		parts[1] = base64.RawURLEncoding.EncodeToString(payload)
+		forged := strings.Join(parts, ".")
+
+		claims, idToken, err := VerifyJWT(ctx, forged, allowedAudiences, providers)
+		if err == nil {
+			t.Fatal("expected error for tampered payload")
+		}
+		if claims != nil {
+			t.Fatalf("claims leaked from an unverified token: %v", claims)
+		}
+		if idToken != nil {
+			t.Fatal("ID token returned for an unverified token")
 		}
 	})
 }
