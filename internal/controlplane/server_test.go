@@ -1866,15 +1866,32 @@ func TestUserStatusAndTenancy(t *testing.T) {
 		t.Fatalf("SaveUser B failed: %v", errUserB)
 	}
 
+	privA, _, err := crypto.GenerateKeyPair(crypto.Ed25519, -1)
+	if err != nil {
+		t.Fatalf("GenerateKeyPair A failed: %v", err)
+	}
+	peerA, err := peer.IDFromPrivateKey(privA)
+	if err != nil {
+		t.Fatalf("IDFromPrivateKey A failed: %v", err)
+	}
+	privB, _, err := crypto.GenerateKeyPair(crypto.Ed25519, -1)
+	if err != nil {
+		t.Fatalf("GenerateKeyPair B failed: %v", err)
+	}
+	peerB, err := peer.IDFromPrivateKey(privB)
+	if err != nil {
+		t.Fatalf("IDFromPrivateKey B failed: %v", err)
+	}
+
 	nodeA := &storage.EnrolledNode{
-		PeerID:    "peer-node-a",
+		PeerID:    peerA.String(),
 		PublicKey: []byte("pubkey-a"),
 		Biscuit:   []byte("dummy-biscuit-a"),
 		Role:      "sam:role:node",
 		OwnerID:   userA.ID,
 	}
 	nodeB := &storage.EnrolledNode{
-		PeerID:    "peer-node-b",
+		PeerID:    peerB.String(),
 		PublicKey: []byte("pubkey-b"),
 		Biscuit:   []byte("dummy-biscuit-b"),
 		Role:      "sam:role:node",
@@ -1918,11 +1935,11 @@ func TestUserStatusAndTenancy(t *testing.T) {
 		t.Fatalf("expected 1 node for User A, got: %d", len(enrolledNodes))
 	}
 	nodeMap := enrolledNodes[0].(map[string]interface{})
-	if nodeMap["PeerID"] != "peer-node-a" {
-		t.Errorf("expected node 'peer-node-a', got: %s", nodeMap["PeerID"])
+	if nodeMap["PeerID"] != peerA.String() {
+		t.Errorf("expected node %q, got: %s", peerA.String(), nodeMap["PeerID"])
 	}
 
-	reqRevoke, _ := http.NewRequest("POST", baseURL+"/user/revoke?id=peer-node-b", nil)
+	reqRevoke, _ := http.NewRequest("POST", baseURL+"/user/revoke?id="+peerB.String(), nil)
 	reqRevoke.Header.Set("Authorization", "Bearer "+tokenA)
 	respRevoke, err := client.Do(reqRevoke)
 	if err != nil {
@@ -1933,7 +1950,7 @@ func TestUserStatusAndTenancy(t *testing.T) {
 	}
 	_ = respRevoke.Body.Close()
 
-	reqRevokeSelf, _ := http.NewRequest("POST", baseURL+"/user/revoke?id=peer-node-a", nil)
+	reqRevokeSelf, _ := http.NewRequest("POST", baseURL+"/user/revoke?id="+peerA.String(), nil)
 	reqRevokeSelf.Header.Set("Authorization", "Bearer "+tokenA)
 	respRevokeSelf, err := client.Do(reqRevokeSelf)
 	if err != nil {
@@ -1944,7 +1961,7 @@ func TestUserStatusAndTenancy(t *testing.T) {
 	}
 	_ = respRevokeSelf.Body.Close()
 
-	nodeAUpdated, _ := store.GetNode(context.Background(), "peer-node-a")
+	nodeAUpdated, _ := store.GetNode(context.Background(), peerA.String())
 	if !nodeAUpdated.Banned {
 		t.Error("expected node A to be banned/revoked in DB")
 	}
@@ -2383,6 +2400,81 @@ func TestBanSurvivesKeypairRegeneration(t *testing.T) {
 	// An unrelated identity keeps working.
 	if status := enrollKey(t, newKey(t), "somebody-else"); status != http.StatusOK {
 		t.Errorf("unrelated identity: got %d, want 200", status)
+	}
+}
+
+// TestUndecodablePeerIDRejectedAtBoundary pins that handlers decoding peer
+// IDs at the trust boundary answer 401/400 for garbage instead of letting
+// the raw string through to storage lookups.
+func TestUndecodablePeerIDRejectedAtBoundary(t *testing.T) {
+	issuer, mintToken := startCustomMockOIDC(t)
+	srv, store, baseURL := setupTestServer(t, issuer)
+	defer func() {
+		_ = srv.Close()
+		_ = store.Close()
+	}()
+	srv.config.AdminToken = "super-secret-admin-token"
+
+	user := &storage.User{
+		ID:        "boundary-sub",
+		Email:     "boundary@example.com",
+		Role:      "user",
+		CreatedAt: time.Now(),
+	}
+	if err := store.SaveUser(context.Background(), user); err != nil {
+		t.Fatalf("SaveUser failed: %v", err)
+	}
+
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	priv, _, err := crypto.GenerateKeyPair(crypto.Ed25519, -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := time.Now().UnixMilli()
+	sig, err := priv.Sign(api.EnrollStatusChallenge("not-a-peer-id", ts))
+	if err != nil {
+		t.Fatal(err)
+	}
+	statusReq, _ := http.NewRequest(http.MethodGet, baseURL+"/enroll/status?peer_id=not-a-peer-id", nil)
+	statusReq.Header.Set(api.HeaderChallengeTimestamp, strconv.FormatInt(ts, 10))
+	statusReq.Header.Set(api.HeaderChallengeSignature, base64.RawURLEncoding.EncodeToString(sig))
+	resp, err := client.Do(statusReq)
+	if err != nil {
+		t.Fatalf("GET /enroll/status failed: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("/enroll/status with undecodable peer_id: got %d, want 401", resp.StatusCode)
+	}
+
+	revokeData, _ := proto.Marshal(&api.TokenRevokeRequest{PeerId: "not-a-peer-id"})
+	adminReq, _ := http.NewRequest(http.MethodPost, baseURL+"/admin/revoke", bytes.NewReader(revokeData))
+	adminReq.Header.Set("Authorization", "Bearer super-secret-admin-token")
+	resp, err = client.Do(adminReq)
+	if err != nil {
+		t.Fatalf("POST /admin/revoke failed: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("/admin/revoke with undecodable peer_id: got %d, want 400", resp.StatusCode)
+	}
+
+	userToken := mintToken(map[string]interface{}{
+		"iss":   issuer,
+		"sub":   user.ID,
+		"email": user.Email,
+		"aud":   "sam-mesh-audience",
+	})
+	userReq, _ := http.NewRequest(http.MethodPost, baseURL+"/user/revoke?id=not-a-peer-id", nil)
+	userReq.Header.Set("Authorization", "Bearer "+userToken)
+	resp, err = client.Do(userReq)
+	if err != nil {
+		t.Fatalf("POST /user/revoke failed: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("/user/revoke with undecodable peer_id: got %d, want 400", resp.StatusCode)
 	}
 }
 

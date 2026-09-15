@@ -293,3 +293,46 @@ func TestValidateServiceAnnounceCaps(t *testing.T) {
 		})
 	}
 }
+
+func TestObserveKeysOnTheCanonicalPeerID(t *testing.T) {
+	d := New(nil, testPeerID(t))
+	signer := testPeerID(t)
+
+	alias := peer.ToCid(signer).String()
+	if alias == signer.String() {
+		t.Fatal("peer.ToCid did not produce a second spelling of the signer")
+	}
+	spellings := []string{signer.String(), alias}
+	for _, spelling := range spellings {
+		decoded, err := peer.Decode(spelling)
+		if err != nil || decoded != signer {
+			t.Fatalf("%q does not decode to the signer (err %v)", spelling, err)
+		}
+	}
+
+	announce := func(spelling string) {
+		t.Helper()
+		d.observe(rawMessage(t, signer, &api.ServiceAnnounce{
+			PeerId: spelling, Type: api.ServiceType_SERVICE_TYPE_INFERENCE,
+			ServiceName: "llm", Keys: []string{"m1"},
+			Labels:    map[string]string{"region": "eu"},
+			Timestamp: time.Now().Unix(),
+		}))
+	}
+
+	for _, spelling := range spellings {
+		announce(spelling)
+		if got := len(d.providers); got != 1 {
+			t.Fatalf("after announcing as %q: got %d providers, want 1: %+v", spelling, got, d.providers)
+		}
+		for key, p := range d.providers {
+			if p.PeerID != signer.String() {
+				t.Errorf("provider keyed %q carries peer id %q, want %q", key, p.PeerID, signer.String())
+			}
+		}
+	}
+
+	if got := d.PeerLabels(signer.String()); got["region"] != "eu" {
+		t.Errorf("PeerLabels under the canonical id: got %v, want region=eu", got)
+	}
+}

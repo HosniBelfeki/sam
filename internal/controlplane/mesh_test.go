@@ -122,7 +122,8 @@ func TestP2PMeshAdapter_PublishAndSubscribe(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 
 	// 5. Test publishing BANNED event
-	targetPeerID := "12D3KooWBannedPeerIDForTesting1234567890"
+	_, targetID := newTestKey(t)
+	targetPeerID := targetID.String()
 	if err := adapter.PublishEvent(ctx, api.MeshEvent_BANNED, targetPeerID, nil); err != nil {
 		t.Fatalf("failed to publish BANNED event: %v", err)
 	}

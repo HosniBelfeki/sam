@@ -98,8 +98,22 @@ func TestConnectionGater(t *testing.T) {
 // node would enforce no ban at all until the next MeshEvent_BANNED, which for
 // a ban published while it was down never arrives.
 func TestGaterEnforcesSeededBans(t *testing.T) {
-	priv, _, _ := crypto.GenerateEd25519Key(nil)
-	banned, err := peer.IDFromPrivateKey(priv)
+	dir := t.TempDir()
+	store, err := NewStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Logf("failed to close store: %v", err)
+		}
+	}()
+
+	bannedPriv, _, err := crypto.GenerateEd25519Key(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	banned, err := peer.IDFromPrivateKey(bannedPriv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,13 +123,14 @@ func TestGaterEnforcesSeededBans(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cache, err := lru.New[string, int64](100)
+	node, err := NewSamNode(Options{
+		PrivKey:       bannedPriv,
+		Store:         store,
+		BannedPeerIDs: []string{peer.ToCid(banned).String(), "not-a-peer-id"},
+	})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("a ban set with an undecodable entry must not fail startup: %v", err)
 	}
-	node := &SamNode{revokedPeers: cache}
-	// Mirrors what NewSamNode does with Options.BannedPeerIDs.
-	node.revokedPeers.Add(banned.String(), time.Now().Unix())
 
 	gater := &nodeConnGate{node: node}
 	if gater.InterceptPeerDial(banned) {

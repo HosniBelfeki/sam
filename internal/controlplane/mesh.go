@@ -137,9 +137,19 @@ func (p *P2PMeshAdapter) PublishEvent(ctx context.Context, eventType api.MeshEve
 		privKey = key
 	}
 
+	var canonical string
+	// Events can have an empty peer ID.
+	if peerID != "" {
+		pID, err := peer.Decode(peerID)
+		if err != nil {
+			return fmt.Errorf("invalid peer ID %q: %w", peerID, err)
+		}
+		canonical = pID.String()
+	}
+
 	event := &api.MeshEvent{
 		Type:         eventType,
-		PeerId:       peerID,
+		PeerId:       canonical,
 		Timestamp:    time.Now().UnixMilli(),
 		NewPublicKey: payload,
 	}

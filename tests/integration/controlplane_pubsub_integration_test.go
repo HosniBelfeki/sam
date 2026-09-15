@@ -28,6 +28,7 @@ import (
 	"github.com/google/sam/internal/storage"
 	"github.com/libp2p/go-libp2p"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
+	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"google.golang.org/protobuf/proto"
 )
@@ -175,7 +176,15 @@ func TestControlPlanePubSubEventIntegration(t *testing.T) {
 	}
 
 	// 5. Enroll a dummy node in storage and trigger POST /admin/revoke (BANNED event)
-	targetPeerID := "12D3KooWTestPeerToBan12345678901234567890"
+	targetPriv, _, err := crypto.GenerateKeyPair(crypto.Ed25519, -1)
+	if err != nil {
+		t.Fatalf("failed to generate target key: %v", err)
+	}
+	targetPeer, err := peer.IDFromPrivateKey(targetPriv)
+	if err != nil {
+		t.Fatalf("failed to derive target peer ID: %v", err)
+	}
+	targetPeerID := targetPeer.String()
 	nodeRecord := &storage.EnrolledNode{
 		PeerID:         targetPeerID,
 		PublicKey:      []byte("dummy-key"),
