@@ -55,32 +55,20 @@ func newReverseProxyHandler(targetURL string) (http.Handler, error) {
 	if err != nil {
 		return nil, fmt.Errorf("invalid target URL: %w", err)
 	}
-	proxy := httputil.NewSingleHostReverseProxy(u)
-	if proxy.Rewrite != nil {
-		originalRewrite := proxy.Rewrite
-		proxy.Rewrite = func(pr *httputil.ProxyRequest) {
+	return &httputil.ReverseProxy{
+		Rewrite: func(pr *httputil.ProxyRequest) {
 			noTrailingSlash := pr.In.Header.Get(api.HeaderSamNoTrailingSlash) == "true"
-			originalRewrite(pr)
+			pr.SetURL(u)
+			// Preserve the Host behavior of NewSingleHostReverseProxy.
+			pr.Out.Host = pr.In.Host
 			pr.Out.Header.Del(api.HeaderSamNoTrailingSlash)
 			if noTrailingSlash && !strings.HasSuffix(u.Path, "/") && strings.HasSuffix(pr.Out.URL.Path, "/") {
 				pr.Out.URL.Path = strings.TrimSuffix(pr.Out.URL.Path, "/")
 			}
+			pr.SetXForwarded()
 			logger.Debugf("[ReverseProxy] Forwarding to: %q", pr.Out.URL.String())
-		}
-	} else {
-		originalDirector := proxy.Director
-		proxy.Director = func(req *http.Request) {
-			noTrailingSlash := req.Header.Get(api.HeaderSamNoTrailingSlash) == "true"
-			req.Header.Del(api.HeaderSamNoTrailingSlash)
-			originalDirector(req)
-
-			if noTrailingSlash && !strings.HasSuffix(u.Path, "/") && strings.HasSuffix(req.URL.Path, "/") {
-				req.URL.Path = strings.TrimSuffix(req.URL.Path, "/")
-			}
-			logger.Debugf("[ReverseProxy] Forwarding to: %q", req.URL.String())
-		}
-	}
-	return proxy, nil
+		},
+	}, nil
 }
 
 func (b *baseService) Info() *api.ServiceInfo { return b.info }
