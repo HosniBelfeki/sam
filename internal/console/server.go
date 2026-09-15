@@ -284,10 +284,13 @@ func (s *Server) Handler() http.Handler {
 
 func (s *Server) HandleLogout(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
-		Name:   "sam_session",
-		Value:  "",
-		Path:   s.cfg.BasePath + "/",
-		MaxAge: -1,
+		Name:     "sam_session",
+		Value:    "",
+		Path:     s.cfg.BasePath + "/",
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   s.secureCookies(r),
+		SameSite: http.SameSiteLaxMode,
 	})
 	http.Redirect(w, r, s.cfg.BasePath+"/", http.StatusFound)
 }
@@ -356,8 +359,8 @@ func (s *Server) HandleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	http.SetCookie(w, &http.Cookie{Name: "sam_oidc_state", Value: "", Path: s.cfg.BasePath + "/", MaxAge: -1})
-	http.SetCookie(w, &http.Cookie{Name: "sam_oidc_verifier", Value: "", Path: s.cfg.BasePath + "/", MaxAge: -1})
+	http.SetCookie(w, &http.Cookie{Name: "sam_oidc_state", Value: "", Path: s.cfg.BasePath + "/", MaxAge: -1, HttpOnly: true, Secure: s.secureCookies(r), SameSite: http.SameSiteLaxMode})
+	http.SetCookie(w, &http.Cookie{Name: "sam_oidc_verifier", Value: "", Path: s.cfg.BasePath + "/", MaxAge: -1, HttpOnly: true, Secure: s.secureCookies(r), SameSite: http.SameSiteLaxMode})
 
 	code := r.URL.Query().Get("code")
 	if code == "" {

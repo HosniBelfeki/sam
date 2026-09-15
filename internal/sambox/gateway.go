@@ -397,7 +397,8 @@ func (g *Gateway) handleHTTPConnection(conn *bufferedConn, tlsListener *channelL
 			filename = "libinterceptor.so"
 		}
 
-		filePath := filepath.Join(g.InterceptorsDir, filename)
+		// isValidIdentifier already forbids path separators; Base is defense in depth.
+		filePath := filepath.Join(g.InterceptorsDir, filepath.Base(filename))
 		fileData, err := os.ReadFile(filePath)
 		if err != nil && filename != "libinterceptor.so" {
 			filePath = filepath.Join(g.InterceptorsDir, "libinterceptor.so")

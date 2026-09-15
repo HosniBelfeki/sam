@@ -18,6 +18,8 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
     groups:
       k8s-deps:
         patterns:
@@ -27,8 +29,21 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
 
   - package-ecosystem: "docker"
-    directory: "/"
+    directories:
+      - "/"
+      - "/tests/e2e/docker"
+      - "/tests/e2e/docker/*"
+      - "/development/examples/*"
+      - "/development/examples/code-reviewer-pool/*"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
+    groups:
+      docker-digests:
+        patterns:
+          - "*"

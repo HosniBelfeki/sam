@@ -96,5 +96,12 @@ func VerifyJWT(ctx context.Context, jwtStr string, allowedAudiences []string, pr
 		return nil, nil, fmt.Errorf("JWT validation failed: %w", err)
 	}
 
-	return claims, token, nil
+	// Return claims decoded from the verified token, not the unverified
+	// pre-parse used above only to route to the right issuer.
+	var verifiedClaims jwt.MapClaims
+	if err := token.Claims(&verifiedClaims); err != nil {
+		return nil, nil, fmt.Errorf("failed to decode verified claims: %w", err)
+	}
+
+	return verifiedClaims, token, nil
 }

@@ -17,6 +17,9 @@ concurrency:
   group: deploy-${{ github.ref_type == 'tag' && 'hub' || 'bananas' }}
   cancel-in-progress: false
 
+permissions:
+  contents: read
+
 env:
   REGISTRY: ghcr.io
 
