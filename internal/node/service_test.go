@@ -61,6 +61,92 @@ func TestBaseService_InitURLBackend_BuildsReverseProxy(t *testing.T) {
 	}
 }
 
+func TestNewReverseProxyHandler_RewritesRequests(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		targetURL       string
+		requestURL      string
+		noTrailingSlash bool
+		wantURL         string
+		wantProto       string
+	}{
+		{
+			name:       "joins target path and query",
+			targetURL:  "http://backend.example/base?upstream=one",
+			requestURL: "https://service.sam/child/?client=two",
+			wantURL:    "http://backend.example/base/child/?upstream=one&client=two",
+			wantProto:  "https",
+		},
+		{
+			name:            "marker trims trailing slash",
+			targetURL:       "http://backend.example/base?upstream=one",
+			requestURL:      "http://service.sam/child/?client=two",
+			noTrailingSlash: true,
+			wantURL:         "http://backend.example/base/child?upstream=one&client=two",
+			wantProto:       "http",
+		},
+		{
+			name:            "target trailing slash is retained",
+			targetURL:       "http://backend.example/base/",
+			requestURL:      "http://service.sam/child/",
+			noTrailingSlash: true,
+			wantURL:         "http://backend.example/base/child/",
+			wantProto:       "http",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			handler, err := newReverseProxyHandler(tc.targetURL)
+			if err != nil {
+				t.Fatalf("newReverseProxyHandler: %v", err)
+			}
+			proxy := handler.(*httputil.ReverseProxy)
+			var forwarded *http.Request
+			proxy.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				forwarded = req.Clone(req.Context())
+				return &http.Response{
+					StatusCode: http.StatusNoContent,
+					Header:     make(http.Header),
+					Body:       http.NoBody,
+				}, nil
+			})
+			req := httptest.NewRequest(http.MethodGet, tc.requestURL, nil)
+			req.RemoteAddr = "192.0.2.1:12345"
+			if tc.noTrailingSlash {
+				req.Header.Set(api.HeaderSamNoTrailingSlash, "true")
+			}
+			req.Header.Set("Forwarded", "for=spoofed;host=spoofed;proto=spoofed")
+			req.Header.Set("X-Forwarded-For", "spoofed")
+			req.Header.Set("X-Forwarded-Host", "spoofed")
+			req.Header.Set("X-Forwarded-Proto", "spoofed")
+			recorder := httptest.NewRecorder()
+			proxy.ServeHTTP(recorder, req)
+			if recorder.Code != http.StatusNoContent {
+				t.Fatalf("status = %d, want %d", recorder.Code, http.StatusNoContent)
+			}
+			if forwarded == nil {
+				t.Fatal("request did not reach the upstream transport")
+			}
+			if got := forwarded.URL.String(); got != tc.wantURL {
+				t.Errorf("upstream URL = %q, want %q", got, tc.wantURL)
+			}
+			if forwarded.Host != req.Host {
+				t.Errorf("upstream Host = %q, want %q", forwarded.Host, req.Host)
+			}
+			for name, want := range map[string]string{
+				api.HeaderSamNoTrailingSlash: "",
+				"Forwarded":                  "",
+				"X-Forwarded-For":            "192.0.2.1",
+				"X-Forwarded-Host":           req.Host,
+				"X-Forwarded-Proto":          tc.wantProto,
+			} {
+				if got := forwarded.Header.Get(name); got != want {
+					t.Errorf("upstream %s = %q, want %q", name, got, want)
+				}
+			}
+		})
+	}
+}
+
 func TestBaseService_InitURLBackend_InvalidURL(t *testing.T) {
 	b := &baseService{
 		info:    &api.ServiceInfo{Type: api.ServiceType_SERVICE_TYPE_INFERENCE, Name: "demo"},
