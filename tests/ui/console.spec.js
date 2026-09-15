@@ -337,3 +337,60 @@ test('the Services view is deep-linkable via the URL hash', async ({ page }) => 
   await expect(page.locator('#view-services')).toBeVisible();
   await expect(page.locator('.nav-item[data-target="services"]')).toHaveAttribute('aria-current', 'page');
 });
+
+// Seeding the Services view for real needs an enrolled node self-reporting, so
+// render it from an intercepted /admin/status instead: the real response with
+// node_catalog and a labelled node spliced in, shaped exactly like
+// catalogViewFor in internal/controlplane/catalog.go emits it.
+test('reported services render with type, labels and report time', async ({ page }) => {
+  const PEER = '12D3KooWServicesViewFixturePeer';
+  await page.route('**/api/admin/status', async (route) => {
+    const response = await route.fetch();
+    const status = await response.json();
+    status.enrolled_nodes = [...(status.enrolled_nodes || []), {
+      PeerID: PEER,
+      Role: 'sam:role:node',
+      OwnerID: 'root-admin',
+      Labels: { component: 'stvv', region: 'eu-west' },
+    }];
+    status.node_catalog = {
+      [PEER]: {
+        services: [
+          { name: 'compliance-docs', type: 'mcp', description: 'doc lookup' },
+          // Reported names and descriptions are node-controlled input to an
+          // admin page; markup in them must render inert.
+          { name: 'llama', type: 'inference', description: '<img src=x onerror="window.svcXSS=1">' },
+        ],
+        reported_at: '2026-09-15T08:00:00Z',
+      },
+    };
+    await route.fulfill({ response, json: status });
+  });
+
+  await login(page);
+  await page.click('.nav-item[data-target="services"]');
+
+  const rows = page.locator('#table-services tr');
+  await expect(rows).toHaveCount(2);
+
+  const first = rows.nth(0);
+  await expect(first).toContainText('compliance-docs');
+  await expect(first).toContainText('mcp');
+  await expect(first).toContainText('doc lookup');
+  await expect(first).toContainText(PEER);
+  // The node's labels ride along as the mnemonic under the peer ID.
+  await expect(first.locator('.cell-subtext')).toHaveText('component=stvv, region=eu-west');
+  // reported_at renders as a local time, not the raw RFC 3339 string.
+  await expect(first.locator('td').nth(4)).not.toHaveText(/2026-09-15T08:00:00Z|-/);
+
+  await expect(rows.nth(1)).toContainText('inference');
+  // The description shows as text; nothing was injected into the DOM.
+  await expect(rows.nth(1)).toContainText('onerror');
+  expect(await page.locator('#table-services img').count()).toBe(0);
+  expect(await page.evaluate(() => window.svcXSS)).toBeUndefined();
+
+  // The same labels also annotate the peer ID in the Nodes table.
+  await page.click('.nav-item[data-target="nodes"]');
+  const nodeRow = page.locator('#table-nodes tr', { hasText: PEER });
+  await expect(nodeRow.locator('.cell-subtext')).toHaveText('component=stvv, region=eu-west');
+});
