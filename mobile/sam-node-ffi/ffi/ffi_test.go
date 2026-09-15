@@ -125,6 +125,8 @@ func TestMobileFFILifecycle(t *testing.T) {
 		ApiToken:        "test-token",
 		AllowLoopback:   true,
 		Labels:          map[string]string{"region": "eu-west-1"},
+		// A valid floor must not stop startup; enforcement is internal/node's.
+		Egress: api.Egress{RequireLabels: map[string]string{"jurisdiction": "eu"}},
 	}
 	cfgBytes, _ := json.Marshal(cfg)
 
@@ -197,6 +199,19 @@ func TestMobileConfigDecodesAttenuation(t *testing.T) {
 	}
 	if len(config.Attenuation.Rules) != 1 || len(config.Attenuation.Policies) != 1 || len(config.Attenuation.Checks) != 1 {
 		t.Fatalf("got %+v, want one statement of each kind", config.Attenuation)
+	}
+}
+
+// Same pin for the egress floor: it rides the yaml-tagged api.Egress, so the
+// JSON spelling is requireLabels. A silent miss here would start the node
+// with no floor while the operator believes one is set.
+func TestMobileConfigDecodesEgressFloor(t *testing.T) {
+	var config MobileConfig
+	if err := json.Unmarshal([]byte(`{"egress":{"requireLabels":{"jurisdiction":"eu"}}}`), &config); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if config.Egress.RequireLabels["jurisdiction"] != "eu" {
+		t.Fatalf("got %+v, want the floor pair decoded", config.Egress)
 	}
 }
 

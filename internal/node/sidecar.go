@@ -711,6 +711,39 @@ func createEgressProxy(node *SamNode) http.Handler {
 			return
 		}
 
+		// The operator's egress floor (egress.require_labels) holds at this
+		// chokepoint whatever the surface, so an agent that skips the facade
+		// and dials /sam/<peer>/... raw is gated the same way. required is nil:
+		// any caller requirement was already enforced by the surface that
+		// parsed it; the floor is what a silent caller cannot waive.
+		if floor := node.egressFloor(); len(floor) > 0 {
+			route, ok := parseEgressRoute(r.URL.Path)
+			if !ok {
+				http.Error(w, "Forbidden: egress floor in force and request names no peer", http.StatusForbidden)
+				return
+			}
+			pid, err := peer.Decode(route.peerID)
+			if err != nil {
+				http.Error(w, "Bad Request: invalid peer ID", http.StatusBadRequest)
+				return
+			}
+			// The verdict is for the canonical peer, so the dial must name the
+			// same form: rewrite the segment the Director will re-parse rather
+			// than let a non-canonical spelling travel past the gate.
+			if canonical := pid.String(); route.peerID != canonical {
+				parts := strings.SplitN(r.URL.Path, "/", 6)
+				if len(parts) >= 3 {
+					parts[2] = canonical
+					r.URL.Path = strings.Join(parts, "/")
+				}
+			}
+			if err := node.VerifyPeerLabels(r.Context(), pid, nil); err != nil {
+				logger.Warnf("[Egress] floor gate refused egress to %s: %v", pid, err)
+				http.Error(w, "Forbidden: provider does not attest the egress floor", http.StatusForbidden)
+				return
+			}
+		}
+
 		r.Header.Set(api.HeaderSamBiscuit, base64.StdEncoding.EncodeToString(biscuitBytes))
 
 		// Forwarded, not stripped: the agent claim is what lets the peer at the

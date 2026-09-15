@@ -823,3 +823,158 @@ func TestAttemptWriter(t *testing.T) {
 		}
 	})
 }
+
+// A local service has no biscuit, so the label gate can never speak for it and
+// ranking is the only place an egress floor can apply. A remote is filtered
+// here only on claims that already contradict the floor; an unlabelled one is
+// left for the gate, which decides on attested facts.
+func TestRankProvidersEnforcesEgressFloor(t *testing.T) {
+	floor := map[string]string{"jurisdiction": "eu", "compliance": "gdpr"}
+
+	newFacadeWithFloor := func(local map[string]string, peer map[string]string) *openAIFacade {
+		f := newTestFacade()
+		f.egressFloor = func() map[string]string { return floor }
+		f.localLabels = func() map[string]string { return local }
+		f.peerLabels = func(string) map[string]string { return peer }
+		return f
+	}
+
+	t.Run("a local outside the floor is dropped", func(t *testing.T) {
+		f := newFacadeWithFloor(map[string]string{"jurisdiction": "us"}, nil)
+		got := f.rankProviders([]modelProvider{{service: "local"}}, nil)
+		if len(got) != 0 {
+			t.Errorf("a local that does not satisfy the floor must not be used: got %+v", got)
+		}
+	})
+
+	t.Run("a local one pair short is dropped", func(t *testing.T) {
+		f := newFacadeWithFloor(map[string]string{"jurisdiction": "eu"}, nil)
+		if got := f.rankProviders([]modelProvider{{service: "local"}}, nil); len(got) != 0 {
+			t.Errorf("the floor is a conjunction: got %+v", got)
+		}
+	})
+
+	t.Run("a local satisfying every pair survives", func(t *testing.T) {
+		f := newFacadeWithFloor(map[string]string{"jurisdiction": "eu", "compliance": "gdpr"}, nil)
+		if got := f.rankProviders([]modelProvider{{service: "local"}}, nil); len(got) != 1 {
+			t.Errorf("a local inside the floor must be usable: got %+v", got)
+		}
+	})
+
+	t.Run("a remote whose claims contradict the floor is dropped early", func(t *testing.T) {
+		f := newFacadeWithFloor(nil, nil)
+		p := modelProvider{peerID: "peerUS", service: "srv", labels: map[string]string{"jurisdiction": "us"}}
+		if got := f.rankProviders([]modelProvider{p}, nil); len(got) != 0 {
+			t.Errorf("a remote claiming outside the floor need not be dialled: got %+v", got)
+		}
+	})
+
+	// Gossip carries only part of what a peer attests, so a remote silent on
+	// one pair of the floor may still satisfy all of it in its Biscuit.
+	// Dropping it here would exclude a provider that is inside the boundary.
+	t.Run("a remote gossiping only part of the floor is left to the gate", func(t *testing.T) {
+		f := newFacadeWithFloor(nil, nil)
+		p := modelProvider{peerID: "peerEU", service: "srv", labels: map[string]string{"jurisdiction": "eu"}}
+		if got := f.rankProviders([]modelProvider{p}, nil); len(got) != 1 {
+			t.Errorf("silence on a pair is not a contradiction; the gate decides: got %+v", got)
+		}
+	})
+
+	t.Run("an unlabelled remote is left to the gate", func(t *testing.T) {
+		f := newFacadeWithFloor(nil, nil)
+		p := modelProvider{peerID: "peerUnknown", service: "srv"}
+		if got := f.rankProviders([]modelProvider{p}, nil); len(got) != 1 {
+			t.Errorf("ranking must not reject on absent claims; the gate decides: got %+v", got)
+		}
+	})
+
+	t.Run("no floor configured leaves ranking unchanged", func(t *testing.T) {
+		f := newTestFacade()
+		f.localLabels = func() map[string]string { return map[string]string{"jurisdiction": "us"} }
+		if got := f.rankProviders([]modelProvider{{service: "local"}}, nil); len(got) != 1 {
+			t.Errorf("without a floor a local is unconstrained: got %+v", got)
+		}
+	})
+}
+
+// Ranking is a hint; the gate on the forward path is the enforcement. Gossip is
+// unauthenticated, so an unlabelled remote survives ranking and the biscuit
+// gate is the only check left before the body leaves the node — it must run
+// even when the caller required nothing, or the floor is waived by silence.
+func TestFacade_Completions_FloorGatesSilentCaller(t *testing.T) {
+	newFloorFacade := func() *openAIFacade {
+		f := newTestFacade()
+		f.egressFloor = func() map[string]string { return map[string]string{"jurisdiction": "eu"} }
+		f.viewProviders = func(string) []modelProvider {
+			return []modelProvider{{peerID: "peerX", service: "srv"}}
+		}
+		return f
+	}
+	silentRequest := func() *http.Request {
+		// No X-Sam-Required-Labels header: the caller requires nothing.
+		return httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"m1"}`))
+	}
+
+	t.Run("an unattested floor blocks the forward", func(t *testing.T) {
+		f := newFloorFacade()
+		var gateRequired map[string]string
+		gateCalled := false
+		f.verifyPeerLabels = func(_ context.Context, _ string, required map[string]string) error {
+			gateCalled = true
+			gateRequired = required
+			return fmt.Errorf("floor not attested")
+		}
+		forwarded := false
+		f.forward = http.HandlerFunc(func(http.ResponseWriter, *http.Request) { forwarded = true })
+
+		rec := httptest.NewRecorder()
+		f.handleCompletions(rec, silentRequest())
+
+		if !gateCalled {
+			t.Fatal("the gate must run for a caller that required nothing")
+		}
+		if gateRequired != nil {
+			t.Errorf("the caller required nothing, so the gate must see required=nil, got %v", gateRequired)
+		}
+		if forwarded {
+			t.Error("the body must not leave the node when the floor is unattested")
+		}
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Errorf("status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+		}
+	})
+
+	t.Run("an attested floor forwards", func(t *testing.T) {
+		f := newFloorFacade()
+		f.verifyPeerLabels = func(context.Context, string, map[string]string) error { return nil }
+		forwarded := false
+		f.forward = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			forwarded = true
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true}`))
+		})
+
+		rec := httptest.NewRecorder()
+		f.handleCompletions(rec, silentRequest())
+
+		if rec.Code != http.StatusOK || !forwarded {
+			t.Errorf("an attested floor must not block: status = %d, forwarded = %v", rec.Code, forwarded)
+		}
+	})
+
+	t.Run("a floor with no gate seam fails closed", func(t *testing.T) {
+		f := newFloorFacade() // verifyPeerLabels stays nil
+		forwarded := false
+		f.forward = http.HandlerFunc(func(http.ResponseWriter, *http.Request) { forwarded = true })
+
+		rec := httptest.NewRecorder()
+		f.handleCompletions(rec, silentRequest())
+
+		if forwarded {
+			t.Error("no gate available must mean no egress, not ungated egress")
+		}
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Errorf("status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+		}
+	})
+}
