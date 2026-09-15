@@ -26,6 +26,7 @@ import (
 	"github.com/google/sam/api"
 	"github.com/google/sam/internal/identity"
 	"github.com/google/sam/internal/storage"
+	"github.com/libp2p/go-libp2p/core/peer"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -74,7 +75,15 @@ func (s *Server) catalogViewFor(nodes []storage.EnrolledNode, now time.Time) map
 	view := make(map[string]catalogView, len(snap))
 	for i := range nodes {
 		node := &nodes[i]
-		entry, ok := snap[node.PeerID]
+		// The cache is keyed by the canonical base58 form from the verified
+		// biscuit; the stored record may carry another valid encoding of the
+		// same peer (e.g. CIDv1), so decode before looking up.
+		pID, err := peer.Decode(node.PeerID)
+		if err != nil {
+			logger.Warnw("Skipping enrolled node with undecodable peer ID in catalog view", "peer_id", node.PeerID, "error", err)
+			continue
+		}
+		entry, ok := snap[pID.String()]
 		if !ok || node.CheckAdmission(now) != nil {
 			continue
 		}
@@ -96,9 +105,17 @@ func (s *Server) catalogViewFor(nodes []storage.EnrolledNode, now time.Time) map
 }
 
 // dropCatalogEntry forgets a peer's report; called when its enrollment ends.
+// Accepts any valid encoding of the peer ID.
 func (s *Server) dropCatalogEntry(peerID string) {
+	pID, err := peer.Decode(peerID)
+	if err != nil {
+		// Cache keys always come from a verified biscuit, so an undecodable
+		// ID cannot have an entry - nothing to evict, but say so.
+		logger.Warnw("Not evicting catalog entry for undecodable peer ID", "peer_id", peerID, "error", err)
+		return
+	}
 	s.catalogMu.Lock()
-	delete(s.catalog, peerID)
+	delete(s.catalog, pID.String())
 	s.catalogMu.Unlock()
 }
 

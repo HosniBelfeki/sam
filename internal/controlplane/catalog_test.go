@@ -295,3 +295,60 @@ func TestHandleNodeCatalog_Admission(t *testing.T) {
 		t.Fatalf("banning must evict the cached report, got %v", snap)
 	}
 }
+
+// The cache is keyed by the canonical base58 form from the verified biscuit,
+// but the enrollment record's PeerID comes off the wire and may be any valid
+// encoding of the same peer (e.g. CIDv1 base32). The view lookup and the
+// ban eviction must still hit the entry.
+func TestCatalogPeerIDCanonicalization(t *testing.T) {
+	t.Parallel()
+
+	srv, store, cpURL := setupTestServer(t, "")
+	defer func() {
+		_ = srv.Close()
+		_ = store.Close()
+	}()
+	srv.config.AdminToken = "super-secret-admin-token"
+
+	ctx := context.Background()
+	priv, biscuitBytes := enrollRefreshTestNode(t, ctx, store)
+	nodePeer, err := peer.IDFromPrivateKey(priv)
+	if err != nil {
+		t.Fatalf("IDFromPrivateKey: %v", err)
+	}
+
+	// Re-enroll the same peer under its CIDv1 base32 encoding, as a raw wire
+	// string would arrive before the in-flight canonicalization PR lands.
+	record, err := store.GetNode(ctx, nodePeer.String())
+	if err != nil {
+		t.Fatalf("GetNode: %v", err)
+	}
+	cidForm := peer.ToCid(nodePeer).String()
+	if cidForm == nodePeer.String() {
+		t.Fatal("test needs a non-canonical encoding, got the canonical one")
+	}
+	record.PeerID = cidForm
+	if err := store.EnrollNode(ctx, record); err != nil {
+		t.Fatalf("EnrollNode: %v", err)
+	}
+
+	body := catalogBody(t, &api.ServiceInfo{Type: api.ServiceType_SERVICE_TYPE_MCP, Name: "calc"})
+	if got := postCatalog(t, cpURL, bearer(biscuitBytes), body); got != http.StatusNoContent {
+		t.Fatalf("report: got status %d, want %d", got, http.StatusNoContent)
+	}
+
+	// The view must join the CIDv1 record with the canonically-keyed entry,
+	// displayed under the record's own spelling.
+	view := adminNodeCatalog(t, cpURL, srv.config.AdminToken)
+	if _, ok := view[cidForm]; !ok || len(view[cidForm].Services) != 1 {
+		t.Fatalf("CIDv1-enrolled node's report missing from node_catalog, got %v", view)
+	}
+
+	// Ban via the stored record: eviction must hit the canonical cache key.
+	if err := srv.banNode(ctx, record); err != nil {
+		t.Fatalf("banNode: %v", err)
+	}
+	if snap := srv.catalogSnapshot(); len(snap) != 0 {
+		t.Fatalf("banning a CIDv1-enrolled node must evict its cached report, got %v", snap)
+	}
+}
