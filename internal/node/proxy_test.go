@@ -934,6 +934,22 @@ func TestEgressProxyEnforcesFloor(t *testing.T) {
 		t.Fatalf("egress inside the floor must pass: status %d, body %q", resp.StatusCode, body)
 	}
 
+	// A non-canonical spelling of the same peer (CID form) is canonicalized at
+	// the gate boundary, so the verdict and the dial name the same peer.
+	cidURL := fmt.Sprintf("%s/sam/%s/mcp/dummy-tool/api/v1/test", proxyServer.URL, peer.ToCid(nodeA.Host.ID()))
+	resp, err = http.Get(cidURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err = io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK || string(body) != expectedBody {
+		t.Fatalf("a CID-spelled peer inside the floor must pass: status %d, body %q", resp.StatusCode, body)
+	}
+
 	// One pair short of the floor: refused at the chokepoint, nothing forwarded.
 	nodeB.nodeConfig = &NodeConfigComplete{EgressRequireLabels: map[string]string{"jurisdiction": "eu", "compliance": "gdpr"}}
 	resp = get()
