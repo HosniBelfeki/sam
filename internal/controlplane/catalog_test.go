@@ -17,7 +17,9 @@ package controlplane
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"encoding/base64"
+	"encoding/json"
 	"net/http"
 	"testing"
 	"time"
@@ -26,21 +28,22 @@ import (
 	"github.com/google/sam/internal/identity"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"google.golang.org/protobuf/proto"
 )
 
-// postCatalog POSTs a raw catalog report body to /nodes/catalog under the
-// given biscuit and returns the response status.
-func postCatalog(t *testing.T, cpURL string, biscuit []byte, body []byte) int {
+// postCatalog POSTs a raw body to /nodes/catalog under the given
+// Authorization header value and returns the response status.
+func postCatalog(t *testing.T, cpURL, authHeader string, body []byte) int {
 	t.Helper()
 
 	req, err := http.NewRequest(http.MethodPost, cpURL+"/nodes/catalog", bytes.NewReader(body))
 	if err != nil {
 		t.Fatalf("NewRequest: %v", err)
 	}
-	if biscuit != nil {
-		req.Header.Set("Authorization", "Bearer "+base64.StdEncoding.EncodeToString(biscuit))
+	if authHeader != "" {
+		req.Header.Set("Authorization", authHeader)
 	}
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Type", "application/x-protobuf")
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -48,6 +51,45 @@ func postCatalog(t *testing.T, cpURL string, biscuit []byte, body []byte) int {
 	}
 	defer func() { _ = resp.Body.Close() }()
 	return resp.StatusCode
+}
+
+func bearer(biscuit []byte) string {
+	return "Bearer " + base64.StdEncoding.EncodeToString(biscuit)
+}
+
+func catalogBody(t *testing.T, services ...*api.ServiceInfo) []byte {
+	t.Helper()
+	body, err := proto.Marshal(&api.NodeCatalogReport{Services: services})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	return body
+}
+
+// adminNodeCatalog fetches /admin/status and returns its node_catalog value.
+func adminNodeCatalog(t *testing.T, cpURL, adminToken string) map[string]catalogView {
+	t.Helper()
+
+	req, err := http.NewRequest(http.MethodGet, cpURL+"/admin/status", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /admin/status: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /admin/status: status %d", resp.StatusCode)
+	}
+	var status struct {
+		NodeCatalog map[string]catalogView `json:"node_catalog"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
+		t.Fatalf("decode /admin/status: %v", err)
+	}
+	return status.NodeCatalog
 }
 
 func TestHandleNodeCatalog(t *testing.T) {
@@ -58,50 +100,63 @@ func TestHandleNodeCatalog(t *testing.T) {
 		_ = srv.Close()
 		_ = store.Close()
 	}()
+	srv.config.AdminToken = "super-secret-admin-token"
 
 	ctx := context.Background()
-	_, biscuitBytes := enrollRefreshTestNode(t, ctx, store)
+	priv, biscuitBytes := enrollRefreshTestNode(t, ctx, store)
+	nodePeer, err := peer.IDFromPrivateKey(priv)
+	if err != nil {
+		t.Fatalf("IDFromPrivateKey: %v", err)
+	}
 
-	body := []byte(`{"services":[{"type":1,"name":"stvv-compliance-docs","description":"doc lookup"},null,{"type":1,"name":"everything","description":"reference server"}]}`)
-	if got := postCatalog(t, cpURL, biscuitBytes, body); got != http.StatusNoContent {
+	body := catalogBody(t,
+		&api.ServiceInfo{Type: api.ServiceType_SERVICE_TYPE_MCP, Name: "stvv-compliance-docs", Description: "doc lookup"},
+		&api.ServiceInfo{Type: api.ServiceType_SERVICE_TYPE_INFERENCE, Name: "llama", Description: "local model"},
+	)
+	if got := postCatalog(t, cpURL, bearer(biscuitBytes), body); got != http.StatusNoContent {
 		t.Fatalf("HandleNodeCatalog: got status %d, want %d", got, http.StatusNoContent)
 	}
 
 	snap := srv.catalogSnapshot()
-	if len(snap) != 1 {
-		t.Fatalf("expected exactly one reporting peer in the catalog, got %d", len(snap))
+	entry, ok := snap[nodePeer.String()]
+	if !ok || len(snap) != 1 {
+		t.Fatalf("expected exactly the reporting peer in the catalog, got %v", snap)
 	}
-	for peerID, entry := range snap {
-		if len(entry.Services) != 2 {
-			t.Fatalf("expected the null service element to be filtered out, got %d services: %+v", len(entry.Services), entry.Services)
-		}
-		for i, svc := range entry.Services {
-			if svc == nil {
-				t.Fatalf("service at index %d is nil, filtering failed", i)
-			}
-		}
-		if entry.ReportedAt.IsZero() {
-			t.Errorf("ReportedAt was not set for peer %s", peerID)
-		}
+	if len(entry.Services) != 2 || entry.ReportedAt.IsZero() {
+		t.Fatalf("unexpected cached entry: %+v", entry)
+	}
+
+	// A second report replaces the first rather than accumulating.
+	body = catalogBody(t, &api.ServiceInfo{Type: api.ServiceType_SERVICE_TYPE_A2A, Name: "planner"})
+	if got := postCatalog(t, cpURL, bearer(biscuitBytes), body); got != http.StatusNoContent {
+		t.Fatalf("second report: got status %d, want %d", got, http.StatusNoContent)
+	}
+	entry = srv.catalogSnapshot()[nodePeer.String()]
+	if len(entry.Services) != 1 || entry.Services[0].Name != "planner" {
+		t.Fatalf("second report must replace the first, got %+v", entry.Services)
+	}
+
+	// The console sees the plain view with the type rendered as a name.
+	view := adminNodeCatalog(t, cpURL, srv.config.AdminToken)
+	got, ok := view[nodePeer.String()]
+	if !ok || len(view) != 1 {
+		t.Fatalf("expected the reporting peer in node_catalog, got %v", view)
+	}
+	want := []catalogService{{Name: "planner", Type: "a2a", Description: ""}}
+	if len(got.Services) != 1 || got.Services[0] != want[0] || got.ReportedAt.IsZero() {
+		t.Fatalf("node_catalog view = %+v, want services %+v", got, want)
+	}
+
+	// An empty report is valid and clears the node's services.
+	if got := postCatalog(t, cpURL, bearer(biscuitBytes), catalogBody(t)); got != http.StatusNoContent {
+		t.Fatalf("empty report: got status %d, want %d", got, http.StatusNoContent)
+	}
+	if view := adminNodeCatalog(t, cpURL, srv.config.AdminToken); len(view[nodePeer.String()].Services) != 0 {
+		t.Fatalf("empty report must clear services, got %+v", view)
 	}
 }
 
-func TestHandleNodeCatalog_MissingAuth(t *testing.T) {
-	t.Parallel()
-
-	srv, store, cpURL := setupTestServer(t, "")
-	defer func() {
-		_ = srv.Close()
-		_ = store.Close()
-	}()
-
-	body := []byte(`{"services":[]}`)
-	if got := postCatalog(t, cpURL, nil, body); got != http.StatusUnauthorized {
-		t.Fatalf("missing Authorization header: got status %d, want %d", got, http.StatusUnauthorized)
-	}
-}
-
-func TestHandleNodeCatalog_UnenrolledPeer(t *testing.T) {
+func TestHandleNodeCatalog_Rejections(t *testing.T) {
 	t.Parallel()
 
 	srv, store, cpURL := setupTestServer(t, "")
@@ -111,37 +166,81 @@ func TestHandleNodeCatalog_UnenrolledPeer(t *testing.T) {
 	}()
 
 	ctx := context.Background()
+	_, biscuitBytes := enrollRefreshTestNode(t, ctx, store)
 	cpPriv, _, err := store.GetCurrentKey(ctx)
 	if err != nil {
 		t.Fatalf("GetCurrentKey: %v", err)
 	}
 
-	// A biscuit minted for a peer that was never enrolled (or whose
-	// enrollment record has since been removed) must be rejected: a node can
-	// only ever report a catalog for itself, and self-reporting requires an
-	// admitted enrollment record to attribute the report to.
-	priv, _, err := crypto.GenerateKeyPair(crypto.Ed25519, -1)
+	// A biscuit minted by a key the control plane never trusted.
+	_, rogueKey, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	strangerPriv, _, err := crypto.GenerateKeyPair(crypto.Ed25519, -1)
 	if err != nil {
 		t.Fatalf("GenerateKeyPair: %v", err)
 	}
-	strangerPeer, err := peer.IDFromPrivateKey(priv)
+	strangerPeer, err := peer.IDFromPrivateKey(strangerPriv)
 	if err != nil {
 		t.Fatalf("IDFromPrivateKey: %v", err)
 	}
-	strangerBiscuit, err := identity.MintBootstrapBiscuitToken(
-		cpPriv, strangerPeer, api.RoleNode, time.Now().Add(api.BiscuitTokenTTL), nil, nil,
-	)
+	forged, err := identity.MintBootstrapBiscuitToken(rogueKey, strangerPeer, api.RoleNode, time.Now().Add(api.BiscuitTokenTTL), nil, nil)
 	if err != nil {
-		t.Fatalf("MintBootstrapBiscuitToken: %v", err)
+		t.Fatalf("MintBootstrapBiscuitToken(rogue): %v", err)
+	}
+	// A valid biscuit for a peer that was never enrolled.
+	unenrolled, err := identity.MintBootstrapBiscuitToken(cpPriv, strangerPeer, api.RoleNode, time.Now().Add(api.BiscuitTokenTTL), nil, nil)
+	if err != nil {
+		t.Fatalf("MintBootstrapBiscuitToken(unenrolled): %v", err)
 	}
 
-	body := []byte(`{"services":[]}`)
-	if got := postCatalog(t, cpURL, strangerBiscuit, body); got != http.StatusUnauthorized {
-		t.Fatalf("unenrolled peer: got status %d, want %d", got, http.StatusUnauthorized)
+	tooMany := make([]*api.ServiceInfo, maxCatalogServices+1)
+	for i := range tooMany {
+		tooMany[i] = &api.ServiceInfo{Type: api.ServiceType_SERVICE_TYPE_MCP, Name: "svc"}
+	}
+
+	ok := catalogBody(t)
+	tests := []struct {
+		name string
+		auth string
+		body []byte
+		want int
+	}{
+		{name: "missing authorization", auth: "", body: ok, want: http.StatusUnauthorized},
+		{name: "not a bearer token", auth: "Basic abc", body: ok, want: http.StatusUnauthorized},
+		{name: "malformed base64", auth: "Bearer %%%not-base64", body: ok, want: http.StatusBadRequest},
+		{name: "not a biscuit", auth: bearer([]byte("garbage")), body: ok, want: http.StatusUnauthorized},
+		{name: "forged signature", auth: bearer(forged), body: ok, want: http.StatusUnauthorized},
+		{name: "unenrolled peer", auth: bearer(unenrolled), body: ok, want: http.StatusUnauthorized},
+		{name: "invalid body", auth: bearer(biscuitBytes), body: []byte(`{"services":[]}`), want: http.StatusBadRequest},
+		{name: "too many services", auth: bearer(biscuitBytes), body: catalogBody(t, tooMany...), want: http.StatusBadRequest},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := postCatalog(t, cpURL, tc.auth, tc.body); got != tc.want {
+				t.Fatalf("got status %d, want %d", got, tc.want)
+			}
+		})
+	}
+	if len(srv.catalogSnapshot()) != 0 {
+		t.Fatalf("rejected reports must not be cached, got %v", srv.catalogSnapshot())
+	}
+
+	resp, err := http.Get(cpURL + "/nodes/catalog")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("GET /nodes/catalog: got status %d, want %d", resp.StatusCode, http.StatusMethodNotAllowed)
 	}
 }
 
-func TestHandleNodeCatalog_MethodNotAllowed(t *testing.T) {
+// A node's catalog is only ever as trustworthy as its enrollment: once the
+// record is banned or its session lapses, new reports are refused and the
+// cached one drops out of the console view.
+func TestHandleNodeCatalog_Admission(t *testing.T) {
 	t.Parallel()
 
 	srv, store, cpURL := setupTestServer(t, "")
@@ -149,13 +248,50 @@ func TestHandleNodeCatalog_MethodNotAllowed(t *testing.T) {
 		_ = srv.Close()
 		_ = store.Close()
 	}()
+	srv.config.AdminToken = "super-secret-admin-token"
 
-	resp, err := http.Get(cpURL + "/nodes/catalog")
+	ctx := context.Background()
+	priv, biscuitBytes := enrollRefreshTestNode(t, ctx, store)
+	nodePeer, err := peer.IDFromPrivateKey(priv)
 	if err != nil {
-		t.Fatalf("Get: %v", err)
+		t.Fatalf("IDFromPrivateKey: %v", err)
 	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusMethodNotAllowed {
-		t.Fatalf("GET /nodes/catalog: got status %d, want %d", resp.StatusCode, http.StatusMethodNotAllowed)
+	body := catalogBody(t, &api.ServiceInfo{Type: api.ServiceType_SERVICE_TYPE_MCP, Name: "calc"})
+	if got := postCatalog(t, cpURL, bearer(biscuitBytes), body); got != http.StatusNoContent {
+		t.Fatalf("admitted node: got status %d, want %d", got, http.StatusNoContent)
+	}
+	if _, ok := adminNodeCatalog(t, cpURL, srv.config.AdminToken)[nodePeer.String()]; !ok {
+		t.Fatal("admitted node's report missing from node_catalog")
+	}
+
+	// Session lapsed: the cache still holds the report but the view hides it.
+	record, err := store.GetNode(ctx, nodePeer.String())
+	if err != nil {
+		t.Fatalf("GetNode: %v", err)
+	}
+	record.ExpiresAt = time.Now().Add(-time.Hour)
+	if err := store.EnrollNode(ctx, record); err != nil {
+		t.Fatalf("EnrollNode: %v", err)
+	}
+	if got := postCatalog(t, cpURL, bearer(biscuitBytes), body); got != http.StatusUnauthorized {
+		t.Fatalf("expired session: got status %d, want %d", got, http.StatusUnauthorized)
+	}
+	if view := adminNodeCatalog(t, cpURL, srv.config.AdminToken); len(view) != 0 {
+		t.Fatalf("expired node must not appear in node_catalog, got %v", view)
+	}
+
+	// Banned through the server path: the entry is evicted outright.
+	record.ExpiresAt = time.Now().Add(time.Hour)
+	if err := store.EnrollNode(ctx, record); err != nil {
+		t.Fatalf("EnrollNode: %v", err)
+	}
+	if err := srv.banNode(ctx, record); err != nil {
+		t.Fatalf("banNode: %v", err)
+	}
+	if got := postCatalog(t, cpURL, bearer(biscuitBytes), body); got != http.StatusUnauthorized {
+		t.Fatalf("banned node: got status %d, want %d", got, http.StatusUnauthorized)
+	}
+	if snap := srv.catalogSnapshot(); len(snap) != 0 {
+		t.Fatalf("banning must evict the cached report, got %v", snap)
 	}
 }

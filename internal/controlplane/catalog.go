@@ -17,7 +17,7 @@ package controlplane
 import (
 	"crypto/ed25519"
 	"encoding/base64"
-	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -25,23 +25,37 @@ import (
 
 	"github.com/google/sam/api"
 	"github.com/google/sam/internal/identity"
+	"github.com/google/sam/internal/storage"
+	"google.golang.org/protobuf/proto"
 )
+
+// maxCatalogServices bounds one report so a single admitted node cannot grow
+// the in-memory cache without limit.
+const maxCatalogServices = 512
 
 // nodeCatalogEntry is what HandleNodeCatalog caches per reporting peer.
 type nodeCatalogEntry struct {
-	Services   []*api.ServiceInfo `json:"services"`
-	ReportedAt time.Time          `json:"reported_at"`
+	Services   []*api.ServiceInfo
+	ReportedAt time.Time
 }
 
-// nodeCatalogRequest is HandleNodeCatalog's request body. The reporting
-// peer's identity comes from its verified Biscuit, never from this body -
-// a node can only ever report on itself.
-type nodeCatalogRequest struct {
-	Services []*api.ServiceInfo `json:"services"`
+// catalogService is the console-facing shape of one reported service: a plain
+// struct so the JSON the console reads does not depend on protoc-gen-go's
+// struct layout or tags.
+type catalogService struct {
+	Name        string `json:"name"`
+	Type        string `json:"type"`
+	Description string `json:"description"`
+}
+
+// catalogView is HandleAdminStatus's node_catalog value for one peer.
+type catalogView struct {
+	Services   []catalogService `json:"services"`
+	ReportedAt time.Time        `json:"reported_at"`
 }
 
 // catalogSnapshot returns a stable copy of the current node service catalog
-// cache, safe to range over or marshal without holding catalogMu.
+// cache, safe to range over without holding catalogMu.
 func (s *Server) catalogSnapshot() map[string]nodeCatalogEntry {
 	s.catalogMu.RLock()
 	defer s.catalogMu.RUnlock()
@@ -52,18 +66,57 @@ func (s *Server) catalogSnapshot() map[string]nodeCatalogEntry {
 	return snap
 }
 
+// catalogViewFor renders the cache for the console, restricted to nodes that
+// are still admitted so a banned or expired node's last report disappears
+// with its enrollment instead of lingering until the next restart.
+func (s *Server) catalogViewFor(nodes []storage.EnrolledNode, now time.Time) map[string]catalogView {
+	snap := s.catalogSnapshot()
+	view := make(map[string]catalogView, len(snap))
+	for i := range nodes {
+		node := &nodes[i]
+		entry, ok := snap[node.PeerID]
+		if !ok || node.CheckAdmission(now) != nil {
+			continue
+		}
+		services := make([]catalogService, 0, len(entry.Services))
+		for _, svc := range entry.Services {
+			typeName, err := api.ServiceTypeToString(svc.GetType())
+			if err != nil {
+				typeName = "unknown"
+			}
+			services = append(services, catalogService{
+				Name:        svc.GetName(),
+				Type:        typeName,
+				Description: svc.GetDescription(),
+			})
+		}
+		view[node.PeerID] = catalogView{Services: services, ReportedAt: entry.ReportedAt}
+	}
+	return view
+}
+
+// dropCatalogEntry forgets a peer's report; called when its enrollment ends.
+func (s *Server) dropCatalogEntry(peerID string) {
+	s.catalogMu.Lock()
+	delete(s.catalog, peerID)
+	s.catalogMu.Unlock()
+}
+
 // HandleNodeCatalog HTTP POST /nodes/catalog - a node self-reports the
 // services it currently has registered locally (the same data
 // list_local_services already answers on the node itself), so the control
 // plane can show mesh-wide service topology without needing to be a DHT
 // participant or open a P2P connection to every enrolled node itself.
 //
+// The body is an api.NodeCatalogReport. The reporting peer is the one bound
+// in the presented Biscuit, so a node can only ever describe itself.
+//
 // This is a live-status cache, not authoritative state: a node that goes
 // offline without ever reporting an empty catalog just leaves its last
-// report in place until ReportedAt visibly goes stale. Good enough for an
-// admin-facing "what's running where" view; not a substitute for the real
-// per-request Biscuit authorization every actual service call still goes
-// through independently.
+// report in place until ReportedAt visibly goes stale or its enrollment
+// ends. It is admin-facing display data only and never feeds authorization,
+// which is also why a bare bearer Biscuit (no signed challenge, unlike
+// /refresh) is accepted here: a replayed token can only repaint a table.
 func (s *Server) HandleNodeCatalog(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -112,27 +165,20 @@ func (s *Server) HandleNodeCatalog(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to read body", http.StatusBadRequest)
 		return
 	}
-	defer func() { _ = r.Body.Close() }()
 
-	var req nodeCatalogRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		http.Error(w, "Invalid JSON body", http.StatusBadRequest)
+	var req api.NodeCatalogReport
+	if err := proto.Unmarshal(body, &req); err != nil {
+		http.Error(w, "Invalid request format", http.StatusBadRequest)
 		return
 	}
-
-	// A malformed report (e.g. {"services": [null]}) unmarshals into a nil
-	// element rather than failing - filter those out so a bad report from one
-	// node can't crash rendering for every node's entry in the console.
-	var validServices []*api.ServiceInfo
-	for _, svc := range req.Services {
-		if svc != nil {
-			validServices = append(validServices, svc)
-		}
+	if len(req.Services) > maxCatalogServices {
+		http.Error(w, fmt.Sprintf("Too many services in report (max %d)", maxCatalogServices), http.StatusBadRequest)
+		return
 	}
 
 	s.catalogMu.Lock()
 	s.catalog[peerID.String()] = nodeCatalogEntry{
-		Services:   validServices,
+		Services:   req.Services,
 		ReportedAt: time.Now(),
 	}
 	s.catalogMu.Unlock()

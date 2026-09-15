@@ -1835,6 +1835,54 @@ func (x *TokenRefreshResponse) GetErrorMessage() string {
 	return ""
 }
 
+// NodeCatalogReport is the body of POST /nodes/catalog: a node's
+// self-reported list of locally registered services. The reporting peer is
+// taken from the presented biscuit, never from the body, so a node can only
+// ever describe itself. Display-only; carries no authorization weight.
+type NodeCatalogReport struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Services      []*ServiceInfo         `protobuf:"bytes,1,rep,name=services,proto3" json:"services,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *NodeCatalogReport) Reset() {
+	*x = NodeCatalogReport{}
+	mi := &file_api_sam_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *NodeCatalogReport) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*NodeCatalogReport) ProtoMessage() {}
+
+func (x *NodeCatalogReport) ProtoReflect() protoreflect.Message {
+	mi := &file_api_sam_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use NodeCatalogReport.ProtoReflect.Descriptor instead.
+func (*NodeCatalogReport) Descriptor() ([]byte, []int) {
+	return file_api_sam_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *NodeCatalogReport) GetServices() []*ServiceInfo {
+	if x != nil {
+		return x.Services
+	}
+	return nil
+}
+
 type TokenRevokeRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	PeerId        string                 `protobuf:"bytes,1,opt,name=peer_id,json=peerId,proto3" json:"peer_id,omitempty"`
@@ -1844,7 +1892,7 @@ type TokenRevokeRequest struct {
 
 func (x *TokenRevokeRequest) Reset() {
 	*x = TokenRevokeRequest{}
-	mi := &file_api_sam_proto_msgTypes[24]
+	mi := &file_api_sam_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1856,7 +1904,7 @@ func (x *TokenRevokeRequest) String() string {
 func (*TokenRevokeRequest) ProtoMessage() {}
 
 func (x *TokenRevokeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_sam_proto_msgTypes[24]
+	mi := &file_api_sam_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1869,7 +1917,7 @@ func (x *TokenRevokeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TokenRevokeRequest.ProtoReflect.Descriptor instead.
 func (*TokenRevokeRequest) Descriptor() ([]byte, []int) {
-	return file_api_sam_proto_rawDescGZIP(), []int{24}
+	return file_api_sam_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *TokenRevokeRequest) GetPeerId() string {
@@ -1889,7 +1937,7 @@ type TokenRevokeResponse struct {
 
 func (x *TokenRevokeResponse) Reset() {
 	*x = TokenRevokeResponse{}
-	mi := &file_api_sam_proto_msgTypes[25]
+	mi := &file_api_sam_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1901,7 +1949,7 @@ func (x *TokenRevokeResponse) String() string {
 func (*TokenRevokeResponse) ProtoMessage() {}
 
 func (x *TokenRevokeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_sam_proto_msgTypes[25]
+	mi := &file_api_sam_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1914,7 +1962,7 @@ func (x *TokenRevokeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TokenRevokeResponse.ProtoReflect.Descriptor instead.
 func (*TokenRevokeResponse) Descriptor() ([]byte, []int) {
-	return file_api_sam_proto_rawDescGZIP(), []int{25}
+	return file_api_sam_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *TokenRevokeResponse) GetSuccess() bool {
@@ -1945,7 +1993,7 @@ type AgentSecret struct {
 
 func (x *AgentSecret) Reset() {
 	*x = AgentSecret{}
-	mi := &file_api_sam_proto_msgTypes[26]
+	mi := &file_api_sam_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1957,7 +2005,7 @@ func (x *AgentSecret) String() string {
 func (*AgentSecret) ProtoMessage() {}
 
 func (x *AgentSecret) ProtoReflect() protoreflect.Message {
-	mi := &file_api_sam_proto_msgTypes[26]
+	mi := &file_api_sam_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1970,7 +2018,7 @@ func (x *AgentSecret) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentSecret.ProtoReflect.Descriptor instead.
 func (*AgentSecret) Descriptor() ([]byte, []int) {
-	return file_api_sam_proto_rawDescGZIP(), []int{26}
+	return file_api_sam_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *AgentSecret) GetHost() string {
@@ -2013,7 +2061,7 @@ type AgentEgress struct {
 
 func (x *AgentEgress) Reset() {
 	*x = AgentEgress{}
-	mi := &file_api_sam_proto_msgTypes[27]
+	mi := &file_api_sam_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2025,7 +2073,7 @@ func (x *AgentEgress) String() string {
 func (*AgentEgress) ProtoMessage() {}
 
 func (x *AgentEgress) ProtoReflect() protoreflect.Message {
-	mi := &file_api_sam_proto_msgTypes[27]
+	mi := &file_api_sam_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2038,7 +2086,7 @@ func (x *AgentEgress) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentEgress.ProtoReflect.Descriptor instead.
 func (*AgentEgress) Descriptor() ([]byte, []int) {
-	return file_api_sam_proto_rawDescGZIP(), []int{27}
+	return file_api_sam_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *AgentEgress) GetAllow() []string {
@@ -2070,7 +2118,7 @@ type AgentIngress struct {
 
 func (x *AgentIngress) Reset() {
 	*x = AgentIngress{}
-	mi := &file_api_sam_proto_msgTypes[28]
+	mi := &file_api_sam_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2082,7 +2130,7 @@ func (x *AgentIngress) String() string {
 func (*AgentIngress) ProtoMessage() {}
 
 func (x *AgentIngress) ProtoReflect() protoreflect.Message {
-	mi := &file_api_sam_proto_msgTypes[28]
+	mi := &file_api_sam_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2095,7 +2143,7 @@ func (x *AgentIngress) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentIngress.ProtoReflect.Descriptor instead.
 func (*AgentIngress) Descriptor() ([]byte, []int) {
-	return file_api_sam_proto_rawDescGZIP(), []int{28}
+	return file_api_sam_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *AgentIngress) GetType() ServiceType {
@@ -2153,7 +2201,7 @@ type AgentBundle struct {
 
 func (x *AgentBundle) Reset() {
 	*x = AgentBundle{}
-	mi := &file_api_sam_proto_msgTypes[29]
+	mi := &file_api_sam_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2165,7 +2213,7 @@ func (x *AgentBundle) String() string {
 func (*AgentBundle) ProtoMessage() {}
 
 func (x *AgentBundle) ProtoReflect() protoreflect.Message {
-	mi := &file_api_sam_proto_msgTypes[29]
+	mi := &file_api_sam_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2178,7 +2226,7 @@ func (x *AgentBundle) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentBundle.ProtoReflect.Descriptor instead.
 func (*AgentBundle) Descriptor() ([]byte, []int) {
-	return file_api_sam_proto_rawDescGZIP(), []int{29}
+	return file_api_sam_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *AgentBundle) GetVersion() string {
@@ -2234,7 +2282,7 @@ type AgentAttachRequest struct {
 
 func (x *AgentAttachRequest) Reset() {
 	*x = AgentAttachRequest{}
-	mi := &file_api_sam_proto_msgTypes[30]
+	mi := &file_api_sam_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2246,7 +2294,7 @@ func (x *AgentAttachRequest) String() string {
 func (*AgentAttachRequest) ProtoMessage() {}
 
 func (x *AgentAttachRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_sam_proto_msgTypes[30]
+	mi := &file_api_sam_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2259,7 +2307,7 @@ func (x *AgentAttachRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentAttachRequest.ProtoReflect.Descriptor instead.
 func (*AgentAttachRequest) Descriptor() ([]byte, []int) {
-	return file_api_sam_proto_rawDescGZIP(), []int{30}
+	return file_api_sam_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *AgentAttachRequest) GetBundle() *AgentBundle {
@@ -2283,7 +2331,7 @@ type AgentAttachResponse struct {
 
 func (x *AgentAttachResponse) Reset() {
 	*x = AgentAttachResponse{}
-	mi := &file_api_sam_proto_msgTypes[31]
+	mi := &file_api_sam_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2295,7 +2343,7 @@ func (x *AgentAttachResponse) String() string {
 func (*AgentAttachResponse) ProtoMessage() {}
 
 func (x *AgentAttachResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_sam_proto_msgTypes[31]
+	mi := &file_api_sam_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2308,7 +2356,7 @@ func (x *AgentAttachResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentAttachResponse.ProtoReflect.Descriptor instead.
 func (*AgentAttachResponse) Descriptor() ([]byte, []int) {
-	return file_api_sam_proto_rawDescGZIP(), []int{31}
+	return file_api_sam_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *AgentAttachResponse) GetEgressSocket() string {
@@ -2343,7 +2391,7 @@ type AgentDetachRequest struct {
 
 func (x *AgentDetachRequest) Reset() {
 	*x = AgentDetachRequest{}
-	mi := &file_api_sam_proto_msgTypes[32]
+	mi := &file_api_sam_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2355,7 +2403,7 @@ func (x *AgentDetachRequest) String() string {
 func (*AgentDetachRequest) ProtoMessage() {}
 
 func (x *AgentDetachRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_sam_proto_msgTypes[32]
+	mi := &file_api_sam_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2368,7 +2416,7 @@ func (x *AgentDetachRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentDetachRequest.ProtoReflect.Descriptor instead.
 func (*AgentDetachRequest) Descriptor() ([]byte, []int) {
-	return file_api_sam_proto_rawDescGZIP(), []int{32}
+	return file_api_sam_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *AgentDetachRequest) GetAgentId() string {
@@ -2388,7 +2436,7 @@ type AgentDetachResponse struct {
 
 func (x *AgentDetachResponse) Reset() {
 	*x = AgentDetachResponse{}
-	mi := &file_api_sam_proto_msgTypes[33]
+	mi := &file_api_sam_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2400,7 +2448,7 @@ func (x *AgentDetachResponse) String() string {
 func (*AgentDetachResponse) ProtoMessage() {}
 
 func (x *AgentDetachResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_sam_proto_msgTypes[33]
+	mi := &file_api_sam_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2413,7 +2461,7 @@ func (x *AgentDetachResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentDetachResponse.ProtoReflect.Descriptor instead.
 func (*AgentDetachResponse) Descriptor() ([]byte, []int) {
-	return file_api_sam_proto_rawDescGZIP(), []int{33}
+	return file_api_sam_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *AgentDetachResponse) GetSuccess() bool {
@@ -2443,7 +2491,7 @@ type AgentRefreshRequest struct {
 
 func (x *AgentRefreshRequest) Reset() {
 	*x = AgentRefreshRequest{}
-	mi := &file_api_sam_proto_msgTypes[34]
+	mi := &file_api_sam_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2455,7 +2503,7 @@ func (x *AgentRefreshRequest) String() string {
 func (*AgentRefreshRequest) ProtoMessage() {}
 
 func (x *AgentRefreshRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_sam_proto_msgTypes[34]
+	mi := &file_api_sam_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2468,7 +2516,7 @@ func (x *AgentRefreshRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentRefreshRequest.ProtoReflect.Descriptor instead.
 func (*AgentRefreshRequest) Descriptor() ([]byte, []int) {
-	return file_api_sam_proto_rawDescGZIP(), []int{34}
+	return file_api_sam_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *AgentRefreshRequest) GetAgentId() string {
@@ -2496,7 +2544,7 @@ type AgentRefreshResponse struct {
 
 func (x *AgentRefreshResponse) Reset() {
 	*x = AgentRefreshResponse{}
-	mi := &file_api_sam_proto_msgTypes[35]
+	mi := &file_api_sam_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2508,7 +2556,7 @@ func (x *AgentRefreshResponse) String() string {
 func (*AgentRefreshResponse) ProtoMessage() {}
 
 func (x *AgentRefreshResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_sam_proto_msgTypes[35]
+	mi := &file_api_sam_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2521,7 +2569,7 @@ func (x *AgentRefreshResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentRefreshResponse.ProtoReflect.Descriptor instead.
 func (*AgentRefreshResponse) Descriptor() ([]byte, []int) {
-	return file_api_sam_proto_rawDescGZIP(), []int{35}
+	return file_api_sam_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *AgentRefreshResponse) GetSuccess() bool {
@@ -2556,7 +2604,7 @@ type AgentStatusRequest struct {
 
 func (x *AgentStatusRequest) Reset() {
 	*x = AgentStatusRequest{}
-	mi := &file_api_sam_proto_msgTypes[36]
+	mi := &file_api_sam_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2568,7 +2616,7 @@ func (x *AgentStatusRequest) String() string {
 func (*AgentStatusRequest) ProtoMessage() {}
 
 func (x *AgentStatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_sam_proto_msgTypes[36]
+	mi := &file_api_sam_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2581,7 +2629,7 @@ func (x *AgentStatusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentStatusRequest.ProtoReflect.Descriptor instead.
 func (*AgentStatusRequest) Descriptor() ([]byte, []int) {
-	return file_api_sam_proto_rawDescGZIP(), []int{36}
+	return file_api_sam_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *AgentStatusRequest) GetAgentId() string {
@@ -2603,7 +2651,7 @@ type AgentStatus struct {
 
 func (x *AgentStatus) Reset() {
 	*x = AgentStatus{}
-	mi := &file_api_sam_proto_msgTypes[37]
+	mi := &file_api_sam_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2615,7 +2663,7 @@ func (x *AgentStatus) String() string {
 func (*AgentStatus) ProtoMessage() {}
 
 func (x *AgentStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_api_sam_proto_msgTypes[37]
+	mi := &file_api_sam_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2628,7 +2676,7 @@ func (x *AgentStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentStatus.ProtoReflect.Descriptor instead.
 func (*AgentStatus) Descriptor() ([]byte, []int) {
-	return file_api_sam_proto_rawDescGZIP(), []int{37}
+	return file_api_sam_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *AgentStatus) GetAgentId() string {
@@ -2669,7 +2717,7 @@ type AgentStatusResponse struct {
 
 func (x *AgentStatusResponse) Reset() {
 	*x = AgentStatusResponse{}
-	mi := &file_api_sam_proto_msgTypes[38]
+	mi := &file_api_sam_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2681,7 +2729,7 @@ func (x *AgentStatusResponse) String() string {
 func (*AgentStatusResponse) ProtoMessage() {}
 
 func (x *AgentStatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_sam_proto_msgTypes[38]
+	mi := &file_api_sam_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2694,7 +2742,7 @@ func (x *AgentStatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentStatusResponse.ProtoReflect.Descriptor instead.
 func (*AgentStatusResponse) Descriptor() ([]byte, []int) {
-	return file_api_sam_proto_rawDescGZIP(), []int{38}
+	return file_api_sam_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *AgentStatusResponse) GetAgents() []*AgentStatus {
@@ -2725,7 +2773,7 @@ type IdentityEvidenceResponse struct {
 
 func (x *IdentityEvidenceResponse) Reset() {
 	*x = IdentityEvidenceResponse{}
-	mi := &file_api_sam_proto_msgTypes[39]
+	mi := &file_api_sam_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2737,7 +2785,7 @@ func (x *IdentityEvidenceResponse) String() string {
 func (*IdentityEvidenceResponse) ProtoMessage() {}
 
 func (x *IdentityEvidenceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_sam_proto_msgTypes[39]
+	mi := &file_api_sam_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2750,7 +2798,7 @@ func (x *IdentityEvidenceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IdentityEvidenceResponse.ProtoReflect.Descriptor instead.
 func (*IdentityEvidenceResponse) Descriptor() ([]byte, []int) {
-	return file_api_sam_proto_rawDescGZIP(), []int{39}
+	return file_api_sam_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *IdentityEvidenceResponse) GetPeerId() string {
@@ -2811,7 +2859,7 @@ type PeerEvidenceResponse struct {
 
 func (x *PeerEvidenceResponse) Reset() {
 	*x = PeerEvidenceResponse{}
-	mi := &file_api_sam_proto_msgTypes[40]
+	mi := &file_api_sam_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2823,7 +2871,7 @@ func (x *PeerEvidenceResponse) String() string {
 func (*PeerEvidenceResponse) ProtoMessage() {}
 
 func (x *PeerEvidenceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_sam_proto_msgTypes[40]
+	mi := &file_api_sam_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2836,7 +2884,7 @@ func (x *PeerEvidenceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PeerEvidenceResponse.ProtoReflect.Descriptor instead.
 func (*PeerEvidenceResponse) Descriptor() ([]byte, []int) {
-	return file_api_sam_proto_rawDescGZIP(), []int{40}
+	return file_api_sam_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *PeerEvidenceResponse) GetPeerId() string {
@@ -3041,7 +3089,9 @@ const file_api_sam_proto_rawDesc = "" +
 	"\rbiscuit_token\x18\x01 \x01(\fR\fbiscuitToken\x12\x1d\n" +
 	"\n" +
 	"expires_at\x18\x02 \x01(\x03R\texpiresAt\x12#\n" +
-	"\rerror_message\x18\x03 \x01(\tR\ferrorMessage\"-\n" +
+	"\rerror_message\x18\x03 \x01(\tR\ferrorMessage\"D\n" +
+	"\x11NodeCatalogReport\x12/\n" +
+	"\bservices\x18\x01 \x03(\v2\x13.sam.v1.ServiceInfoR\bservices\"-\n" +
 	"\x12TokenRevokeRequest\x12\x17\n" +
 	"\apeer_id\x18\x01 \x01(\tR\x06peerId\"E\n" +
 	"\x13TokenRevokeResponse\x12\x18\n" +
@@ -3146,7 +3196,7 @@ func file_api_sam_proto_rawDescGZIP() []byte {
 }
 
 var file_api_sam_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_api_sam_proto_msgTypes = make([]protoimpl.MessageInfo, 46)
+var file_api_sam_proto_msgTypes = make([]protoimpl.MessageInfo, 47)
 var file_api_sam_proto_goTypes = []any{
 	(EnrollmentStatus)(0),              // 0: sam.v1.EnrollmentStatus
 	(ServiceType)(0),                   // 1: sam.v1.ServiceType
@@ -3175,57 +3225,59 @@ var file_api_sam_proto_goTypes = []any{
 	(*KeysResponse)(nil),               // 24: sam.v1.KeysResponse
 	(*TokenRefreshRequest)(nil),        // 25: sam.v1.TokenRefreshRequest
 	(*TokenRefreshResponse)(nil),       // 26: sam.v1.TokenRefreshResponse
-	(*TokenRevokeRequest)(nil),         // 27: sam.v1.TokenRevokeRequest
-	(*TokenRevokeResponse)(nil),        // 28: sam.v1.TokenRevokeResponse
-	(*AgentSecret)(nil),                // 29: sam.v1.AgentSecret
-	(*AgentEgress)(nil),                // 30: sam.v1.AgentEgress
-	(*AgentIngress)(nil),               // 31: sam.v1.AgentIngress
-	(*AgentBundle)(nil),                // 32: sam.v1.AgentBundle
-	(*AgentAttachRequest)(nil),         // 33: sam.v1.AgentAttachRequest
-	(*AgentAttachResponse)(nil),        // 34: sam.v1.AgentAttachResponse
-	(*AgentDetachRequest)(nil),         // 35: sam.v1.AgentDetachRequest
-	(*AgentDetachResponse)(nil),        // 36: sam.v1.AgentDetachResponse
-	(*AgentRefreshRequest)(nil),        // 37: sam.v1.AgentRefreshRequest
-	(*AgentRefreshResponse)(nil),       // 38: sam.v1.AgentRefreshResponse
-	(*AgentStatusRequest)(nil),         // 39: sam.v1.AgentStatusRequest
-	(*AgentStatus)(nil),                // 40: sam.v1.AgentStatus
-	(*AgentStatusResponse)(nil),        // 41: sam.v1.AgentStatusResponse
-	(*IdentityEvidenceResponse)(nil),   // 42: sam.v1.IdentityEvidenceResponse
-	(*PeerEvidenceResponse)(nil),       // 43: sam.v1.PeerEvidenceResponse
-	nil,                                // 44: sam.v1.EnrollRequest.LabelsEntry
-	nil,                                // 45: sam.v1.BootstrapEnrollRequest.LabelsEntry
-	nil,                                // 46: sam.v1.CommandBackend.EnvEntry
-	nil,                                // 47: sam.v1.ServiceAnnounce.LabelsEntry
-	nil,                                // 48: sam.v1.PeerEvidenceResponse.LabelsEntry
+	(*NodeCatalogReport)(nil),          // 27: sam.v1.NodeCatalogReport
+	(*TokenRevokeRequest)(nil),         // 28: sam.v1.TokenRevokeRequest
+	(*TokenRevokeResponse)(nil),        // 29: sam.v1.TokenRevokeResponse
+	(*AgentSecret)(nil),                // 30: sam.v1.AgentSecret
+	(*AgentEgress)(nil),                // 31: sam.v1.AgentEgress
+	(*AgentIngress)(nil),               // 32: sam.v1.AgentIngress
+	(*AgentBundle)(nil),                // 33: sam.v1.AgentBundle
+	(*AgentAttachRequest)(nil),         // 34: sam.v1.AgentAttachRequest
+	(*AgentAttachResponse)(nil),        // 35: sam.v1.AgentAttachResponse
+	(*AgentDetachRequest)(nil),         // 36: sam.v1.AgentDetachRequest
+	(*AgentDetachResponse)(nil),        // 37: sam.v1.AgentDetachResponse
+	(*AgentRefreshRequest)(nil),        // 38: sam.v1.AgentRefreshRequest
+	(*AgentRefreshResponse)(nil),       // 39: sam.v1.AgentRefreshResponse
+	(*AgentStatusRequest)(nil),         // 40: sam.v1.AgentStatusRequest
+	(*AgentStatus)(nil),                // 41: sam.v1.AgentStatus
+	(*AgentStatusResponse)(nil),        // 42: sam.v1.AgentStatusResponse
+	(*IdentityEvidenceResponse)(nil),   // 43: sam.v1.IdentityEvidenceResponse
+	(*PeerEvidenceResponse)(nil),       // 44: sam.v1.PeerEvidenceResponse
+	nil,                                // 45: sam.v1.EnrollRequest.LabelsEntry
+	nil,                                // 46: sam.v1.BootstrapEnrollRequest.LabelsEntry
+	nil,                                // 47: sam.v1.CommandBackend.EnvEntry
+	nil,                                // 48: sam.v1.ServiceAnnounce.LabelsEntry
+	nil,                                // 49: sam.v1.PeerEvidenceResponse.LabelsEntry
 }
 var file_api_sam_proto_depIdxs = []int32{
 	2,  // 0: sam.v1.MeshEvent.type:type_name -> sam.v1.MeshEvent.Type
-	44, // 1: sam.v1.EnrollRequest.labels:type_name -> sam.v1.EnrollRequest.LabelsEntry
-	45, // 2: sam.v1.BootstrapEnrollRequest.labels:type_name -> sam.v1.BootstrapEnrollRequest.LabelsEntry
+	45, // 1: sam.v1.EnrollRequest.labels:type_name -> sam.v1.EnrollRequest.LabelsEntry
+	46, // 2: sam.v1.BootstrapEnrollRequest.labels:type_name -> sam.v1.BootstrapEnrollRequest.LabelsEntry
 	0,  // 3: sam.v1.BootstrapEnrollResponse.status:type_name -> sam.v1.EnrollmentStatus
 	1,  // 4: sam.v1.ServiceInfo.type:type_name -> sam.v1.ServiceType
-	46, // 5: sam.v1.CommandBackend.env:type_name -> sam.v1.CommandBackend.EnvEntry
+	47, // 5: sam.v1.CommandBackend.env:type_name -> sam.v1.CommandBackend.EnvEntry
 	10, // 6: sam.v1.RegisterServiceRequest.service:type_name -> sam.v1.ServiceInfo
 	11, // 7: sam.v1.RegisterServiceRequest.command:type_name -> sam.v1.CommandBackend
 	1,  // 8: sam.v1.ServiceAnnounce.type:type_name -> sam.v1.ServiceType
-	47, // 9: sam.v1.ServiceAnnounce.labels:type_name -> sam.v1.ServiceAnnounce.LabelsEntry
+	48, // 9: sam.v1.ServiceAnnounce.labels:type_name -> sam.v1.ServiceAnnounce.LabelsEntry
 	18, // 10: sam.v1.PolicyConfigGetResponse.roles:type_name -> sam.v1.PolicyRole
 	19, // 11: sam.v1.PolicyConfigGetResponse.bindings:type_name -> sam.v1.PolicyBinding
 	18, // 12: sam.v1.PolicyConfigUpdateRequest.roles:type_name -> sam.v1.PolicyRole
 	19, // 13: sam.v1.PolicyConfigUpdateRequest.bindings:type_name -> sam.v1.PolicyBinding
-	29, // 14: sam.v1.AgentEgress.secrets:type_name -> sam.v1.AgentSecret
-	1,  // 15: sam.v1.AgentIngress.type:type_name -> sam.v1.ServiceType
-	30, // 16: sam.v1.AgentBundle.egress:type_name -> sam.v1.AgentEgress
-	31, // 17: sam.v1.AgentBundle.ingress:type_name -> sam.v1.AgentIngress
-	32, // 18: sam.v1.AgentAttachRequest.bundle:type_name -> sam.v1.AgentBundle
-	31, // 19: sam.v1.AgentStatus.ingress:type_name -> sam.v1.AgentIngress
-	40, // 20: sam.v1.AgentStatusResponse.agents:type_name -> sam.v1.AgentStatus
-	48, // 21: sam.v1.PeerEvidenceResponse.labels:type_name -> sam.v1.PeerEvidenceResponse.LabelsEntry
-	22, // [22:22] is the sub-list for method output_type
-	22, // [22:22] is the sub-list for method input_type
-	22, // [22:22] is the sub-list for extension type_name
-	22, // [22:22] is the sub-list for extension extendee
-	0,  // [0:22] is the sub-list for field type_name
+	10, // 14: sam.v1.NodeCatalogReport.services:type_name -> sam.v1.ServiceInfo
+	30, // 15: sam.v1.AgentEgress.secrets:type_name -> sam.v1.AgentSecret
+	1,  // 16: sam.v1.AgentIngress.type:type_name -> sam.v1.ServiceType
+	31, // 17: sam.v1.AgentBundle.egress:type_name -> sam.v1.AgentEgress
+	32, // 18: sam.v1.AgentBundle.ingress:type_name -> sam.v1.AgentIngress
+	33, // 19: sam.v1.AgentAttachRequest.bundle:type_name -> sam.v1.AgentBundle
+	32, // 20: sam.v1.AgentStatus.ingress:type_name -> sam.v1.AgentIngress
+	41, // 21: sam.v1.AgentStatusResponse.agents:type_name -> sam.v1.AgentStatus
+	49, // 22: sam.v1.PeerEvidenceResponse.labels:type_name -> sam.v1.PeerEvidenceResponse.LabelsEntry
+	23, // [23:23] is the sub-list for method output_type
+	23, // [23:23] is the sub-list for method input_type
+	23, // [23:23] is the sub-list for extension type_name
+	23, // [23:23] is the sub-list for extension extendee
+	0,  // [0:23] is the sub-list for field type_name
 }
 
 func init() { file_api_sam_proto_init() }
@@ -3243,7 +3295,7 @@ func file_api_sam_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_api_sam_proto_rawDesc), len(file_api_sam_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   46,
+			NumMessages:   47,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

@@ -18,7 +18,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/base64"
-	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -228,8 +228,8 @@ func TestReportNodeCatalog(t *testing.T) {
 		{Type: api.ServiceType_SERVICE_TYPE_MCP, Name: "stvv-compliance-docs", Description: "doc lookup"},
 	}
 
-	var gotAuth string
-	var gotReq nodeCatalogRequest
+	var gotAuth, gotContentType string
+	var gotReq api.NodeCatalogReport
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			t.Errorf("Expected POST, got %s", r.Method)
@@ -238,7 +238,12 @@ func TestReportNodeCatalog(t *testing.T) {
 			t.Errorf("Expected path /nodes/catalog, got %s", r.URL.Path)
 		}
 		gotAuth = r.Header.Get("Authorization")
-		if err := json.NewDecoder(r.Body).Decode(&gotReq); err != nil {
+		gotContentType = r.Header.Get("Content-Type")
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("failed to read request body: %v", err)
+		}
+		if err := proto.Unmarshal(body, &gotReq); err != nil {
 			t.Errorf("failed to decode request body: %v", err)
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -254,7 +259,10 @@ func TestReportNodeCatalog(t *testing.T) {
 	if gotAuth != wantAuth {
 		t.Errorf("Expected Authorization header %q, got %q", wantAuth, gotAuth)
 	}
-	if len(gotReq.Services) != 1 || gotReq.Services[0].Name != "stvv-compliance-docs" {
+	if gotContentType != "application/x-protobuf" {
+		t.Errorf("Expected Content-Type application/x-protobuf, got %q", gotContentType)
+	}
+	if len(gotReq.Services) != 1 || gotReq.Services[0].Name != "stvv-compliance-docs" || gotReq.Services[0].Type != api.ServiceType_SERVICE_TYPE_MCP {
 		t.Errorf("Expected relayed services %v, got %v", services, gotReq.Services)
 	}
 }

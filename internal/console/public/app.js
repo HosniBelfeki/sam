@@ -387,11 +387,9 @@ function renderNodesTable(nodes) {
     `).join('');
 }
 
-// Service type is a protobuf enum (SERVICE_TYPE_MCP = 1, SERVICE_TYPE_INFERENCE = 2,
-// SERVICE_TYPE_A2A = 3); plain encoding/json on the Go side emits the bare
-// int, not the enum name, and omits it entirely (omitempty) if it's ever 0.
-const SERVICE_TYPE_NAMES = { 1: 'mcp', 2: 'inference', 3: 'a2a' };
-
+// node_catalog is {peerID: {services: [{name, type, description}], reported_at}},
+// already restricted server-side to nodes that are still admitted; type is
+// the short name ("mcp", "inference", "a2a") rendered by the control plane.
 function renderServicesTable(nodeCatalog, labelsByPeer) {
     const tbody = document.getElementById('table-services');
     const peerIDs = Object.keys(nodeCatalog || {});
@@ -414,7 +412,7 @@ function renderServicesTable(nodeCatalog, labelsByPeer) {
     tbody.innerHTML = rows.map(({ peerID, reportedAt, svc }) => `
         <tr>
             <td>${escapeHTML(svc.name || '')}</td>
-            <td>${escapeHTML(SERVICE_TYPE_NAMES[svc.type] || 'unknown')}</td>
+            <td>${escapeHTML(svc.type || 'unknown')}</td>
             <td>${escapeHTML(svc.description || '')}</td>
             <td>${peerCell(peerID, (labelsByPeer || {})[peerID])}</td>
             <td>${reportedAt ? escapeHTML(new Date(reportedAt).toLocaleString()) : '-'}</td>

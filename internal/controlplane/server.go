@@ -2186,6 +2186,7 @@ func (s *Server) banNode(ctx context.Context, node *storage.EnrolledNode) error 
 	if err := s.store.SetNodeBanned(ctx, node.PeerID, true); err != nil {
 		return err
 	}
+	s.dropCatalogEntry(node.PeerID)
 	if node.ClaimsJSON == "" {
 		return nil
 	}

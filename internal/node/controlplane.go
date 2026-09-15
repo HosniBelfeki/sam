@@ -19,7 +19,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -253,14 +252,6 @@ func FetchMeshPolicy(ctx context.Context, controlPlaneURL string, biscuitToken [
 	return &policyResp, nil
 }
 
-// nodeCatalogRequest mirrors internal/controlplane/catalog.go's request
-// body - kept as a plain JSON struct here rather than a shared package
-// import, matching how this file already treats /policies as a boundary
-// between the two components.
-type nodeCatalogRequest struct {
-	Services []*api.ServiceInfo `json:"services"`
-}
-
 // ReportNodeCatalog self-reports this node's locally registered services to
 // the control plane's /nodes/catalog endpoint, so an admin can see mesh-wide
 // service topology (see catalog.go's HandleNodeCatalog for why this exists
@@ -271,7 +262,7 @@ func ReportNodeCatalog(ctx context.Context, controlPlaneURL string, biscuitToken
 	}
 	controlPlaneURL = strings.TrimSuffix(controlPlaneURL, "/")
 
-	payload, err := json.Marshal(nodeCatalogRequest{Services: services})
+	payload, err := proto.Marshal(&api.NodeCatalogReport{Services: services})
 	if err != nil {
 		return fmt.Errorf("failed to encode catalog report: %w", err)
 	}
@@ -281,7 +272,7 @@ func ReportNodeCatalog(ctx context.Context, controlPlaneURL string, biscuitToken
 	if err != nil {
 		return fmt.Errorf("failed to create HTTP request: %w", err)
 	}
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Type", "application/x-protobuf")
 	req.Header.Set("Authorization", "Bearer "+base64.StdEncoding.EncodeToString(biscuitToken))
 
 	client := &http.Client{Timeout: 10 * time.Second}
