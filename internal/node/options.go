@@ -92,6 +92,10 @@ type Options struct {
 	// without the control plane needing DHT/P2P access to every node
 	// itself. Zero uses the default.
 	CatalogReportInterval time.Duration
+	// CatalogReportInitialDelay is how long after Start the first catalog
+	// report is sent, so services configured at startup have registered by
+	// then. Zero uses the default.
+	CatalogReportInitialDelay time.Duration
 }
 
 // Default applies default values to Options if they are not specified.
@@ -142,8 +146,11 @@ func (o *Options) Default() {
 	if o.PolicySyncInterval == 0 {
 		o.PolicySyncInterval = 1 * time.Hour
 	}
-	if o.CatalogReportInterval == 0 {
+	if o.CatalogReportInterval <= 0 {
 		o.CatalogReportInterval = 1 * time.Minute
+	}
+	if o.CatalogReportInitialDelay <= 0 {
+		o.CatalogReportInitialDelay = 5 * time.Second
 	}
 	if o.PolicySyncJitter <= 0 {
 		o.PolicySyncJitter = 10 * time.Second

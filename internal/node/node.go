@@ -633,7 +633,7 @@ func (n *SamNode) Start(ctx context.Context) error {
 
 	// Periodically self-report local services to the control plane, so an
 	// admin can see mesh-wide service topology.
-	n.startCatalogReportLoop(ctx, n.config.CatalogReportInterval)
+	n.startCatalogReportLoop(ctx, n.config.CatalogReportInitialDelay, n.config.CatalogReportInterval)
 
 	return nil
 }
@@ -2233,34 +2233,46 @@ func (n *SamNode) reportNodeCatalog(ctx context.Context) error {
 	return nil
 }
 
-func (n *SamNode) startCatalogReportLoop(ctx context.Context, interval time.Duration) {
+// startCatalogReportLoop reports the local catalog once after initialDelay
+// and then every interval, each wait stretched by up to a tenth of interval
+// so a fleet started together does not hit the control plane in lockstep.
+// A failure is logged at Warn once and at Debug while it persists: the
+// usual causes (control plane unreachable, path not routed) do not change
+// from one tick to the next.
+func (n *SamNode) startCatalogReportLoop(ctx context.Context, initialDelay, interval time.Duration) {
 	if interval <= 0 {
 		interval = 1 * time.Minute
 	}
+	if initialDelay <= 0 {
+		initialDelay = 5 * time.Second
+	}
 
 	go func() {
-		// Run an initial report after a short delay, once services have had
-		// a chance to register at startup.
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(5 * time.Second):
-			if err := n.reportNodeCatalog(ctx); err != nil {
-				logger.Warnf("Initial node catalog report failed: %v", err)
-			}
-		}
-
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-
+		wait := initialDelay
+		failures := 0
 		for {
+			timer := time.NewTimer(wait + time.Duration(rand.Int63n(int64(interval/10)+1)))
 			select {
 			case <-ctx.Done():
+				timer.Stop()
 				return
-			case <-ticker.C:
-				if err := n.reportNodeCatalog(ctx); err != nil {
-					logger.Warnf("Periodic node catalog report failed: %v", err)
-				}
+			case <-timer.C:
+			}
+			wait = interval
+
+			err := n.reportNodeCatalog(ctx)
+			switch {
+			case err != nil && failures == 0:
+				logger.Warnf("Node catalog report failed: %v", err)
+			case err != nil:
+				logger.Debugf("Node catalog report still failing (%d consecutive): %v", failures+1, err)
+			case failures > 0:
+				logger.Infof("Node catalog report recovered after %d failures", failures)
+			}
+			if err != nil {
+				failures++
+			} else {
+				failures = 0
 			}
 		}
 	}()

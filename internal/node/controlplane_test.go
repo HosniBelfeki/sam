@@ -281,3 +281,102 @@ func TestReportNodeCatalog_HTTPError(t *testing.T) {
 		t.Errorf("Expected error to mention status 401, got %v", err)
 	}
 }
+
+// newCatalogTestNode is a SamNode with just enough state for the catalog
+// loop: a store holding the control-plane URL, a cached identity, and a
+// registry with one service.
+func newCatalogTestNode(t *testing.T, controlPlaneURL string) *SamNode {
+	t.Helper()
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	if controlPlaneURL != "" {
+		if err := store.SaveControlPlaneURL(controlPlaneURL); err != nil {
+			t.Fatalf("SaveControlPlaneURL: %v", err)
+		}
+	}
+	node := &SamNode{Store: store, services: newServiceRegistryForTest(&fakeDHT{})}
+	node.services.insertService(newFakeSvc("calc", api.ServiceType_SERVICE_TYPE_MCP))
+	return node
+}
+
+func TestReportNodeCatalog_Preconditions(t *testing.T) {
+	noURL := newCatalogTestNode(t, "")
+	noURL.SetIdentityCache([]byte("biscuit"))
+	if err := noURL.reportNodeCatalog(context.Background()); err == nil || !strings.Contains(err.Error(), "control plane URL") {
+		t.Errorf("without a control-plane URL: got %v, want a URL error", err)
+	}
+
+	noIdentity := newCatalogTestNode(t, "http://127.0.0.1:1")
+	if err := noIdentity.reportNodeCatalog(context.Background()); err == nil || !strings.Contains(err.Error(), "identity") {
+		t.Errorf("without an identity: got %v, want an identity error", err)
+	}
+}
+
+// The loop must report once after the initial delay and then keep reporting
+// every interval, carrying the live service list each time.
+func TestStartCatalogReportLoop(t *testing.T) {
+	reports := make(chan *api.NodeCatalogReport, 16)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/nodes/catalog" || r.Method != http.MethodPost {
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		body, _ := io.ReadAll(r.Body)
+		var report api.NodeCatalogReport
+		if err := proto.Unmarshal(body, &report); err != nil {
+			t.Errorf("decode report: %v", err)
+		}
+		reports <- &report
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	node := newCatalogTestNode(t, server.URL)
+	node.SetIdentityCache([]byte("biscuit"))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	node.startCatalogReportLoop(ctx, 10*time.Millisecond, 20*time.Millisecond)
+
+	for i := 0; i < 3; i++ {
+		select {
+		case report := <-reports:
+			if len(report.Services) != 1 || report.Services[0].Name != "calc" {
+				t.Fatalf("report %d: got services %v, want [calc]", i, report.Services)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("timed out waiting for report %d", i)
+		}
+	}
+
+	// Cancelling stops the loop: no report after the in-flight one settles.
+	cancel()
+	time.Sleep(100 * time.Millisecond)
+	for len(reports) > 0 {
+		<-reports
+	}
+	select {
+	case <-reports:
+		t.Fatal("loop kept reporting after context cancellation")
+	case <-time.After(150 * time.Millisecond):
+	}
+}
+
+func TestOptionsDefault_CatalogReport(t *testing.T) {
+	var o Options
+	o.Default()
+	if o.CatalogReportInterval != time.Minute {
+		t.Errorf("CatalogReportInterval = %v, want 1m", o.CatalogReportInterval)
+	}
+	if o.CatalogReportInitialDelay != 5*time.Second {
+		t.Errorf("CatalogReportInitialDelay = %v, want 5s", o.CatalogReportInitialDelay)
+	}
+
+	custom := Options{CatalogReportInterval: 3 * time.Second, CatalogReportInitialDelay: time.Second}
+	custom.Default()
+	if custom.CatalogReportInterval != 3*time.Second || custom.CatalogReportInitialDelay != time.Second {
+		t.Errorf("Default overwrote explicit values: %+v", custom)
+	}
+}
