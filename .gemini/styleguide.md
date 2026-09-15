@@ -76,10 +76,23 @@ Pubsub and libp2p callbacks already hand over a `peer.ID`
 
 ### Tests
 
-A change that fixes or touches peer-ID keying must include a regression test
-that feeds the alternative encoding, obtained with
-`peer.ToCid(id).String()`, and asserts the lookup still hits under
-`id.String()`. Ask for it if it is missing.
+A change that fixes a bug MUST have a regression test.
+Tests MUST NOT shallow errors, those need to be handled and fail the test.
+Any new feature or codepath MUST have the corresponding testing coverage.
+
+Tests must follow the pyramid of testing. Enforce strict modularity in testing. The repository uses a defined testing pyramid (Unit, Integration, and E2E via Bats). You must adhere to the following testing philosophy:
+
+- Optimize for Test Speed: E2E tests are slow and strictly based on existing Critical User Journeys (CUJs).
+- Push Coverage Down: If test coverage for a specific edge case or feature can be added at a lower level (Unit or Integration), it is strictly preferred over E2E for speed.
+- No Redundancy: Do not replicate a test in the slower E2E path if it is already sufficiently covered in the Integration path.
+
+Test Domains:
+- Unit Tests: Focus on isolated, internal functions.
+- Integration Tests (tests/integration/): Verify module interactions and API compliance in Go and those are time bounded, no more than 10 seconds per execution.
+- E2E Tests (tests/e2e/*.bats): Use Bats (Bash Automated Testing System) exclusively for high-level, black-box testing of core CUJs.
+
+
+Ask for tests if they are missing.
 
 ## 2. Time units must be explicit and consistent
 
