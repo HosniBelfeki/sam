@@ -37,6 +37,7 @@ import (
 
 	"github.com/google/sam/api"
 	"github.com/google/sam/internal/identity"
+	"github.com/google/sam/internal/ratelimit"
 	golog "github.com/ipfs/go-log/v2"
 	"github.com/libp2p/go-libp2p"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
@@ -111,6 +112,9 @@ type Router struct {
 	EventTopic         *pubsub.Topic
 	authenticatedPeers sync.Map
 	bannedPeers        sync.Map
+	// handshakeLimiter bounds /sam/auth attempts per peer; any internet peer
+	// can open those streams.
+	handshakeLimiter *ratelimit.PeerRateLimiter
 
 	// Keys & Identity
 	biscuitToken      []byte
@@ -137,10 +141,17 @@ func NewRouter(ctx context.Context, config Options) (*Router, error) {
 
 	ctx, cancel := context.WithCancel(ctx)
 
+	handshakeLimiter, err := ratelimit.NewPeerRateLimiter(handshakeLimiterSize)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("failed to create handshake rate limiter: %w", err)
+	}
+
 	return &Router{
-		config: config,
-		ctx:    ctx,
-		cancel: cancel,
+		config:           config,
+		ctx:              ctx,
+		cancel:           cancel,
+		handshakeLimiter: handshakeLimiter,
 	}, nil
 }
 
@@ -1058,6 +1069,15 @@ func recoverStreamHandler(name string, next network.StreamHandler) network.Strea
 	}
 }
 
+// authHandshakeTimeout bounds how long an unauthenticated peer may hold a
+// /sam/auth stream: it has to send its frame and read the reply within it.
+// A var so tests can shorten it.
+var authHandshakeTimeout = 10 * time.Second
+
+// handshakeLimiterSize is how many distinct peers' handshake budgets are
+// tracked at once (LRU beyond that).
+const handshakeLimiterSize = 4096
+
 // HandleAuthHandshake processes incoming auth connections.
 // It is part of mutual auth:
 // 1. Receives client's Biscuit.
@@ -1071,6 +1091,15 @@ func (r *Router) HandleAuthHandshake(s network.Stream) {
 		logger.Warnf("[AuthN] Rejecting authentication for banned peer %s", remotePeer)
 		_ = s.Reset()
 		return
+	}
+
+	if r.handshakeLimiter != nil && !r.handshakeLimiter.Allow(remotePeer.String()) {
+		logger.Warnf("[AuthN] Handshake rate limit exceeded for %s", remotePeer)
+		_ = s.Reset()
+		return
+	}
+	if err := s.SetDeadline(time.Now().Add(authHandshakeTimeout)); err != nil {
+		logger.Debugf("[AuthN] Failed to set handshake deadline for %s: %v", remotePeer, err)
 	}
 
 	reader := msgio.NewVarintReaderSize(s, 1024*64)

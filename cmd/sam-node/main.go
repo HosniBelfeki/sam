@@ -622,8 +622,6 @@ func main() {
 			// Start renewal loop
 			meshNode.StartRenewalLoop(ctx, oidcIssuerFlag, clientIDFlag, clientSecretFlag, jwtPathFlag)
 
-			meshNode.Host.SetStreamHandler(api.AuthProtocolID, meshNode.HandleAuthHandshake)
-
 			// Start Sidecar API Server (multiplexed with MCP)
 			sidecarSrv, err := node.StartSidecarServer(meshNode, bindAddrFlag, resolveSocketPath(cmd), apiTokenFlag, tlsCertFlag, tlsKeyFlag, tlsCAFlag)
 			if err != nil {

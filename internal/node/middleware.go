@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"runtime/debug"
 	"sync/atomic"
+	"time"
 
 	"github.com/biscuit-auth/biscuit-go/v2"
 	"github.com/google/sam/api"
@@ -113,6 +114,12 @@ func (n *SamNode) WithBiscuitAuth(next func(network.Stream, RequestContext)) net
 			return
 		}
 
+		// The peer is not authorized yet: it gets the handshake budget to
+		// produce its frame, not an open-ended hold on this goroutine.
+		if err := ts.SetReadDeadline(time.Now().Add(authHandshakeTimeout)); err != nil {
+			logger.Debugf("[Auth] Failed to set auth frame deadline for %s: %v", remotePeer, err)
+		}
+
 		// Read AuthFrame
 		reader := msgio.NewVarintReaderSize(ts, 1024*64)
 		msg, err := reader.ReadMsg()
@@ -155,6 +162,12 @@ func (n *SamNode) WithBiscuitAuth(next func(network.Stream, RequestContext)) net
 		if err := writer.WriteMsg(respBytes); err != nil {
 			logger.Errorf("[Auth] Failed to write ACK to %s: %v", remotePeer, err)
 			return
+		}
+
+		// Authorized: the session itself is long-lived, so the pre-auth
+		// deadline comes off.
+		if err := ts.SetReadDeadline(time.Time{}); err != nil {
+			logger.Debugf("[Auth] Failed to clear auth frame deadline for %s: %v", remotePeer, err)
 		}
 
 		next(ts, reqCtx)
@@ -203,7 +216,7 @@ func (n *SamNode) Authorize(rawToken []byte, req RequestContext, pubKey ed25519.
 	if len(pubKey) != ed25519.PublicKeySize {
 		return fmt.Errorf("invalid public key size: %d", len(pubKey))
 	}
-	b, err := biscuit.Unmarshal(rawToken)
+	b, err := identity.UnmarshalInbound(rawToken)
 	if err != nil {
 		return fmt.Errorf("invalid biscuit: %w", err)
 	}

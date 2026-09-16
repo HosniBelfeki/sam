@@ -39,6 +39,7 @@ import (
 	"github.com/google/sam/api"
 	"github.com/google/sam/internal/identity"
 	samdiscovery "github.com/google/sam/internal/node/discovery"
+	"github.com/google/sam/internal/ratelimit"
 	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/ipfs/go-cid"
 	golog "github.com/ipfs/go-log/v2"
@@ -160,11 +161,15 @@ type SamNode struct {
 	keysMu               sync.RWMutex
 	MeshPolicyRules      []biscuit.Rule
 	MeshPolicyMu         sync.RWMutex
-	rateLimiter          *PeerRateLimiter
-	services             *ServiceRegistry
-	BoundHTTPAddr        string
-	BoundSocketPath      string
-	AllowLoopback        bool
+	rateLimiter          *ratelimit.PeerRateLimiter
+	// handshakeLimiter bounds /sam/auth attempts per peer separately from
+	// rateLimiter, so a peer's authenticated traffic cannot starve its own
+	// re-authentication and vice versa.
+	handshakeLimiter *ratelimit.PeerRateLimiter
+	services         *ServiceRegistry
+	BoundHTTPAddr    string
+	BoundSocketPath  string
+	AllowLoopback    bool
 
 	authSuccess      chan struct{}
 	authOnce         sync.Once
@@ -291,9 +296,13 @@ func NewSamNode(cfg Options) (*SamNode, error) {
 	}
 
 	var err error
-	node.rateLimiter, err = NewPeerRateLimiter(RateLimiterSize)
+	node.rateLimiter, err = ratelimit.NewPeerRateLimiter(RateLimiterSize)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create rate limiter: %w", err)
+	}
+	node.handshakeLimiter, err = ratelimit.NewPeerRateLimiter(RateLimiterSize)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create handshake rate limiter: %w", err)
 	}
 	node.revokedPeers, err = lru.New[string, int64](RevocationCacheSize)
 	if err != nil {
@@ -1547,6 +1556,13 @@ func (n *SamNode) getTrustedPublicKeys() []ed25519.PublicKey {
 	return keys
 }
 
+// authHandshakeTimeout bounds how long an unauthenticated peer may hold a
+// /sam/auth stream open: it has to send its frame and read the reply within
+// it. Any internet peer can open these streams, so without a deadline each
+// one is a goroutine held for as long as the peer likes. A var so tests can
+// shorten it.
+var authHandshakeTimeout = 10 * time.Second
+
 // HandleAuthHandshake is the core libp2p stream handler for /sam/auth/1.0.0.
 // This is the "Admission Office" of the mesh node.
 func (n *SamNode) HandleAuthHandshake(s network.Stream) {
@@ -1562,6 +1578,15 @@ func (n *SamNode) HandleAuthHandshake(s network.Stream) {
 			logger.Warnf("[AuthN] Peer %s is revoked", remotePeer)
 			return
 		}
+	}
+
+	if n.handshakeLimiter != nil && !n.handshakeLimiter.Allow(remotePeer.String()) {
+		logger.Warnf("[AuthN] Handshake rate limit exceeded for %s", remotePeer)
+		_ = s.Reset()
+		return
+	}
+	if err := s.SetDeadline(time.Now().Add(authHandshakeTimeout)); err != nil {
+		logger.Debugf("[AuthN] Failed to set handshake deadline for %s: %v", remotePeer, err)
 	}
 
 	reader := msgio.NewVarintReaderSize(s, 1024*64)

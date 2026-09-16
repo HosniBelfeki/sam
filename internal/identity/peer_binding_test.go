@@ -17,6 +17,7 @@ package identity
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"errors"
 	"testing"
 	"time"
 
@@ -127,10 +128,13 @@ func TestPeerBindingRejectsAppendedBlock(t *testing.T) {
 	if _, err := VerifyBiscuit(forged, attacker, keys, time.Second); err == nil {
 		t.Error("VerifyBiscuit admitted a token re-bound by an appended block")
 	}
-	// Attenuation must stay usable for the peer the authority block names,
-	// otherwise this fix would break delegation instead of the bypass.
-	if _, err := VerifyBiscuit(forged, victim, keys, time.Second); err != nil {
-		t.Errorf("VerifyBiscuit rejected an attenuated token held by its real owner: %v", err)
+	// Nor is the token accepted from its real owner: appended blocks are the
+	// one place a holder can put Datalog of their own, and even a check there
+	// is a rule biscuit-go runs to completion with no deadline, so SAM does
+	// not evaluate any (ErrAppendedBlocks). RequireAuthorityBinding above is
+	// the defence in depth behind that gate.
+	if _, err := VerifyBiscuit(forged, victim, keys, time.Second); !errors.Is(err, ErrAppendedBlocks) {
+		t.Errorf("VerifyBiscuit on an attenuated token: err = %v, want ErrAppendedBlocks", err)
 	}
 }
 
