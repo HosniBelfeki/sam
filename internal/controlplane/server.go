@@ -61,6 +61,12 @@ const (
 	// maxRequestBodyBytes caps request bodies read into memory to guard
 	// against memory-exhaustion from oversized payloads.
 	maxRequestBodyBytes = 1 << 20 // 1 MiB
+
+	// adminNodeActionAutonomousRecovery is the action segment of
+	// POST /admin/nodes/{peer_id}/autonomous-recovery, the per-node toggle
+	// for storage.EnrolledNode.AutonomousRecovery. Admin-console only: the
+	// node-facing side of #367 is TokenRefreshRequest.peer_id in sam.proto.
+	adminNodeActionAutonomousRecovery = "autonomous-recovery"
 )
 
 // Server implements the SAM Control Plane web app.
@@ -217,6 +223,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/admin/bootstrap-tokens/", s.HandleAdminBootstrapTokenAction)
 	mux.HandleFunc("/admin/enrollments", s.HandleAdminEnrollments)
 	mux.HandleFunc("/admin/enrollments/", s.HandleAdminEnrollmentAction)
+	mux.HandleFunc("/admin/nodes/", s.HandleAdminNodeAction)
 	mux.HandleFunc("/admin/revoke", s.HandleAdminRevoke)
 	mux.HandleFunc("/admin/status", s.HandleAdminStatus)
 	mux.HandleFunc("/user/status", s.HandleUserStatus)
@@ -707,19 +714,52 @@ func (s *Server) HandleRefresh(w http.ResponseWriter, r *http.Request) {
 	// Verify current biscuit signature and extract peer ID. Expiry is not
 	// enforced here: a node refreshes because its token lapsed. The session
 	// record and the signed challenge below are what bound this request.
-	pID, err := identity.VerifyExpiredAndExtractPeerID(trustedKeys, currentBiscuitBytes, s.config.BiscuitTimeout)
-	if err != nil {
-		logger.Warnw("Invalid biscuit presented for refresh", "error", err)
-		http.Error(w, "Invalid biscuit: "+err.Error(), http.StatusUnauthorized)
-		return
+	pID, verifyErr := identity.VerifyExpiredAndExtractPeerID(trustedKeys, currentBiscuitBytes, s.config.BiscuitTimeout)
+	// recovering marks the retired-key fallback (#367): the biscuit cannot be
+	// verified, most likely because its signing key rotated out past grace
+	// while the node was offline. The peer is then taken from the body and
+	// the biscuit is authenticated below by byte-matching the last one this
+	// control plane issued to that peer, which only the control plane and the
+	// peer ever held.
+	recovering := false
+	if verifyErr != nil {
+		if req.PeerId == "" {
+			logger.Warnw("Invalid biscuit presented for refresh", "error", verifyErr)
+			http.Error(w, "Invalid biscuit: "+verifyErr.Error(), http.StatusUnauthorized)
+			return
+		}
+		claimed, err := peer.Decode(req.PeerId)
+		if err != nil {
+			http.Error(w, "Invalid Peer ID", http.StatusBadRequest)
+			return
+		}
+		pID = claimed
+		recovering = true
+	} else if req.PeerId != "" {
+		if claimed, err := peer.Decode(req.PeerId); err != nil || claimed != pID {
+			logger.Warnw("Refresh peer_id does not match the presented biscuit", "peer_id", req.PeerId)
+			http.Error(w, "peer_id does not match the presented biscuit", http.StatusUnauthorized)
+			return
+		}
 	}
 	canonical := pID.String()
+
+	// Until the byte-match and challenge below succeed, a recovering caller
+	// has proven nothing, so every refusal short of the ban check must read
+	// exactly like the plain bad-biscuit one above: the fallback must not
+	// become an oracle for which peer IDs are enrolled.
+	unauthorized := func(msg string) {
+		if recovering {
+			msg = "Invalid biscuit: " + verifyErr.Error()
+		}
+		http.Error(w, msg, http.StatusUnauthorized)
+	}
 
 	// Fetch node record
 	nodeRecord, err := s.store.GetNode(ctx, canonical)
 	if err == storage.ErrNotFound {
 		logger.Warnw("Node not found for refresh", "peer_id", canonical)
-		http.Error(w, "Node not enrolled", http.StatusUnauthorized)
+		unauthorized("Node not enrolled")
 		return
 	} else if err != nil {
 		logger.Errorf("Failed to retrieve node record: %v", err)
@@ -734,7 +774,7 @@ func (s *Server) HandleRefresh(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		logger.Warnw("Session expired for node", "peer_id", canonical, "expires_at", nodeRecord.ExpiresAt)
-		http.Error(w, "Session expired, please re-enroll interactively", http.StatusUnauthorized)
+		unauthorized("Session expired, please re-enroll interactively")
 		return
 	}
 
@@ -748,18 +788,35 @@ func (s *Server) HandleRefresh(w http.ResponseWriter, r *http.Request) {
 
 	if err := verifyFreshChallenge(pubKey, api.RefreshChallenge(canonical, req.Timestamp), req.Timestamp, req.ChallengeSignature); err != nil {
 		logger.Warnw("Refresh challenge verification failed", "peer_id", canonical, "error", err)
-		http.Error(w, "Challenge verification failed: "+err.Error(), http.StatusUnauthorized)
+		unauthorized("Challenge verification failed: " + err.Error())
 		return
 	}
 
 	// Rotation with reuse detection: every issuance path persists the latest
 	// biscuit, so only that one token is redeemable. A replayed refresh
 	// presents an already-rotated biscuit and is refused; a node that lost the
-	// rotated token recovers through its re-enrollment fallback.
+	// rotated token recovers through its re-enrollment fallback. In the
+	// retired-key fallback this is also what authenticates the biscuit at
+	// all, standing in for the signature that could not be checked.
 	if subtle.ConstantTimeCompare(currentBiscuitBytes, nodeRecord.Biscuit) != 1 {
 		logger.Warnw("Refresh presented an already-rotated biscuit (possible replay)", "peer_id", nodeRecord.PeerID)
-		http.Error(w, "Biscuit already rotated: only the latest issued token can be refreshed, re-enroll instead", http.StatusUnauthorized)
+		unauthorized("Biscuit already rotated: only the latest issued token can be refreshed, re-enroll instead")
 		return
+	}
+
+	// The caller has now proven it holds both the node key and the last
+	// issued biscuit. Whether that is enough to survive the retired signing
+	// key is the operator's call: off by default, because a node that can
+	// always come back on its own private key holds a credential that never
+	// expires, and the key grace period is what otherwise puts a deadline on
+	// a stolen or forgotten machine.
+	if recovering {
+		if !nodeRecord.AutonomousRecovery {
+			logger.Warnw("Refused retired-key refresh: node is not opted in to autonomous recovery", "peer_id", canonical, "error", verifyErr)
+			http.Error(w, "Biscuit signing key has been retired and this node is not opted in to autonomous recovery: re-enroll with a new bootstrap token", http.StatusUnauthorized)
+			return
+		}
+		logger.Infow("Autonomous recovery: re-issuing a biscuit whose signing key was retired", "peer_id", canonical, "error", verifyErr)
 	}
 
 	// Fetch current signing private key and policy config
@@ -1400,15 +1457,16 @@ func (s *Server) HandleEnroll(w http.ResponseWriter, r *http.Request) {
 		}
 
 		nodeRecord := &storage.EnrolledNode{
-			PeerID:         canonical,
-			PublicKey:      req.PublicKey,
-			Biscuit:        biscuitBytes,
-			Role:           tokenRecord.Role,
-			OwnerID:        tokenRecord.OwnerID,
-			EnrollmentType: "BOOTSTRAP",
-			Labels:         req.Labels,
-			EnrolledAt:     time.Now(),
-			ExpiresAt:      time.Time{},
+			PeerID:             canonical,
+			PublicKey:          req.PublicKey,
+			Biscuit:            biscuitBytes,
+			Role:               tokenRecord.Role,
+			OwnerID:            tokenRecord.OwnerID,
+			EnrollmentType:     "BOOTSTRAP",
+			Labels:             req.Labels,
+			EnrolledAt:         time.Now(),
+			ExpiresAt:          time.Time{},
+			AutonomousRecovery: tokenRecord.AutonomousRecovery,
 		}
 		if err := s.store.EnrollNode(ctx, nodeRecord); err != nil {
 			logger.Errorf("Failed to enroll active bootstrap node: %v", err)
@@ -1660,6 +1718,9 @@ func (s *Server) HandleAdminBootstrapTokens(w http.ResponseWriter, r *http.Reque
 		TTLHours    int    `json:"ttl_hours"`
 		MaxUsages   int    `json:"max_usages"`
 		Description string `json:"description"`
+		// Copied onto every node this token enrolls; see
+		// storage.EnrolledNode.AutonomousRecovery.
+		AutonomousRecovery bool `json:"autonomous_recovery"`
 	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
@@ -1688,14 +1749,15 @@ func (s *Server) HandleAdminBootstrapTokens(w http.ResponseWriter, r *http.Reque
 	tokenID := fmt.Sprintf("%x", sha256.Sum256([]byte(tokenVal)))
 
 	tokenRecord := &storage.BootstrapToken{
-		ID:          tokenID,
-		TokenHash:   tokenID,
-		Role:        req.Role,
-		MaxUsages:   req.MaxUsages,
-		UsagesCount: 0,
-		Description: req.Description,
-		CreatedAt:   time.Now(),
-		ExpiresAt:   time.Now().Add(time.Duration(req.TTLHours) * time.Hour),
+		ID:                 tokenID,
+		TokenHash:          tokenID,
+		Role:               req.Role,
+		MaxUsages:          req.MaxUsages,
+		UsagesCount:        0,
+		Description:        req.Description,
+		CreatedAt:          time.Now(),
+		ExpiresAt:          time.Now().Add(time.Duration(req.TTLHours) * time.Hour),
+		AutonomousRecovery: req.AutonomousRecovery,
 	}
 
 	if err := s.store.SaveBootstrapToken(r.Context(), tokenRecord); err != nil {
@@ -1880,15 +1942,16 @@ func (s *Server) HandleAdminEnrollmentAction(w http.ResponseWriter, r *http.Requ
 		}
 
 		nodeRecord := &storage.EnrolledNode{
-			PeerID:         canonical,
-			PublicKey:      enrollReq.PublicKey,
-			Biscuit:        biscuitBytes,
-			Role:           tokenRecord.Role,
-			OwnerID:        tokenRecord.OwnerID,
-			EnrollmentType: "BOOTSTRAP",
-			Labels:         enrollReq.Labels,
-			EnrolledAt:     time.Now(),
-			ExpiresAt:      time.Time{},
+			PeerID:             canonical,
+			PublicKey:          enrollReq.PublicKey,
+			Biscuit:            biscuitBytes,
+			Role:               tokenRecord.Role,
+			OwnerID:            tokenRecord.OwnerID,
+			EnrollmentType:     "BOOTSTRAP",
+			Labels:             enrollReq.Labels,
+			EnrolledAt:         time.Now(),
+			ExpiresAt:          time.Time{},
+			AutonomousRecovery: tokenRecord.AutonomousRecovery,
 		}
 		if err := s.store.EnrollNode(ctx, nodeRecord); err != nil {
 			logger.Errorf("Failed to enroll active bootstrap node: %v", err)
@@ -1906,6 +1969,55 @@ func (s *Server) HandleAdminEnrollmentAction(w http.ResponseWriter, r *http.Requ
 	}
 
 	http.Error(w, "Invalid action", http.StatusBadRequest)
+}
+
+// HandleAdminNodeAction HTTP POST `/admin/nodes/{peer_id}/autonomous-recovery`
+// with body {"enabled": bool} toggles storage.EnrolledNode.AutonomousRecovery
+// for one enrolled node. This is the per-node counterpart of the flag on a
+// bootstrap token, for a node that is already enrolled.
+func (s *Server) HandleAdminNodeAction(w http.ResponseWriter, r *http.Request) {
+	if !s.checkAdminAuth(w, r) {
+		return
+	}
+
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/admin/nodes/"), "/")
+	if len(parts) != 2 || parts[1] != adminNodeActionAutonomousRecovery {
+		http.Error(w, "Not found", http.StatusNotFound)
+		return
+	}
+	pID, err := peer.Decode(parts[0])
+	if err != nil {
+		http.Error(w, "Invalid Peer ID", http.StatusBadRequest)
+		return
+	}
+
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	defer func() { _ = r.Body.Close() }()
+
+	canonical := pID.String()
+	err = s.store.SetNodeAutonomousRecovery(r.Context(), canonical, req.Enabled)
+	if err == storage.ErrNotFound {
+		http.Error(w, "Node not found", http.StatusNotFound)
+		return
+	} else if err != nil {
+		logger.Errorf("Failed to set autonomous recovery for node %s: %v", canonical, err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	logger.Infow("Autonomous recovery toggled", "peer_id", canonical, "enabled", req.Enabled)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // HandleAdminRevoke HTTP POST `/admin/revoke`
@@ -2197,6 +2309,10 @@ func (s *Server) HandleUserBootstrapTokens(w http.ResponseWriter, r *http.Reques
 		TTLHours    int    `json:"ttl_hours"`
 		MaxUsages   int    `json:"max_usages"`
 		Description string `json:"description"`
+		// Copied onto every node this token enrolls; see
+		// storage.EnrolledNode.AutonomousRecovery. Admin-only: it decides
+		// whether a lost device can rejoin the mesh on its own.
+		AutonomousRecovery bool `json:"autonomous_recovery"`
 	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
@@ -2212,6 +2328,10 @@ func (s *Server) HandleUserBootstrapTokens(w http.ResponseWriter, r *http.Reques
 
 	if user.Role != "admin" && req.Role != api.RoleNode && req.Role != api.RoleSamBox {
 		http.Error(w, "Forbidden: Standard users can only generate tokens for node or box roles", http.StatusForbidden)
+		return
+	}
+	if user.Role != "admin" && req.AutonomousRecovery {
+		http.Error(w, "Forbidden: only admins can issue tokens with autonomous_recovery", http.StatusForbidden)
 		return
 	}
 
@@ -2237,15 +2357,16 @@ func (s *Server) HandleUserBootstrapTokens(w http.ResponseWriter, r *http.Reques
 	tokenID := fmt.Sprintf("%x", sha256.Sum256([]byte(tokenVal)))
 
 	tokenRecord := &storage.BootstrapToken{
-		ID:          tokenID,
-		TokenHash:   tokenID,
-		Role:        req.Role,
-		OwnerID:     ownerID,
-		MaxUsages:   req.MaxUsages,
-		UsagesCount: 0,
-		Description: req.Description,
-		CreatedAt:   time.Now(),
-		ExpiresAt:   time.Now().Add(time.Duration(req.TTLHours) * time.Hour),
+		ID:                 tokenID,
+		TokenHash:          tokenID,
+		Role:               req.Role,
+		OwnerID:            ownerID,
+		MaxUsages:          req.MaxUsages,
+		UsagesCount:        0,
+		Description:        req.Description,
+		CreatedAt:          time.Now(),
+		ExpiresAt:          time.Now().Add(time.Duration(req.TTLHours) * time.Hour),
+		AutonomousRecovery: req.AutonomousRecovery,
 	}
 
 	if err := s.store.SaveBootstrapToken(r.Context(), tokenRecord); err != nil {
