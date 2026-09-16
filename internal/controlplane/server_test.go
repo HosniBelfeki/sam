@@ -3284,10 +3284,7 @@ func TestAutonomousRecovery(t *testing.T) {
 	// returns status and body.
 	refresh := func(t *testing.T, f *fixture, biscuit []byte) (int, []byte) {
 		t.Helper()
-		resp := postRefresh(t, f.baseURL, f.priv, biscuit, f.pID.String())
-		defer func() { _ = resp.Body.Close() }()
-		body, _ := io.ReadAll(resp.Body)
-		return resp.StatusCode, body
+		return refreshAs(t, f.baseURL, f.priv, biscuit, f.pID.String())
 	}
 
 	setRecovery := func(t *testing.T, f *fixture, peerID string, enabled bool) int {
@@ -3409,17 +3406,13 @@ func TestAutonomousRecovery(t *testing.T) {
 
 		// Garbage bearer, no peer_id: the pre-#367 refusal.
 		garbage := []byte("not-a-biscuit")
-		baseline := postRefresh(t, f.baseURL, f.priv, garbage, "")
-		baselineBody, _ := io.ReadAll(baseline.Body)
-		_ = baseline.Body.Close()
-		if baseline.StatusCode != http.StatusUnauthorized {
-			t.Fatalf("baseline: got %d, want 401", baseline.StatusCode)
+		baselineCode, baselineBody := refreshAs(t, f.baseURL, f.priv, garbage, "")
+		if baselineCode != http.StatusUnauthorized {
+			t.Fatalf("baseline: got %d, want 401", baselineCode)
 		}
 
 		// Garbage bearer with an enrolled peer_id: byte-match fails.
-		enrolledResp := postRefresh(t, f.baseURL, f.priv, garbage, f.pID.String())
-		enrolledBody, _ := io.ReadAll(enrolledResp.Body)
-		_ = enrolledResp.Body.Close()
+		enrolledCode, enrolledBody := refreshAs(t, f.baseURL, f.priv, garbage, f.pID.String())
 
 		// Garbage bearer with a never-enrolled peer_id: record lookup fails.
 		stranger, _, err := crypto.GenerateKeyPair(crypto.Ed25519, -1)
@@ -3430,19 +3423,17 @@ func TestAutonomousRecovery(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		strangerResp := postRefresh(t, f.baseURL, stranger, garbage, strangerID.String())
-		strangerBody, _ := io.ReadAll(strangerResp.Body)
-		_ = strangerResp.Body.Close()
+		strangerCode, strangerBody := refreshAs(t, f.baseURL, stranger, garbage, strangerID.String())
 
 		for name, got := range map[string]struct {
 			code int
 			body []byte
 		}{
-			"enrolled peer": {enrolledResp.StatusCode, enrolledBody},
-			"unknown peer":  {strangerResp.StatusCode, strangerBody},
+			"enrolled peer": {enrolledCode, enrolledBody},
+			"unknown peer":  {strangerCode, strangerBody},
 		} {
-			if got.code != baseline.StatusCode || !bytes.Equal(got.body, baselineBody) {
-				t.Errorf("%s: got %d %q, want the baseline %d %q", name, got.code, got.body, baseline.StatusCode, baselineBody)
+			if got.code != baselineCode || !bytes.Equal(got.body, baselineBody) {
+				t.Errorf("%s: got %d %q, want the baseline %d %q", name, got.code, got.body, baselineCode, baselineBody)
 			}
 		}
 	})
@@ -3506,10 +3497,8 @@ func TestAutonomousRecovery(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		resp := postRefresh(t, f.baseURL, f.priv, f.biscuit, otherID.String())
-		_ = resp.Body.Close()
-		if resp.StatusCode != http.StatusUnauthorized {
-			t.Fatalf("valid biscuit with a foreign peer_id: got %d, want 401", resp.StatusCode)
+		if code, body := refreshAs(t, f.baseURL, f.priv, f.biscuit, otherID.String()); code != http.StatusUnauthorized {
+			t.Fatalf("valid biscuit with a foreign peer_id: got %d %s, want 401", code, body)
 		}
 	})
 

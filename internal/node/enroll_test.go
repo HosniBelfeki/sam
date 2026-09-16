@@ -241,8 +241,14 @@ func TestStartRecoversStaleIdentityViaRefreshToken(t *testing.T) {
 // /refresh with peer_id set, which the control plane honours if the operator
 // opted the node in. The node must send peer_id and adopt the result.
 func TestStartRecoversStaleIdentityViaAutonomousRefresh(t *testing.T) {
-	cpPub, cpPriv, _ := ed25519.GenerateKey(nil)
-	_, stalePriv, _ := ed25519.GenerateKey(nil)
+	cpPub, cpPriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, stalePriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	routerAddr := startMockRouterWithKey(t, cpPriv, api.RoleRouter)
 
@@ -298,7 +304,12 @@ func TestStartRecoversStaleIdentityViaAutonomousRefresh(t *testing.T) {
 			http.Error(w, "bad bearer", http.StatusBadRequest)
 			return
 		}
-		body, _ := io.ReadAll(r.Body)
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read /refresh body: %v", err)
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
 		var req api.TokenRefreshRequest
 		if err := proto.Unmarshal(body, &req); err != nil {
 			http.Error(w, "bad request", http.StatusBadRequest)
@@ -316,12 +327,19 @@ func TestStartRecoversStaleIdentityViaAutonomousRefresh(t *testing.T) {
 			http.Error(w, "Challenge verification failed", http.StatusUnauthorized)
 			return
 		}
-		data, _ := proto.Marshal(&api.TokenRefreshResponse{
+		data, err := proto.Marshal(&api.TokenRefreshResponse{
 			BiscuitToken: mint(cpPriv, req.PeerId),
 			ExpiresAt:    time.Now().Add(24 * time.Hour).Unix(),
 		})
+		if err != nil {
+			t.Errorf("marshal TokenRefreshResponse: %v", err)
+			http.Error(w, "internal", http.StatusInternalServerError)
+			return
+		}
 		w.Header().Set("Content-Type", "application/x-protobuf")
-		_, _ = w.Write(data)
+		if _, err := w.Write(data); err != nil {
+			t.Errorf("write /refresh response: %v", err)
+		}
 	})
 	cpMux.HandleFunc("/register", func(w http.ResponseWriter, r *http.Request) {
 		t.Error("/register must not be hit: a bootstrap node has no OIDC grant to re-enroll with")

@@ -732,7 +732,11 @@ func (s *SQLStore) SetNodeAutonomousRecovery(ctx context.Context, peerID string,
 	if err != nil {
 		return err
 	}
-	if n, err := res.RowsAffected(); err == nil && n == 0 {
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
 		return ErrNotFound
 	}
 	return nil

@@ -120,7 +120,10 @@ func refreshNode(t *testing.T, cpURL string, priv crypto.PrivKey, currentBiscuit
 
 	resp := postRefresh(t, cpURL, priv, currentBiscuit, "")
 	defer func() { _ = resp.Body.Close() }()
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read /refresh body: %v", err)
+	}
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("/refresh status %s: %s", resp.Status, string(body))
 	}
@@ -136,9 +139,21 @@ func refreshNode(t *testing.T, cpURL string, priv crypto.PrivKey, currentBiscuit
 // instead of failing on a non-200, for tests that expect a refusal.
 func refreshStatus(t *testing.T, cpURL string, priv crypto.PrivKey, currentBiscuit []byte) int {
 	t.Helper()
-	resp := postRefresh(t, cpURL, priv, currentBiscuit, "")
-	_ = resp.Body.Close()
-	return resp.StatusCode
+	code, _ := refreshAs(t, cpURL, priv, currentBiscuit, "")
+	return code
+}
+
+// refreshAs drives /refresh signing the challenge with priv and sending peerID
+// in the body, and returns the HTTP status and body without judging them.
+func refreshAs(t *testing.T, cpURL string, priv crypto.PrivKey, currentBiscuit []byte, peerID string) (int, []byte) {
+	t.Helper()
+	resp := postRefresh(t, cpURL, priv, currentBiscuit, peerID)
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read /refresh body: %v", err)
+	}
+	return resp.StatusCode, body
 }
 
 // postRefresh posts a signed TokenRefreshRequest for priv's peer. peerID, when

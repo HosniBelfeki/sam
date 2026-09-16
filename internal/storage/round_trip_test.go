@@ -178,13 +178,21 @@ func TestSetNodeAutonomousRecovery(t *testing.T) {
 	if err := store.SetNodeAutonomousRecovery(ctx, node.PeerID, true); err != nil {
 		t.Fatalf("SetNodeAutonomousRecovery(true): %v", err)
 	}
-	if got, _ = store.GetNode(ctx, node.PeerID); !got.AutonomousRecovery {
+	got, err = store.GetNode(ctx, node.PeerID)
+	if err != nil {
+		t.Fatalf("GetNode after enable: %v", err)
+	}
+	if !got.AutonomousRecovery {
 		t.Fatal("SetNodeAutonomousRecovery(true) did not persist")
 	}
 	if err := store.SetNodeAutonomousRecovery(ctx, node.PeerID, false); err != nil {
 		t.Fatalf("SetNodeAutonomousRecovery(false): %v", err)
 	}
-	if got, _ = store.GetNode(ctx, node.PeerID); got.AutonomousRecovery {
+	got, err = store.GetNode(ctx, node.PeerID)
+	if err != nil {
+		t.Fatalf("GetNode after disable: %v", err)
+	}
+	if got.AutonomousRecovery {
 		t.Fatal("SetNodeAutonomousRecovery(false) did not persist")
 	}
 
