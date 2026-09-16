@@ -231,8 +231,6 @@ func mintBiscuit(signingKey ed25519.PrivateKey, remotePeer peer.ID, roles []stri
 		}
 	}
 
-	hasTargets := false
-	hasServices := false
 	sort.Strings(roles)
 	var errs []error
 	// Collected across every matched role and merged into Set facts once below: a token's
@@ -266,22 +264,12 @@ func mintBiscuit(signingKey ed25519.PrivateKey, remotePeer peer.ID, roles []stri
 			}}); err != nil {
 				errs = append(errs, fmt.Errorf("failed to add target unrestricted: %w", err))
 			}
-			hasTargets = true
-			hasServices = true
 			continue
 		}
 
 		if pr, ok := rolesMap[role]; ok {
-			if len(pr.AllowedServices) > 0 {
-				hasServices = true
-				allServices = append(allServices, pr.AllowedServices...)
-			}
-
-			if len(pr.AllowedTargets) > 0 {
-				hasTargets = true
-				allTargets = append(allTargets, pr.AllowedTargets...)
-			}
-
+			allServices = append(allServices, pr.AllowedServices...)
+			allTargets = append(allTargets, pr.AllowedTargets...)
 			allAgents = append(allAgents, pr.AllowedAgents...)
 
 			for _, customEntry := range pr.CustomDatalog {
@@ -323,22 +311,10 @@ func mintBiscuit(signingKey ed25519.PrivateKey, remotePeer peer.ID, roles []stri
 		}
 	}
 
-	if !hasServices && len(policyRoles) == 0 {
-		if err := addFact(biscuit.Fact{Predicate: biscuit.Predicate{
-			Name: api.FactGrantedServiceAllTypes,
-			IDs:  []biscuit.Term{},
-		}}); err != nil {
-			errs = append(errs, fmt.Errorf("failed to add fallback service fact: %w", err))
-		}
-	}
-	if !hasTargets && len(policyRoles) == 0 {
-		if err := addFact(biscuit.Fact{Predicate: biscuit.Predicate{
-			Name: api.FactTargetUnrestricted,
-			IDs:  []biscuit.Term{},
-		}}); err != nil {
-			errs = append(errs, fmt.Errorf("failed to add fallback target fact: %w", err))
-		}
-	}
+	// No policy means no grants. A mesh with no roles defined used to mint
+	// every non-router an unrestricted token; a fresh control plane, or one
+	// whose policy was wiped, was the most permissive configuration there
+	// is. Deny by default: the operator posts a policy, then nodes can talk.
 
 	if len(errs) > 0 {
 		return nil, fmt.Errorf("biscuit policy validation failed: %w", errors.Join(errs...))

@@ -56,7 +56,7 @@ The Router is a dedicated GossipSub helper that maintains stable network address
 The Control Plane dynamically issues permissions inside the Biscuit token based on identity claims (users or groups) mapped to specific roles in the database.
 
 The policy defines what endpoints and services agents are permitted to use:
-* **`allowed_targets`**: Restricts which logical endpoints the agent can route connections to. Use resolved Biscuit facts: `group:<name>`, `user:<sub-id>`, `email:<email>`, `role:<role-name>`, or `node:<peer-id>`.
+* **`allowed_targets`**: Restricts which logical endpoints the agent can route connections to. Use resolved Biscuit facts: `group:<name>`, `user:<sub-id>`, `email:<email>`, `idp_role:<role-name>` (the issuer's `roles` claim), or `node:<peer-id>`. Mesh roles (`role(...)`) are never a target or a binding member: they are what bindings grant, and an issuer must not be able to hand one out by emitting it as a claim.
 * **`allowed_services`**: Restricts the application-level services the agent can invoke. Services are prefixed by their protocol type and URI scheme (e.g., `mcp://local-shell-tools` or `inference://openrouter`). Wildcards are supported (e.g., `mcp://*`). The service is deliberately the unit of authorization: a grant offers the service's whole tool surface, so publish different privilege tiers as different services (e.g. `mcp://db-reader` vs `mcp://db-writer`) rather than expecting the mesh to filter tools inside one backend.
 * **`allowed_agents`**: The agent namespaces a node with this role can use. When a node forwards a request for a sandboxed agent, it sends the agent's name with it. The receiving node accepts that name only if it falls inside one of these namespaces. A node with no `allowed_agents` grant cannot name any agent. Accepted patterns are `*.prod.acme.example`, `acme.*`, an exact ID such as `reviewer-7.prod.acme.example`, or `*` for any agent.
 * **`allowed_labels`**: The labels a node with this role may declare when it enrolls, as `*`, `key=*` or `key=value`. A node sends its own labels in its enrollment request, so this is what decides which of them the control plane is willing to sign into `label()` facts. A role granting none means a node holding it can declare none. Peers gate on those facts with `required_labels`, so a node that could declare anything could satisfy any such requirement.
@@ -85,7 +85,7 @@ Admins manage policies by sending a JSON payload to the `/policies` endpoint.
     },
     {
       "name": "admin-role",
-      "allowed_targets": ["group:all-nodes", "role:admin"],
+      "allowed_targets": ["group:all-nodes", "idp_role:admin"],
       "allowed_services": ["mcp://*", "inference://*", "system://*"]
     }
   ],
@@ -239,7 +239,10 @@ Administrators can immediately revoke any active session to disable a node's abi
     "peer_id": "12D3KooW..."
   }
   ```
-* **Enforcement**: Revoked nodes are marked as banned in the database. When the node next attempts a proactive `/refresh` handshake, the request is denied with a `403 Forbidden` status, and the node's local daemon immediately terminates.
+* **Enforcement**: Revoked nodes are marked as banned in the database. When the node next attempts a proactive `/refresh` handshake, the request is denied with a `403 Forbidden` status, and the node's local daemon immediately terminates. When the node was enrolled through OIDC, the identity behind it (`issuer|subject`) is banned as well: it can no longer `/register` a fresh keypair, use the `/user/*` API, or enroll anything with bootstrap tokens it minted earlier, and a queued enrollment on such a token is refused at approval.
+* **Lifting a ban**: `POST /admin/nodes/{peer_id}/unban` reverses both halves (node and identity). The `sam-control-plane admin ban|unban --peer` commands do the same directly against the database.
+
+Bootstrap tokens are spent atomically: a token's `max_usages` holds under concurrent enrollments, an approval re-checks that the token is still valid and unspent, and a pending request can be resolved exactly once. A Control Plane with no mesh policy mints Biscuits that carry the role and no grants at all; nothing is reachable until an administrator posts a policy.
 
 ---
 

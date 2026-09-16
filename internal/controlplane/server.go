@@ -66,6 +66,10 @@ const (
 	// for storage.EnrolledNode.AutonomousRecovery. Admin-console only: the
 	// node-facing side of #367 is TokenRefreshRequest.peer_id in sam.proto.
 	adminNodeActionAutonomousRecovery = "autonomous-recovery"
+
+	// adminNodeActionUnban is the action segment of
+	// POST /admin/nodes/{peer_id}/unban, the inverse of POST /admin/revoke.
+	adminNodeActionUnban = "unban"
 )
 
 // Server implements the SAM Control Plane web app.
@@ -384,9 +388,12 @@ func (s *Server) HandleReadyz(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.store != nil {
 		if err := s.store.Ping(r.Context()); err != nil {
+			// The DSN, host names and driver errors are operator material; the
+			// probe is unauthenticated.
+			logger.Errorf("Readiness probe: database unreachable: %v", err)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusServiceUnavailable)
-			_, _ = fmt.Fprintf(w, `{"status":"error","message":%q}`, err.Error())
+			_, _ = w.Write([]byte(`{"status":"error","message":"database unavailable"}`))
 			return
 		}
 	}
@@ -501,6 +508,11 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request) {
 		logger.Errorw("JWT verification failed", "peer_id", req.PeerId, "error", err)
 		http.Error(w, "JWT validation failed: "+err.Error(), http.StatusUnauthorized)
 		return
+	}
+	// An email the issuer marks unverified must not resolve bindings or be
+	// minted as an email() fact.
+	if verifiedEmail(claims) == "" {
+		delete(claims, "email")
 	}
 
 	pID, err := peer.Decode(req.PeerId)
@@ -1122,31 +1134,28 @@ func (s *Server) HandlePolicies(w http.ResponseWriter, r *http.Request) {
 	// Simple HTTP admin methods for policies
 	switch r.Method {
 	case http.MethodGet:
-		// Nodes need to fetch policies using their Biscuit token, Admins use OIDC/Bootstrap
-		isAdmin := false
-		user, err := s.authenticateUser(r)
-		if err == nil && user.Role == "admin" {
-			isAdmin = true
-		}
-
+		// Nodes fetch policies with their biscuit, admins with the admin token
+		// or an ID token. The biscuit is tried first: running OIDC
+		// verification on a biscuit logs a failure and would auto-register
+		// whoever's ID token lands here.
 		isNode := false
-		if !isAdmin {
-			// Try checking if it's a valid node biscuit
-			authHeader := r.Header.Get("Authorization")
-			if strings.HasPrefix(authHeader, "Bearer ") {
-				biscuitBytes, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(authHeader, "Bearer "))
-				if err == nil {
-					trustedKeys, err := s.store.GetAllValidPublicKeys(r.Context())
-					if err == nil {
-						peerID, err := identity.VerifyAndExtractPeerID(trustedKeys, biscuitBytes, s.config.BiscuitTimeout)
-						if err == nil {
-							nodeRecord, nodeErr := s.store.GetNode(r.Context(), peerID.String())
-							if nodeErr == nil && nodeRecord != nil && nodeRecord.CheckAdmission(time.Now()) == nil {
-								isNode = true
-							}
+		if authHeader := r.Header.Get("Authorization"); strings.HasPrefix(authHeader, "Bearer ") {
+			if biscuitBytes, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(authHeader, "Bearer ")); err == nil {
+				if trustedKeys, err := s.store.GetAllValidPublicKeys(r.Context()); err == nil {
+					if peerID, err := identity.VerifyAndExtractPeerID(trustedKeys, biscuitBytes, s.config.BiscuitTimeout); err == nil {
+						nodeRecord, nodeErr := s.store.GetNode(r.Context(), peerID.String())
+						if nodeErr == nil && nodeRecord != nil && nodeRecord.CheckAdmission(time.Now()) == nil {
+							isNode = true
 						}
 					}
 				}
+			}
+		}
+
+		isAdmin := false
+		if !isNode {
+			if user, err := s.authenticateUser(r); err == nil && user.Role == "admin" {
+				isAdmin = true
 			}
 		}
 
@@ -1331,6 +1340,17 @@ func (s *Server) HandleEnroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A token is only as welcome as the identity that minted it.
+	if banned, err := s.tokenOwnerBanned(ctx, tokenRecord); err != nil {
+		logger.Errorf("Failed to check token owner ban: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	} else if banned {
+		logger.Warnw("Bootstrap token from a banned identity used", "peer_id", req.PeerId, "token_id", tokenRecord.ID, "owner", tokenRecord.OwnerID)
+		s.writeEnrollError(w, api.EnrollmentStatus_ENROLLMENT_STATUS_REJECTED, "Bootstrap token owner is banned")
+		return
+	}
+
 	if req.RequestedRole == "" {
 		s.writeEnrollError(w, api.EnrollmentStatus_ENROLLMENT_STATUS_REJECTED, "requested_role must be specified")
 		return
@@ -1395,7 +1415,7 @@ func (s *Server) HandleEnroll(w http.ResponseWriter, r *http.Request) {
 		if existingReq.Status == api.EnrollmentStatus_ENROLLMENT_STATUS_APPROVED {
 			biscuitToken, resolvedAt, refreshErr := s.remintApprovedBootstrapBiscuit(ctx, existingReq, tokenRecord)
 			if refreshErr != nil {
-				if errors.Is(refreshErr, storage.ErrNodeBanned) || errors.Is(refreshErr, storage.ErrNodeSessionExpired) || errors.Is(refreshErr, errBootstrapRoleMismatch) {
+				if errors.Is(refreshErr, storage.ErrNodeBanned) || errors.Is(refreshErr, storage.ErrNodeSessionExpired) || errors.Is(refreshErr, errBootstrapRoleMismatch) || errors.Is(refreshErr, storage.ErrBootstrapTokenUnusable) {
 					logger.Warnw("Refused bootstrap re-enrollment", "peer_id", req.PeerId, "error", refreshErr)
 					s.writeEnrollError(w, api.EnrollmentStatus_ENROLLMENT_STATUS_REJECTED, "Enrollment no longer valid: "+refreshErr.Error())
 					return
@@ -1461,6 +1481,18 @@ func (s *Server) HandleEnroll(w http.ResponseWriter, r *http.Request) {
 			s.writeEnrollError(w, api.EnrollmentStatus_ENROLLMENT_STATUS_REJECTED, "Label not permitted: "+err.Error())
 			return
 		}
+		// Spend the usage before anything is minted or written: the read
+		// above is advisory, this is the gate concurrent enrollments race on.
+		if err := s.store.ConsumeBootstrapTokenUsage(ctx, tokenRecord.ID, time.Now()); err != nil {
+			if errors.Is(err, storage.ErrBootstrapTokenUnusable) {
+				logger.Warnw("Bootstrap token no longer usable at enrollment", "peer_id", canonical, "token_id", tokenRecord.ID)
+				s.writeEnrollError(w, api.EnrollmentStatus_ENROLLMENT_STATUS_REJECTED, "Bootstrap token expired, revoked or exhausted")
+				return
+			}
+			logger.Errorf("Failed to consume token usage: %v", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
 		biscuitBytes, err := identity.MintBootstrapBiscuitToken(privKey, pID, tokenRecord.Role, time.Now().Add(s.config.BiscuitTTL), policyRoles, req.Labels)
 		if err != nil {
 			logger.Errorf("Failed to mint bootstrap biscuit: %v", err)
@@ -1474,12 +1506,8 @@ func (s *Server) HandleEnroll(w http.ResponseWriter, r *http.Request) {
 		enrollReq.ResolvedAt = &tNow
 		enrollReq.ResolvedBy = "auto-approver"
 
-		if err := s.store.CreateEnrollmentRequest(ctx, enrollReq); err != nil {
-			logger.Errorf("Failed to save enrollment request: %v", err)
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
-			return
-		}
-
+		// Node record first: an approved request with no node behind it hands
+		// out a biscuit that /admin/revoke cannot find (see approve).
 		nodeRecord := &storage.EnrolledNode{
 			PeerID:             canonical,
 			PublicKey:          req.PublicKey,
@@ -1498,8 +1526,10 @@ func (s *Server) HandleEnroll(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if err := s.store.IncrementBootstrapTokenUsage(ctx, tokenRecord.ID); err != nil {
-			logger.Errorf("Failed to increment token usage: %v", err)
+		if err := s.store.CreateEnrollmentRequest(ctx, enrollReq); err != nil {
+			logger.Errorf("Failed to save enrollment request: %v", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
 		}
 
 		resp, err := s.buildApprovedBootstrapEnrollResponse(ctx, biscuitBytes, enrollReq.ResolvedAt)
@@ -1642,6 +1672,11 @@ func (s *Server) HandleEnrollStatus(w http.ResponseWriter, r *http.Request) {
 	s.writeEnrollResponse(w, resp)
 }
 
+// errIdentityBanned is authenticateUser's answer for a valid ID token whose
+// issuer|subject has been banned. Callers map it to 403, not 401: the token
+// is fine, the identity is not welcome.
+var errIdentityBanned = errors.New("identity is banned")
+
 func (s *Server) authenticateUser(r *http.Request) (*storage.User, error) {
 	authHeader := r.Header.Get("Authorization")
 	if !strings.HasPrefix(authHeader, "Bearer ") {
@@ -1678,13 +1713,26 @@ func (s *Server) authenticateUser(r *http.Request) (*storage.User, error) {
 	if sub == "" {
 		return nil, errors.New("token subject (sub) claim is empty")
 	}
-	email, _ := claims["email"].(string)
+	iss, _ := claims["iss"].(string)
+	email := verifiedEmail(claims)
+
+	// A revoked node bans the identity behind it (banNode), and that has to
+	// hold on every surface the identity can drive with its ID token, or it
+	// mints itself a bootstrap token and re-enrolls a fresh device.
+	if banned, err := s.store.IsIdentityBanned(ctx, oidcIdentityKey(claims)); err != nil {
+		return nil, fmt.Errorf("failed to check identity ban: %w", err)
+	} else if banned {
+		logger.Warnw("Banned identity presented a valid ID token", "identity", oidcIdentityKey(claims))
+		return nil, errIdentityBanned
+	}
 
 	// Fetch or auto-register user
 	user, err := s.store.GetUser(ctx, sub)
-	if err == storage.ErrNotFound {
+	switch {
+	case err == storage.ErrNotFound:
 		user = &storage.User{
 			ID:        sub,
+			Issuer:    iss,
 			Email:     email,
 			Role:      "user",
 			CreatedAt: time.Now(),
@@ -1692,18 +1740,56 @@ func (s *Server) authenticateUser(r *http.Request) (*storage.User, error) {
 		if err := s.store.SaveUser(ctx, user); err != nil {
 			return nil, fmt.Errorf("failed to register user: %w", err)
 		}
-		logger.Infow("Auto-registered new OIDC user", "id", sub, "email", email)
-	} else if err != nil {
+		logger.Infow("Auto-registered new OIDC user", "id", sub, "issuer", iss, "email", email)
+	case err != nil:
 		return nil, fmt.Errorf("failed to get user: %w", err)
+	case user.Issuer == "":
+		// Row from before issuers were recorded: adopt this one.
+		user.Issuer = iss
+		if err := s.store.SaveUser(ctx, user); err != nil {
+			return nil, fmt.Errorf("failed to record user issuer: %w", err)
+		}
+	case user.Issuer != iss:
+		// Users are keyed on the subject alone; two issuers handing out the
+		// same subject would otherwise share one account and its nodes.
+		logger.Warnw("ID token subject collides with a user from another issuer", "sub", sub, "issuer", iss, "user_issuer", user.Issuer)
+		return nil, errors.New("subject is registered under a different issuer")
 	}
 
 	return user, nil
 }
 
-func (s *Server) checkAdminAuth(w http.ResponseWriter, r *http.Request) bool {
+// verifiedEmail returns the email claim unless the issuer marked it
+// unverified. Absent email_verified is kept (many issuers never emit it and
+// several emit no email at all); an explicit false is not an identity.
+func verifiedEmail(claims jwt.MapClaims) string {
+	if v, ok := claims["email_verified"].(bool); ok && !v {
+		return ""
+	}
+	email, _ := claims["email"].(string)
+	return email
+}
+
+// requireUser authenticates the caller for a user- or admin-facing route and
+// writes the failure itself. Internal failures are logged, not echoed: the
+// body says only whether the caller is unauthenticated or banned.
+func (s *Server) requireUser(w http.ResponseWriter, r *http.Request) (*storage.User, bool) {
 	user, err := s.authenticateUser(r)
-	if err != nil {
-		http.Error(w, "Unauthorized: "+err.Error(), http.StatusUnauthorized)
+	if err == nil {
+		return user, true
+	}
+	if errors.Is(err, errIdentityBanned) {
+		http.Error(w, "Forbidden: identity is banned", http.StatusForbidden)
+		return nil, false
+	}
+	logger.Debugf("User authentication failed: %v", err)
+	http.Error(w, "Unauthorized", http.StatusUnauthorized)
+	return nil, false
+}
+
+func (s *Server) checkAdminAuth(w http.ResponseWriter, r *http.Request) bool {
+	user, ok := s.requireUser(w, r)
+	if !ok {
 		return false
 	}
 	if user.Role != "admin" {
@@ -1902,7 +1988,11 @@ func (s *Server) HandleAdminEnrollmentAction(w http.ResponseWriter, r *http.Requ
 	adminIdentity := "admin"
 
 	if action == "reject" {
-		err = s.store.UpdateEnrollmentRequest(ctx, id, api.EnrollmentStatus_ENROLLMENT_STATUS_REJECTED, nil, adminIdentity)
+		err = s.store.ResolveEnrollmentRequest(ctx, id, api.EnrollmentStatus_ENROLLMENT_STATUS_REJECTED, nil, adminIdentity)
+		if errors.Is(err, storage.ErrEnrollmentAlreadyResolved) {
+			http.Error(w, "Enrollment request is already resolved", http.StatusConflict)
+			return
+		}
 		if err != nil {
 			logger.Errorf("Failed to reject enrollment: %v", err)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -1921,14 +2011,35 @@ func (s *Server) HandleAdminEnrollmentAction(w http.ResponseWriter, r *http.Requ
 			return
 		}
 
+		// The token was checked when the request was queued; it may have been
+		// revoked, expired or run out since, and its owner may have been
+		// banned. Approval is where it is spent, so it is re-checked here.
+		switch {
+		case tokenRecord.IsRevoked():
+			http.Error(w, "Bootstrap token has been revoked since this request was queued", http.StatusGone)
+			return
+		case time.Now().After(tokenRecord.ExpiresAt):
+			http.Error(w, "Bootstrap token has expired since this request was queued", http.StatusGone)
+			return
+		case tokenRecord.UsagesCount >= tokenRecord.MaxUsages:
+			http.Error(w, "Bootstrap token has no usages left", http.StatusGone)
+			return
+		}
+		if banned, err := s.tokenOwnerBanned(ctx, tokenRecord); err != nil {
+			logger.Errorf("Failed to check token owner ban: %v", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		} else if banned {
+			http.Error(w, "Bootstrap token owner is banned", http.StatusForbidden)
+			return
+		}
+
 		pID, err := peer.Decode(enrollReq.PeerID)
 		if err != nil {
 			http.Error(w, "Invalid Peer ID stored in request", http.StatusInternalServerError)
 			return
 		}
 		canonical := pID.String()
-
-		// No policy fetch needed.
 
 		privKey, _, err := s.store.GetCurrentKey(ctx)
 		if err != nil {
@@ -1954,6 +2065,17 @@ func (s *Server) HandleAdminEnrollmentAction(w http.ResponseWriter, r *http.Requ
 			return
 		}
 
+		// The atomic gate; the checks above only give a better message.
+		if err := s.store.ConsumeBootstrapTokenUsage(ctx, tokenRecord.ID, time.Now()); err != nil {
+			if errors.Is(err, storage.ErrBootstrapTokenUnusable) {
+				http.Error(w, "Bootstrap token expired, revoked or exhausted", http.StatusGone)
+				return
+			}
+			logger.Errorf("Failed to consume token usage: %v", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
 		biscuitBytes, err := identity.MintBootstrapBiscuitToken(privKey, pID, tokenRecord.Role, time.Now().Add(s.config.BiscuitTTL), policyRoles, enrollReq.Labels)
 		if err != nil {
 			logger.Errorf("Failed to mint bootstrap biscuit: %v", err)
@@ -1961,13 +2083,11 @@ func (s *Server) HandleAdminEnrollmentAction(w http.ResponseWriter, r *http.Requ
 			return
 		}
 
-		err = s.store.UpdateEnrollmentRequest(ctx, id, api.EnrollmentStatus_ENROLLMENT_STATUS_APPROVED, biscuitBytes, adminIdentity)
-		if err != nil {
-			logger.Errorf("Failed to approve enrollment request in DB: %v", err)
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
-			return
-		}
-
+		// Node record before the request flips to APPROVED. The other order
+		// left a window where /enroll/status handed out a biscuit for a node
+		// that did not exist: routers accepted it and /admin/revoke could not
+		// find it. A node row with a still-pending request is the harmless
+		// failure: the enrollee keeps polling and the admin can retry.
 		nodeRecord := &storage.EnrolledNode{
 			PeerID:             canonical,
 			PublicKey:          enrollReq.PublicKey,
@@ -1986,8 +2106,15 @@ func (s *Server) HandleAdminEnrollmentAction(w http.ResponseWriter, r *http.Requ
 			return
 		}
 
-		if err := s.store.IncrementBootstrapTokenUsage(ctx, tokenRecord.ID); err != nil {
-			logger.Errorf("Failed to increment token usage: %v", err)
+		err = s.store.ResolveEnrollmentRequest(ctx, id, api.EnrollmentStatus_ENROLLMENT_STATUS_APPROVED, biscuitBytes, adminIdentity)
+		if errors.Is(err, storage.ErrEnrollmentAlreadyResolved) {
+			http.Error(w, "Enrollment request is already resolved", http.StatusConflict)
+			return
+		}
+		if err != nil {
+			logger.Errorf("Failed to approve enrollment request in DB: %v", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
 		}
 
 		w.WriteHeader(http.StatusOK)
@@ -2013,13 +2140,43 @@ func (s *Server) HandleAdminNodeAction(w http.ResponseWriter, r *http.Request) {
 	}
 
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/admin/nodes/"), "/")
-	if len(parts) != 2 || parts[1] != adminNodeActionAutonomousRecovery {
+	if len(parts) != 2 {
 		http.Error(w, "Not found", http.StatusNotFound)
 		return
 	}
 	pID, err := peer.Decode(parts[0])
 	if err != nil {
 		http.Error(w, "Invalid Peer ID", http.StatusBadRequest)
+		return
+	}
+	canonical := pID.String()
+
+	switch parts[1] {
+	case adminNodeActionUnban:
+		// The inverse of /admin/revoke: lifts the device-key ban and the
+		// identity ban together, so the human behind the node can enroll
+		// again. Until this existed an identity ban was permanent short of
+		// editing the database.
+		node, err := s.store.GetNode(r.Context(), canonical)
+		if err == storage.ErrNotFound {
+			http.Error(w, "Node not found", http.StatusNotFound)
+			return
+		} else if err != nil {
+			logger.Errorf("Failed to retrieve node %s: %v", canonical, err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+		if err := SetNodeBan(r.Context(), s.store, node, false); err != nil {
+			logger.Errorf("Failed to unban node %s: %v", canonical, err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+		logger.Infow("Node and identity unbanned", "peer_id", canonical)
+		w.WriteHeader(http.StatusNoContent)
+		return
+	case adminNodeActionAutonomousRecovery:
+	default:
+		http.Error(w, "Not found", http.StatusNotFound)
 		return
 	}
 
@@ -2033,7 +2190,6 @@ func (s *Server) HandleAdminNodeAction(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = r.Body.Close() }()
 
-	canonical := pID.String()
 	err = s.store.SetNodeAutonomousRecovery(r.Context(), canonical, req.Enabled)
 	if err == storage.ErrNotFound {
 		http.Error(w, "Node not found", http.StatusNotFound)
@@ -2165,6 +2321,14 @@ func (s *Server) remintApprovedBootstrapBiscuit(ctx context.Context, existingReq
 		return nil, nil, err
 	}
 
+	// Re-minting consumes a use of the bootstrap token, the same as the
+	// original enrollment did - it is the operator's lever on how many times
+	// this can happen, per #367/#368. Spent before minting: an exhausted,
+	// expired or revoked token re-mints nothing.
+	if err := s.store.ConsumeBootstrapTokenUsage(ctx, tokenRecord.ID, time.Now()); err != nil {
+		return nil, nil, fmt.Errorf("bootstrap token cannot re-mint for %s: %w", pID, err)
+	}
+
 	privKey, _, err := s.store.GetCurrentKey(ctx)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to retrieve signing key: %w", err)
@@ -2193,17 +2357,24 @@ func (s *Server) remintApprovedBootstrapBiscuit(ctx context.Context, existingReq
 		return nil, nil, fmt.Errorf("failed to persist refreshed node record: %w", err)
 	}
 
-	// Re-minting consumes a use of the bootstrap token, the same as the
-	// original enrollment did - it is the operator's lever on how many times
-	// this can happen, per #367/#368. A failure here only means the usage
-	// counter under-counts; it must not block the peer from getting its
-	// (already persisted) fresh biscuit.
-	if err := s.store.IncrementBootstrapTokenUsage(ctx, tokenRecord.ID); err != nil {
-		logger.Errorf("Failed to increment bootstrap token usage on re-mint for %s: %v", pID, err)
-	}
-
 	resolvedAt := time.Now()
 	return biscuitBytes, &resolvedAt, nil
+}
+
+// tokenOwnerBanned reports whether the identity that minted a bootstrap
+// token has since been banned. Admin-minted tokens have no owner.
+func (s *Server) tokenOwnerBanned(ctx context.Context, tok *storage.BootstrapToken) (bool, error) {
+	if tok.OwnerID == "" {
+		return false, nil
+	}
+	owner, err := s.store.GetUser(ctx, tok.OwnerID)
+	if err == storage.ErrNotFound {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return s.store.IsIdentityBanned(ctx, owner.IdentityKey())
 }
 
 func (s *Server) buildApprovedBootstrapEnrollResponse(ctx context.Context, biscuitToken []byte, resolvedAt *time.Time) (*api.BootstrapEnrollResponse, error) {
@@ -2241,64 +2412,38 @@ func (s *Server) HandleUserStatus(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	user, err := s.authenticateUser(r)
-	if err != nil {
-		http.Error(w, "Unauthorized: "+err.Error(), http.StatusUnauthorized)
+	user, ok := s.requireUser(w, r)
+	if !ok {
 		return
 	}
 
 	ctx := r.Context()
-	routers, err := s.store.GetActiveRouters(ctx)
-	if err != nil {
-		logger.Errorf("Failed to get active routers: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
+	isAdmin := user.Role == "admin"
 
-	nodes := []storage.EnrolledNode{}
-	if user.Role == "admin" {
-		nodes, err = s.store.ListNodes(ctx)
-	} else {
-		allNodes, err := s.store.ListNodes(ctx)
-		if err == nil {
-			for _, n := range allNodes {
-				if n.OwnerID == user.ID {
-					nodes = append(nodes, n)
-				}
-			}
-		}
-	}
+	allNodes, err := s.store.ListNodes(ctx)
 	if err != nil {
 		logger.Errorf("Failed to list nodes: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
-
-	tokens := []storage.BootstrapToken{}
-	allTokens, err := s.store.ListBootstrapTokens(ctx)
-	if err == nil {
-		for _, t := range allTokens {
-			if t.OwnerID == user.ID || user.Role == "admin" {
-				tokens = append(tokens, t)
-			}
+	nodes := []enrolledNodeView{}
+	for _, n := range allNodes {
+		if isAdmin || n.OwnerID == user.ID {
+			nodes = append(nodes, viewEnrolledNode(n, isAdmin))
 		}
 	}
+
+	allTokens, err := s.store.ListBootstrapTokens(ctx)
 	if err != nil {
 		logger.Errorf("Failed to list bootstrap tokens: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
-
-	roles, bindings, err := s.store.GetMeshPolicy(r.Context())
-	if err != nil {
-		logger.Errorf("Failed to list policy: %v", err)
-	}
-
-	var policyJSON string
-	if rendered, err := marshalPolicyJSON(roles, bindings); err == nil {
-		policyJSON = rendered
-	} else {
-		logger.Errorf("Failed to render policy: %v", err)
+	tokens := []storage.BootstrapToken{}
+	for _, t := range allTokens {
+		if isAdmin || t.OwnerID == user.ID {
+			tokens = append(tokens, t)
+		}
 	}
 
 	resp := map[string]any{
@@ -2307,10 +2452,30 @@ func (s *Server) HandleUserStatus(w http.ResponseWriter, r *http.Request) {
 			"email": user.Email,
 			"role":  user.Role,
 		},
-		"active_routers":   routers,
 		"enrolled_nodes":   nodes,
 		"bootstrap_tokens": tokens,
-		"policy_json":      policyJSON,
+	}
+
+	// The mesh policy and the router fleet describe the whole mesh, not the
+	// caller's nodes; they are admin material.
+	if isAdmin {
+		routers, err := s.store.GetActiveRouters(ctx)
+		if err != nil {
+			logger.Errorf("Failed to get active routers: %v", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+		resp["active_routers"] = routers
+
+		roles, bindings, err := s.store.GetMeshPolicy(ctx)
+		if err != nil && err != storage.ErrNotFound {
+			logger.Errorf("Failed to list policy: %v", err)
+		}
+		if rendered, err := marshalPolicyJSON(roles, bindings); err == nil {
+			resp["policy_json"] = rendered
+		} else {
+			logger.Errorf("Failed to render policy: %v", err)
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -2318,10 +2483,50 @@ func (s *Server) HandleUserStatus(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
+// enrolledNodeView is what status endpoints return for a node: the record
+// minus its live credential and key material. ClaimsJSON is admin-only.
+type enrolledNodeView struct {
+	PeerID             string            `json:"PeerID"`
+	Role               string            `json:"Role"`
+	EnrollmentType     string            `json:"EnrollmentType"`
+	ClaimsJSON         string            `json:"ClaimsJSON,omitempty"`
+	OwnerID            string            `json:"OwnerID"`
+	Labels             map[string]string `json:"Labels"`
+	EnrolledAt         time.Time         `json:"EnrolledAt"`
+	ExpiresAt          time.Time         `json:"ExpiresAt"`
+	Banned             bool              `json:"Banned"`
+	AutonomousRecovery bool              `json:"AutonomousRecovery"`
+}
+
+func viewEnrolledNode(n storage.EnrolledNode, withClaims bool) enrolledNodeView {
+	v := enrolledNodeView{
+		PeerID:             n.PeerID,
+		Role:               n.Role,
+		EnrollmentType:     n.EnrollmentType,
+		OwnerID:            n.OwnerID,
+		Labels:             n.Labels,
+		EnrolledAt:         n.EnrolledAt,
+		ExpiresAt:          n.ExpiresAt,
+		Banned:             n.Banned,
+		AutonomousRecovery: n.AutonomousRecovery,
+	}
+	if withClaims {
+		v.ClaimsJSON = n.ClaimsJSON
+	}
+	return v
+}
+
+// Ceilings on what a non-admin may mint for itself: a token is a standing
+// invitation into the mesh, and these bound how long and how wide one
+// user's invitation can be.
+const (
+	userTokenMaxTTLHours = 7 * 24
+	userTokenMaxUsages   = 10
+)
+
 func (s *Server) HandleUserBootstrapTokens(w http.ResponseWriter, r *http.Request) {
-	user, err := s.authenticateUser(r)
-	if err != nil {
-		http.Error(w, "Unauthorized: "+err.Error(), http.StatusUnauthorized)
+	user, ok := s.requireUser(w, r)
+	if !ok {
 		return
 	}
 
@@ -2373,6 +2578,16 @@ func (s *Server) HandleUserBootstrapTokens(w http.ResponseWriter, r *http.Reques
 	}
 	if req.MaxUsages <= 0 {
 		req.MaxUsages = 1
+	}
+	if user.Role != "admin" {
+		if req.TTLHours > userTokenMaxTTLHours {
+			http.Error(w, fmt.Sprintf("ttl_hours may not exceed %d for non-admin users", userTokenMaxTTLHours), http.StatusBadRequest)
+			return
+		}
+		if req.MaxUsages > userTokenMaxUsages {
+			http.Error(w, fmt.Sprintf("max_usages may not exceed %d for non-admin users", userTokenMaxUsages), http.StatusBadRequest)
+			return
+		}
 	}
 
 	randBytes := make([]byte, 16)
@@ -2434,9 +2649,8 @@ func (s *Server) resolveTokenOwner(ctx context.Context, caller *storage.User, re
 }
 
 func (s *Server) HandleUserRevoke(w http.ResponseWriter, r *http.Request) {
-	user, err := s.authenticateUser(r)
-	if err != nil {
-		http.Error(w, "Unauthorized: "+err.Error(), http.StatusUnauthorized)
+	user, ok := s.requireUser(w, r)
+	if !ok {
 		return
 	}
 
@@ -2507,10 +2721,22 @@ func oidcIdentityKey(claims jwt.MapClaims) string {
 // banNode bans the device key and, when the record carries OIDC claims, the
 // enrolled identity behind it, so the ban survives keypair regeneration.
 func (s *Server) banNode(ctx context.Context, node *storage.EnrolledNode) error {
-	if err := s.store.SetNodeBanned(ctx, node.PeerID, true); err != nil {
+	if err := SetNodeBan(ctx, s.store, node, true); err != nil {
 		return err
 	}
 	s.dropCatalogEntry(node.PeerID)
+	return nil
+}
+
+// SetNodeBan bans or unbans a node and, when its record carries OIDC claims,
+// the identity behind it. The one place both halves are toggled together,
+// for the HTTP handlers and the CLI alike: a ban that names only the peer id
+// is shed with a new keypair, and an unban that lifts only the peer id leaves
+// the human locked out of /register.
+func SetNodeBan(ctx context.Context, store storage.Store, node *storage.EnrolledNode, banned bool) error {
+	if err := store.SetNodeBanned(ctx, node.PeerID, banned); err != nil {
+		return err
+	}
 	if node.ClaimsJSON == "" {
 		return nil
 	}
@@ -2519,7 +2745,7 @@ func (s *Server) banNode(ctx context.Context, node *storage.EnrolledNode) error 
 		return fmt.Errorf("stored claims for %s are unreadable: %w", node.PeerID, err)
 	}
 	if key := oidcIdentityKey(claims); key != "" {
-		return s.store.SetIdentityBanned(ctx, key, true)
+		return store.SetIdentityBanned(ctx, key, banned)
 	}
 	return nil
 }
@@ -2700,12 +2926,9 @@ func validatePolicyConfig(req *api.PolicyConfigUpdateRequest) error {
 		return fmt.Errorf("policy config would allow a single identity (via overlapping bindings) to accumulate up to %d Datalog facts across all roles, exceeding the safe budget of %d; biscuit-go's authorizer rejects tokens/checks beyond ~1000 world facts, so requests would start failing at authorization time instead of at config validation. Reduce the number of roles, grants, or custom_datalog entries", factBudget, maxIdentityFactBudget)
 	}
 
-	validPrefixes := map[string]bool{
-		api.FactNode:  true,
-		api.FactGroup: true,
-		api.FactUser:  true,
-		api.FactEmail: true,
-		api.FactRole:  true,
+	validPrefixes := make(map[string]bool)
+	for _, p := range api.BindingMemberPrefixes() {
+		validPrefixes[p] = true
 	}
 
 	for _, b := range req.Bindings {

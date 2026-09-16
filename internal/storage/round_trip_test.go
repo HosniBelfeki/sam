@@ -398,6 +398,7 @@ func TestUserRoundTripsEveryField(t *testing.T) {
 
 	want := &User{
 		ID:        "user-1",
+		Issuer:    "https://idp.example",
 		Email:     "alice@example.com",
 		Role:      "admin",
 		CreatedAt: time.Now().Add(-time.Hour),

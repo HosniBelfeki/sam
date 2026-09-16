@@ -30,6 +30,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -2310,11 +2311,17 @@ func TestResolveRolesAndRoleImpersonationProtection(t *testing.T) {
 	bindings := []*api.PolicyBinding{
 		{
 			Role:    api.RoleRouter,
-			Members: []string{"group:routers", "role:oidc-router-role"},
+			Members: []string{"group:routers", "idp_role:oidc-router-role"},
 		},
 		{
 			Role:    api.RoleSamBox,
 			Members: []string{"user:sambox-admin-sub"},
+		},
+		{
+			// A binding on the mesh role fact itself: must never resolve from a
+			// claim, or an issuer emitting roles: ["sam:role:router"] gets in.
+			Role:    "legacy-role-prefix",
+			Members: []string{"role:oidc-router-role"},
 		},
 	}
 
@@ -2331,20 +2338,17 @@ func TestResolveRolesAndRoleImpersonationProtection(t *testing.T) {
 		}
 	})
 
-	t.Run("Explicit role mapping in binding grants capability role", func(t *testing.T) {
+	t.Run("Explicit idp_role mapping in binding grants capability role", func(t *testing.T) {
 		claims := jwt.MapClaims{
 			"sub":   "router-sub",
 			"roles": []string{"oidc-router-role"},
 		}
 		roles := resolveRoles("peer-123", claims, bindings)
-		hasRouter := false
-		for _, r := range roles {
-			if r == api.RoleRouter {
-				hasRouter = true
-			}
+		if !slices.Contains(roles, api.RoleRouter) {
+			t.Errorf("Expected role %q to be granted via explicit idp_role binding mapping", api.RoleRouter)
 		}
-		if !hasRouter {
-			t.Errorf("Expected role %q to be granted via explicit role binding mapping", api.RoleRouter)
+		if slices.Contains(roles, "legacy-role-prefix") {
+			t.Errorf("a role: member resolved from the IdP roles claim; the claim must only feed idp_role")
 		}
 	})
 
