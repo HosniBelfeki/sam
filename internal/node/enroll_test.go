@@ -71,7 +71,16 @@ func startMockRouterWithKey(t *testing.T, cpPriv ed25519.PrivateKey, role string
 
 	h.SetStreamHandler(api.AuthProtocolID, func(s network.Stream) {
 		defer func() { _ = s.Close() }()
-		data, _ := proto.Marshal(&api.AuthResponse{Success: true, Biscuit: routerBiscuit})
+		reader := msgio.NewVarintReaderSize(s, 1024*64)
+		msg, err := reader.ReadMsg()
+		if err != nil {
+			return
+		}
+		reader.ReleaseMsg(msg)
+		data, err := proto.Marshal(&api.AuthResponse{Success: true, Biscuit: routerBiscuit})
+		if err != nil {
+			return
+		}
 		_ = msgio.NewVarintWriter(s).WriteMsg(data)
 	})
 

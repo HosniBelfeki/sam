@@ -35,7 +35,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/biscuit-auth/biscuit-go/v2"
 	"github.com/biscuit-auth/biscuit-go/v2/parser"
 	"github.com/coreos/go-oidc/v3/oidc"
 	jwt "github.com/golang-jwt/jwt/v5"
@@ -996,24 +995,9 @@ func (s *Server) HandleRouterLease(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Enforce role("router") or role("bootstrap") inside the biscuit
-	authorizer, err := b.Authorizer(verifyingKey, identity.AuthorizerOptions(s.config.BiscuitTimeout)...)
-	if err != nil {
-		http.Error(w, "Internal authorizer error", http.StatusInternalServerError)
-		return
-	}
-
-	authorizer.AddCheck(biscuit.Check{Queries: []biscuit.Rule{
-		{
-			Body: []biscuit.Predicate{
-				{Name: api.FactRole, IDs: []biscuit.Term{biscuit.String(api.RoleRouter)}},
-			},
-		},
-	}})
-	authorizer.AddPolicy(api.AllowIfTruePolicy)
-
-	if err := authorizer.Authorize(); err != nil {
-		logger.Warnf("Router %s lacks router role in its biscuit: %v\nWorld state:\n%s", canonical, err, authorizer.PrintWorld())
+	// Enforce role("router") inside the biscuit
+	if err := identity.RequireRole(b, verifyingKey, api.RoleRouter, s.config.BiscuitTimeout); err != nil {
+		logger.Warnf("Router %s lacks router role in its biscuit: %v", canonical, err)
 		http.Error(w, "Unauthorized: entity is not a router", http.StatusForbidden)
 		return
 	}

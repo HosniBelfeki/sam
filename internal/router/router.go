@@ -35,7 +35,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/biscuit-auth/biscuit-go/v2"
 	"github.com/google/sam/api"
 	"github.com/google/sam/internal/identity"
 	golog "github.com/ipfs/go-log/v2"
@@ -1142,21 +1141,7 @@ func (r *Router) performMutualAuth(s network.Stream) error {
 	}
 
 	// Enforce required role inside the biscuit
-	authorizer, err := b.Authorizer(verifyingKey, identity.AuthorizerOptions(r.config.BiscuitTimeout)...)
-	if err != nil {
-		return fmt.Errorf("authorizer instantiation failed: %w", err)
-	}
-
-	authorizer.AddCheck(biscuit.Check{Queries: []biscuit.Rule{
-		{
-			Body: []biscuit.Predicate{
-				{Name: api.FactRole, IDs: []biscuit.Term{biscuit.String(r.config.RequiredRole)}},
-			},
-		},
-	}})
-	authorizer.AddPolicy(api.AllowIfTruePolicy)
-
-	if err := authorizer.Authorize(); err != nil {
+	if err := identity.RequireRole(b, verifyingKey, r.config.RequiredRole, r.config.BiscuitTimeout); err != nil {
 		return fmt.Errorf("remote peer lacks router authorization role: %w", err)
 	}
 
