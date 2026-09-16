@@ -214,6 +214,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/refresh", s.HandleRefresh)
 	mux.HandleFunc("/nodes/catalog", s.HandleNodeCatalog)
 	mux.HandleFunc("/admin/bootstrap-tokens", s.HandleAdminBootstrapTokens)
+	mux.HandleFunc("/admin/bootstrap-tokens/", s.HandleAdminBootstrapTokenAction)
 	mux.HandleFunc("/admin/enrollments", s.HandleAdminEnrollments)
 	mux.HandleFunc("/admin/enrollments/", s.HandleAdminEnrollmentAction)
 	mux.HandleFunc("/admin/revoke", s.HandleAdminRevoke)
@@ -1237,6 +1238,12 @@ func (s *Server) HandleEnroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if tokenRecord.IsRevoked() {
+		logger.Warnw("Revoked bootstrap token used", "peer_id", req.PeerId, "token_id", tokenRecord.ID)
+		s.writeEnrollError(w, api.EnrollmentStatus_ENROLLMENT_STATUS_REJECTED, "Bootstrap token revoked")
+		return
+	}
+
 	if tokenRecord.UsagesCount >= tokenRecord.MaxUsages {
 		logger.Warnw("Max usages exceeded for bootstrap token", "peer_id", req.PeerId, "token_id", tokenRecord.ID)
 		s.writeEnrollError(w, api.EnrollmentStatus_ENROLLMENT_STATUS_REJECTED, "Bootstrap token max usages exceeded")
@@ -1305,7 +1312,18 @@ func (s *Server) HandleEnroll(w http.ResponseWriter, r *http.Request) {
 		// Request already exists, return status
 		var resp *api.BootstrapEnrollResponse
 		if existingReq.Status == api.EnrollmentStatus_ENROLLMENT_STATUS_APPROVED {
-			resp, err = s.buildApprovedBootstrapEnrollResponse(ctx, existingReq.BiscuitToken, existingReq.ResolvedAt)
+			biscuitToken, resolvedAt, refreshErr := s.remintApprovedBootstrapBiscuit(ctx, existingReq, tokenRecord)
+			if refreshErr != nil {
+				if errors.Is(refreshErr, storage.ErrNodeBanned) || errors.Is(refreshErr, storage.ErrNodeSessionExpired) || errors.Is(refreshErr, errBootstrapRoleMismatch) {
+					logger.Warnw("Refused bootstrap re-enrollment", "peer_id", req.PeerId, "error", refreshErr)
+					s.writeEnrollError(w, api.EnrollmentStatus_ENROLLMENT_STATUS_REJECTED, "Enrollment no longer valid: "+refreshErr.Error())
+					return
+				}
+				logger.Errorf("Failed to re-mint approved enrollment biscuit: %v", refreshErr)
+				http.Error(w, "Internal server error", http.StatusInternalServerError)
+				return
+			}
+			resp, err = s.buildApprovedBootstrapEnrollResponse(ctx, biscuitToken, resolvedAt)
 			if err != nil {
 				logger.Errorf("Failed to build approved response: %v", err)
 				http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -1516,6 +1534,14 @@ func (s *Server) HandleEnrollStatus(w http.ResponseWriter, r *http.Request) {
 
 	var resp *api.BootstrapEnrollResponse
 	if enrollReq.Status == api.EnrollmentStatus_ENROLLMENT_STATUS_APPROVED {
+		// A GET status poll must not mint credentials: unlike /enroll, this
+		// endpoint checks neither a live bootstrap token nor the node
+		// record's ban/admission state (banNode only flips nodes.banned; the
+		// enrollment request stays APPROVED), so a banned peer or one that
+		// lost its bootstrap token could otherwise poll forever for a fresh,
+		// verifying biscuit using nothing but its own private key. Re-minting
+		// belongs only on /enroll, where a currently-valid bootstrap token is
+		// the operator's lever - see remintApprovedBootstrapBiscuit.
 		resp, err = s.buildApprovedBootstrapEnrollResponse(ctx, enrollReq.BiscuitToken, enrollReq.ResolvedAt)
 		if err != nil {
 			logger.Errorf("Failed to build approved response: %v", err)
@@ -1686,6 +1712,43 @@ func (s *Server) HandleAdminBootstrapTokens(w http.ResponseWriter, r *http.Reque
 		"role":       tokenRecord.Role,
 		"expires_at": tokenRecord.ExpiresAt.Format(time.RFC3339),
 	})
+}
+
+// HandleAdminBootstrapTokenAction HTTP DELETE `/admin/bootstrap-tokens/{id}`
+// soft-revokes a token (see storage.BootstrapToken.RevokedAt): idempotent,
+// and 404 only when the id names no token at all, per #368.
+func (s *Server) HandleAdminBootstrapTokenAction(w http.ResponseWriter, r *http.Request) {
+	if !s.checkAdminAuth(w, r) {
+		return
+	}
+
+	if r.Method != http.MethodDelete {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	id := strings.TrimPrefix(r.URL.Path, "/admin/bootstrap-tokens/")
+	if id == "" || strings.Contains(id, "/") {
+		http.Error(w, "Not found", http.StatusNotFound)
+		return
+	}
+
+	ctx := r.Context()
+	if _, err := s.store.GetBootstrapToken(ctx, id); err == storage.ErrNotFound {
+		http.Error(w, "Bootstrap token not found", http.StatusNotFound)
+		return
+	} else if err != nil {
+		logger.Errorf("Failed to look up bootstrap token %s: %v", id, err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	if err := s.store.RevokeBootstrapToken(ctx, id); err != nil {
+		logger.Errorf("Failed to revoke bootstrap token %s: %v", id, err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // HandleAdminEnrollments HTTP GET `/admin/enrollments`
@@ -1915,6 +1978,93 @@ func (s *Server) HandleAdminRevoke(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/x-protobuf")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(respData)
+}
+
+// errBootstrapRoleMismatch guards remintApprovedBootstrapBiscuit's role
+// check: the bootstrap token presented at /enroll must match the role the
+// peer was actually admitted under, or a stale or reused token could re-mint
+// a biscuit for a role the node's enrollment record never granted it.
+var errBootstrapRoleMismatch = errors.New("bootstrap token role does not match enrolled node role")
+
+// remintApprovedBootstrapBiscuit re-mints and persists a fresh biscuit for an
+// already-approved bootstrap enrollment request, sourcing role and labels
+// from the enrolled node record - never from the request or the bootstrap
+// token - since that record is what both approval paths wrote before ever
+// returning this enrollment request as APPROVED.
+//
+// This runs unconditionally on every hit of the existing-request branch, not
+// behind a "has the stored token aged past BiscuitTTL" check: that heuristic
+// missed a router that refreshed (B1->B2 in the node record) and then
+// restarted inside the TTL - it would get stale B1 back from this request and
+// still 401 on every future /refresh - and it missed a biscuit that is still
+// within its TTL but was signed by a key retired past its rotation grace
+// period. Always re-minting here sidesteps all three by construction. It is
+// safe to do unconditionally because the only caller, HandleEnroll's
+// existing-request branch, already sits behind a fresh proof-of-possession
+// signature and a currently-valid, non-exhausted bootstrap token - an
+// operator-controlled lever. HandleEnrollStatus (a GET status poll) must
+// never call this: it has no equivalent gate, only a signature check, so
+// minting there would hand any peer a forever-renewable credential.
+func (s *Server) remintApprovedBootstrapBiscuit(ctx context.Context, existingReq *storage.EnrollmentRequest, tokenRecord *storage.BootstrapToken) ([]byte, *time.Time, error) {
+	pID, err := peer.Decode(existingReq.PeerID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid stored peer id %q: %w", existingReq.PeerID, err)
+	}
+
+	// Look up by pID.String() (canonical), not the raw existingReq.PeerID,
+	// matching every other GetNode call site (e.g. HandleRefresh) - the two
+	// need not be byte-identical strings for the same peer.
+	nodeRecord, err := s.store.GetNode(ctx, pID.String())
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to retrieve enrolled node %s: %w", pID, err)
+	}
+
+	if tokenRecord.Role != nodeRecord.Role {
+		return nil, nil, fmt.Errorf("%w: token role %q, node role %q", errBootstrapRoleMismatch, tokenRecord.Role, nodeRecord.Role)
+	}
+	if err := nodeRecord.CheckAdmission(time.Now()); err != nil {
+		return nil, nil, err
+	}
+
+	privKey, _, err := s.store.GetCurrentKey(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to retrieve signing key: %w", err)
+	}
+
+	policyRoles, _, err := s.store.GetMeshPolicy(ctx)
+	if err != nil && err != storage.ErrNotFound {
+		return nil, nil, fmt.Errorf("failed to retrieve mesh policy: %w", err)
+	}
+
+	biscuitExpiry := time.Now().Add(s.config.BiscuitTTL)
+	biscuitBytes, err := identity.MintBootstrapBiscuitToken(privKey, pID, nodeRecord.Role, biscuitExpiry, policyRoles, nodeRecord.Labels)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to mint refreshed bootstrap biscuit: %w", err)
+	}
+
+	if err := s.store.UpdateEnrollmentRequest(ctx, existingReq.ID, api.EnrollmentStatus_ENROLLMENT_STATUS_APPROVED, biscuitBytes, existingReq.ResolvedBy); err != nil {
+		return nil, nil, fmt.Errorf("failed to persist refreshed enrollment request: %w", err)
+	}
+
+	// Keep the node record's biscuit in lockstep: /refresh's reuse-detection
+	// compares a presented biscuit against exactly this field.
+	nodeRecord.Biscuit = biscuitBytes
+	nodeRecord.EnrolledAt = time.Now()
+	if err := s.store.EnrollNode(ctx, nodeRecord); err != nil {
+		return nil, nil, fmt.Errorf("failed to persist refreshed node record: %w", err)
+	}
+
+	// Re-minting consumes a use of the bootstrap token, the same as the
+	// original enrollment did - it is the operator's lever on how many times
+	// this can happen, per #367/#368. A failure here only means the usage
+	// counter under-counts; it must not block the peer from getting its
+	// (already persisted) fresh biscuit.
+	if err := s.store.IncrementBootstrapTokenUsage(ctx, tokenRecord.ID); err != nil {
+		logger.Errorf("Failed to increment bootstrap token usage on re-mint for %s: %v", pID, err)
+	}
+
+	resolvedAt := time.Now()
+	return biscuitBytes, &resolvedAt, nil
 }
 
 func (s *Server) buildApprovedBootstrapEnrollResponse(ctx context.Context, biscuitToken []byte, resolvedAt *time.Time) (*api.BootstrapEnrollResponse, error) {
