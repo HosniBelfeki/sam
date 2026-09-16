@@ -72,6 +72,13 @@ type EnrolledNode struct {
 	EnrolledAt time.Time
 	ExpiresAt  time.Time
 	Banned     bool
+	// AutonomousRecovery lets /refresh re-issue this node's biscuit after the
+	// key that signed it has been retired, on proof of possession alone. Off
+	// by default: without it a bootstrap node offline past the key grace
+	// period needs an operator to mint a new token, which is what stops a
+	// forgotten or stolen machine from rejoining on its own. Only ever set
+	// server-side, from the token that enrolled the node or by an admin.
+	AutonomousRecovery bool
 }
 
 // CheckAdmission reports whether the control plane may still serve this node.
@@ -105,6 +112,9 @@ type BootstrapToken struct {
 	// into this table and a hard delete would break that trail. Nil means
 	// never revoked.
 	RevokedAt *time.Time
+	// AutonomousRecovery is copied onto every node this token enrolls; see
+	// EnrolledNode.AutonomousRecovery.
+	AutonomousRecovery bool
 }
 
 // IsRevoked reports whether the token has been explicitly revoked, as
@@ -179,6 +189,10 @@ type Store interface {
 
 	// IsNodeBanned checks if a node is currently banned.
 	IsNodeBanned(ctx context.Context, peerID string) (bool, error)
+
+	// SetNodeAutonomousRecovery toggles EnrolledNode.AutonomousRecovery.
+	// Returns ErrNotFound if no such node is enrolled.
+	SetNodeAutonomousRecovery(ctx context.Context, peerID string, enabled bool) error
 
 	// SetIdentityBanned bans or unbans an enrolled OIDC identity, keyed as
 	// "issuer|subject". A node ban is keyed on a self-generated peer id, so

@@ -16,6 +16,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -119,6 +120,8 @@ func TestEnrolledNodeRoundTripsEveryField(t *testing.T) {
 		Labels:         map[string]string{"region": "emea"},
 		EnrolledAt:     time.Now().Add(-time.Hour),
 		ExpiresAt:      time.Now().Add(time.Hour),
+		// Non-default so the round trip proves the column is read back.
+		AutonomousRecovery: true,
 	}
 	// Banned is never set by enrollment; a node cannot un-ban itself by
 	// re-enrolling. TestReEnrollmentKeepsAnExistingBan covers that.
@@ -143,6 +146,51 @@ func TestEnrolledNodeRoundTripsEveryField(t *testing.T) {
 		t.Fatalf("ListNodes returned %d nodes, want 1", len(listed))
 	}
 	requireFieldsRoundTrip(t, want, &listed[0], "Banned")
+}
+
+// Autonomous recovery is a per-node, server-side opt-in: it must default
+// off, flip on and off via SetNodeAutonomousRecovery, and report ErrNotFound
+// for a peer that was never enrolled (so an admin toggle can 404 instead of
+// silently updating zero rows).
+func TestSetNodeAutonomousRecovery(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	node := &EnrolledNode{
+		PeerID:         "12D3KooWRecover",
+		PublicKey:      []byte("pub"),
+		Biscuit:        []byte("biscuit"),
+		Role:           api.RoleRouter,
+		EnrollmentType: "BOOTSTRAP",
+		EnrolledAt:     time.Now(),
+	}
+	if err := store.EnrollNode(ctx, node); err != nil {
+		t.Fatalf("EnrollNode: %v", err)
+	}
+	got, err := store.GetNode(ctx, node.PeerID)
+	if err != nil {
+		t.Fatalf("GetNode: %v", err)
+	}
+	if got.AutonomousRecovery {
+		t.Fatal("AutonomousRecovery must default to false")
+	}
+
+	if err := store.SetNodeAutonomousRecovery(ctx, node.PeerID, true); err != nil {
+		t.Fatalf("SetNodeAutonomousRecovery(true): %v", err)
+	}
+	if got, _ = store.GetNode(ctx, node.PeerID); !got.AutonomousRecovery {
+		t.Fatal("SetNodeAutonomousRecovery(true) did not persist")
+	}
+	if err := store.SetNodeAutonomousRecovery(ctx, node.PeerID, false); err != nil {
+		t.Fatalf("SetNodeAutonomousRecovery(false): %v", err)
+	}
+	if got, _ = store.GetNode(ctx, node.PeerID); got.AutonomousRecovery {
+		t.Fatal("SetNodeAutonomousRecovery(false) did not persist")
+	}
+
+	if err := store.SetNodeAutonomousRecovery(ctx, "12D3KooWNobody", true); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("SetNodeAutonomousRecovery(unknown peer) = %v, want ErrNotFound", err)
+	}
 }
 
 // A ban is the mesh's way of turning a node off. Re-enrolling must not clear
@@ -201,6 +249,8 @@ func TestBootstrapTokenRoundTripsEveryField(t *testing.T) {
 		Description: "a description",
 		CreatedAt:   time.Now().Add(-time.Hour),
 		ExpiresAt:   time.Now().Add(time.Hour),
+		// Non-default so the round trip proves the column is read back.
+		AutonomousRecovery: true,
 	}
 	// RevokedAt is never set at creation - only RevokeBootstrapToken sets it,
 	// covered separately below.
