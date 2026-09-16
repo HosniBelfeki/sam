@@ -376,12 +376,19 @@ func (r *Router) enroll(peerID peer.ID) error {
 	if err != nil {
 		return fmt.Errorf("failed to marshal public key: %w", err)
 	}
+	ts := time.Now().UnixMilli()
+	sig, err := r.privKey.Sign(api.RegisterChallenge(peerID.String(), ts))
+	if err != nil {
+		return fmt.Errorf("failed to sign registration challenge: %w", err)
+	}
 
 	req := &api.EnrollRequest{
-		Jwt:           r.config.OIDCToken,
-		PeerId:        peerID.String(),
-		PublicKey:     pubBytes,
-		RequestedRole: r.config.RequiredRole,
+		Jwt:                r.config.OIDCToken,
+		PeerId:             peerID.String(),
+		PublicKey:          pubBytes,
+		RequestedRole:      r.config.RequiredRole,
+		Timestamp:          ts,
+		ChallengeSignature: sig,
 	}
 	data, err := proto.Marshal(req)
 	if err != nil {
@@ -823,12 +830,23 @@ func (r *Router) renewLease() {
 			dhtSize = int32(r.DHT.RoutingTable().Size())
 		}
 
+		// The biscuit identifies us; the signature proves it is us (peers we
+		// authenticate hold a copy of the biscuit).
+		ts := time.Now().UnixMilli()
+		sig, err := r.privKey.Sign(api.RouterLeaseChallenge(r.Host.ID().String(), ts))
+		if err != nil {
+			logger.Errorf("Failed to sign lease challenge: %v", err)
+			return
+		}
+
 		req := &api.RouterLeaseRequest{
-			PeerId:         r.Host.ID().String(),
-			Addresses:      addrs,
-			Biscuit:        biscuit,
-			ConnectedPeers: connectedPeers,
-			DhtSize:        dhtSize,
+			PeerId:             r.Host.ID().String(),
+			Addresses:          addrs,
+			Biscuit:            biscuit,
+			ConnectedPeers:     connectedPeers,
+			DhtSize:            dhtSize,
+			Timestamp:          ts,
+			ChallengeSignature: sig,
 		}
 		data, _ := proto.Marshal(req)
 

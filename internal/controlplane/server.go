@@ -510,6 +510,28 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	canonical := pID.String()
 
+	// Proof of possession, as at /enroll: the JWT says who is asking, this
+	// says they hold the key they are binding. Without it any identity with
+	// a node binding could register a victim's peer_id and overwrite its
+	// record. peer_id must be the key's own, so the same peer_id always
+	// means the same key and a record can only ever be overwritten by its
+	// owner.
+	enrolleeKey, err := crypto.UnmarshalPublicKey(req.PublicKey)
+	if err != nil {
+		http.Error(w, "Invalid public key", http.StatusBadRequest)
+		return
+	}
+	if !pID.MatchesPublicKey(enrolleeKey) {
+		logger.Warnw("Registration peer_id does not match public_key", "peer_id", canonical)
+		http.Error(w, "peer_id is not derived from public_key", http.StatusBadRequest)
+		return
+	}
+	if err := verifyFreshChallenge(enrolleeKey, api.RegisterChallenge(canonical, req.Timestamp), req.Timestamp, req.ChallengeSignature); err != nil {
+		logger.Warnw("Register challenge verification failed", "peer_id", canonical, "error", err)
+		http.Error(w, "Invalid registration challenge: "+err.Error(), http.StatusUnauthorized)
+		return
+	}
+
 	// A ban names the device key and the identity behind it; check both, or
 	// a banned node re-enrolls from a freshly generated keypair.
 	if banned, err := s.store.IsNodeBanned(ctx, canonical); err != nil {
@@ -1021,6 +1043,29 @@ func (s *Server) HandleRouterLease(w http.ResponseWriter, r *http.Request) {
 		}
 		logger.Warnw("Router with expired session attempted lease renewal", "peer_id", canonical)
 		http.Error(w, "Session expired, please re-enroll", http.StatusUnauthorized)
+		return
+	}
+	// The biscuit's role() fact was checked above; this is the control
+	// plane's own record of what it enrolled this peer as.
+	if routerRecord.Role != api.RoleRouter {
+		logger.Warnw("Lease renewal from a peer not enrolled as a router", "peer_id", canonical, "role", routerRecord.Role)
+		http.Error(w, "Unauthorized: entity is not a router", http.StatusForbidden)
+		return
+	}
+
+	// Proof of possession. The biscuit is not it: routers send theirs to
+	// every peer they authenticate, so any enrolled node holds a router's
+	// biscuit and could otherwise rewrite that router's lease (empty or
+	// attacker addresses, false telemetry) for every joining peer.
+	routerKey, err := crypto.UnmarshalPublicKey(routerRecord.PublicKey)
+	if err != nil {
+		logger.Errorf("Router %s has an unparseable enrolled public key: %v", canonical, err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	if err := verifyFreshChallenge(routerKey, api.RouterLeaseChallenge(canonical, req.Timestamp), req.Timestamp, req.ChallengeSignature); err != nil {
+		logger.Warnw("Router lease challenge verification failed", "peer_id", canonical, "error", err)
+		http.Error(w, "Invalid lease challenge: "+err.Error(), http.StatusUnauthorized)
 		return
 	}
 

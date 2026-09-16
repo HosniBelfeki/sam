@@ -233,11 +233,18 @@ func TestRouterIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	regTS := time.Now().UnixMilli()
+	regSig, err := nodePrivKey.Sign(api.RegisterChallenge(nodePeerID.String(), regTS))
+	if err != nil {
+		t.Fatal(err)
+	}
 	enrollNodeReq := &api.EnrollRequest{
-		Jwt:           nodeJWT,
-		PeerId:        nodePeerID.String(),
-		PublicKey:     nodePubKeyBytes,
-		RequestedRole: api.RoleNode,
+		Jwt:                nodeJWT,
+		PeerId:             nodePeerID.String(),
+		PublicKey:          nodePubKeyBytes,
+		RequestedRole:      api.RoleNode,
+		Timestamp:          regTS,
+		ChallengeSignature: regSig,
 	}
 	reqData, _ := proto.Marshal(enrollNodeReq)
 	resp, err := client.Post(cpURL+"/register", "application/x-protobuf", bytes.NewReader(reqData))
@@ -538,6 +545,7 @@ func TestRouterLeaseRenewalRepeated401Terminates(t *testing.T) {
 
 	r := &Router{
 		Host:         h,
+		privKey:      h.Peerstore().PrivKey(h.ID()),
 		biscuitToken: []byte("dummy-biscuit"),
 		config: Options{
 			ControlPlaneURL: ts.URL,

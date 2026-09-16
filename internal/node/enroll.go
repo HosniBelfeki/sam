@@ -64,8 +64,7 @@ func GetOrGenerateKey(s *Store) crypto.PrivKey {
 }
 
 func (n *SamNode) Enroll(ctx context.Context, controlPlaneURL string, jwt string) error {
-	pubKey := n.Host.Peerstore().PubKey(n.Host.ID())
-	enrollResp, err := n.enrollHTTP(ctx, controlPlaneURL, jwt, n.Host.ID(), pubKey)
+	enrollResp, err := n.enrollHTTP(ctx, controlPlaneURL, jwt, n.Host.ID(), n.config.PrivKey)
 	if err != nil {
 		return err
 	}
@@ -75,18 +74,26 @@ func (n *SamNode) Enroll(ctx context.Context, controlPlaneURL string, jwt string
 
 // enrollHTTP performs the HTTP half of enrollment for an explicit peer
 // identity, so it can run before the libp2p host exists (startup recovery).
-func (n *SamNode) enrollHTTP(ctx context.Context, controlPlaneURL, jwt string, peerID peer.ID, pubKey crypto.PubKey) (*api.EnrollResponse, error) {
-	pubBytes, err := crypto.MarshalPublicKey(pubKey)
+// privKey signs the proof-of-possession challenge; peerID must be its own.
+func (n *SamNode) enrollHTTP(ctx context.Context, controlPlaneURL, jwt string, peerID peer.ID, privKey crypto.PrivKey) (*api.EnrollResponse, error) {
+	pubBytes, err := crypto.MarshalPublicKey(privKey.GetPublic())
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal public key: %w", err)
 	}
+	ts := time.Now().UnixMilli()
+	sig, err := privKey.Sign(api.RegisterChallenge(peerID.String(), ts))
+	if err != nil {
+		return nil, fmt.Errorf("failed to sign registration challenge: %w", err)
+	}
 
 	req := &api.EnrollRequest{
-		Jwt:           jwt,
-		PeerId:        peerID.String(),
-		PublicKey:     pubBytes,
-		RequestedRole: n.config.RequiredRole,
-		Labels:        n.labels(),
+		Jwt:                jwt,
+		PeerId:             peerID.String(),
+		PublicKey:          pubBytes,
+		RequestedRole:      n.config.RequiredRole,
+		Labels:             n.labels(),
+		Timestamp:          ts,
+		ChallengeSignature: sig,
 	}
 	data, err := proto.Marshal(req)
 	if err != nil {
@@ -136,7 +143,7 @@ func (n *SamNode) ReEnrollWithRefreshToken(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to derive peer ID from stored key: %w", err)
 	}
-	_, err = n.enrollHTTP(ctx, controlPlaneURL, jwt, peerID, privKey.GetPublic())
+	_, err = n.enrollHTTP(ctx, controlPlaneURL, jwt, peerID, privKey)
 	return err
 }
 

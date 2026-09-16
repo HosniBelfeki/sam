@@ -317,11 +317,14 @@ func TestNodeAndRouterRegistrationFlow(t *testing.T) {
 	})
 
 	nodePubKeyBytes, _ := crypto.MarshalPublicKey(privNode.GetPublic())
+	nodeTS, nodeSig := registerPoP(t, privNode, nodePeer.String())
 	enrollNodeReq := &api.EnrollRequest{
-		Jwt:           nodeJWT,
-		PeerId:        nodePeer.String(),
-		PublicKey:     nodePubKeyBytes,
-		RequestedRole: api.RoleNode,
+		Jwt:                nodeJWT,
+		PeerId:             nodePeer.String(),
+		PublicKey:          nodePubKeyBytes,
+		RequestedRole:      api.RoleNode,
+		Timestamp:          nodeTS,
+		ChallengeSignature: nodeSig,
 	}
 	reqData, _ := proto.Marshal(enrollNodeReq)
 
@@ -361,11 +364,14 @@ func TestNodeAndRouterRegistrationFlow(t *testing.T) {
 	})
 
 	routerPubKeyBytes, _ := crypto.MarshalPublicKey(privRouter.GetPublic())
+	routerTS, routerSig := registerPoP(t, privRouter, routerPeer.String())
 	enrollRouterReq := &api.EnrollRequest{
-		Jwt:           routerJWT,
-		PeerId:        routerPeer.String(),
-		PublicKey:     routerPubKeyBytes,
-		RequestedRole: api.RoleRouter,
+		Jwt:                routerJWT,
+		PeerId:             routerPeer.String(),
+		PublicKey:          routerPubKeyBytes,
+		RequestedRole:      api.RoleRouter,
+		Timestamp:          routerTS,
+		ChallengeSignature: routerSig,
 	}
 	reqData, _ = proto.Marshal(enrollRouterReq)
 
@@ -389,10 +395,13 @@ func TestNodeAndRouterRegistrationFlow(t *testing.T) {
 
 	// 4. Register Router Lease
 	routerAddresses := []string{"/ip4/127.0.0.1/tcp/5001/p2p/" + routerPeer.String()}
+	leaseTS, leaseSig := leasePoP(t, privRouter, routerPeer.String())
 	leaseReq := &api.RouterLeaseRequest{
-		PeerId:    routerPeer.String(),
-		Addresses: routerAddresses,
-		Biscuit:   enrollRouterResp.BiscuitToken,
+		PeerId:             routerPeer.String(),
+		Addresses:          routerAddresses,
+		Biscuit:            enrollRouterResp.BiscuitToken,
+		Timestamp:          leaseTS,
+		ChallengeSignature: leaseSig,
 	}
 	reqData, _ = proto.Marshal(leaseReq)
 
@@ -437,10 +446,13 @@ func TestNodeAndRouterRegistrationFlow(t *testing.T) {
 		"missing p2p":     "/ip4/203.0.113.66/tcp/4001",
 		"foreign peer":    "/ip4/203.0.113.66/tcp/4001/p2p/" + nodePeer.String(),
 	} {
+		badTS, badSig := leasePoP(t, privRouter, routerPeer.String())
 		badLease := &api.RouterLeaseRequest{
-			PeerId:    routerPeer.String(),
-			Addresses: []string{badAddr},
-			Biscuit:   enrollRouterResp.BiscuitToken,
+			PeerId:             routerPeer.String(),
+			Addresses:          []string{badAddr},
+			Biscuit:            enrollRouterResp.BiscuitToken,
+			Timestamp:          badTS,
+			ChallengeSignature: badSig,
 		}
 		reqData, _ = proto.Marshal(badLease)
 		resp, err = client.Post(baseURL+"/routers/lease", "application/x-protobuf", bytes.NewReader(reqData))
@@ -454,10 +466,13 @@ func TestNodeAndRouterRegistrationFlow(t *testing.T) {
 	}
 
 	// 6. Rogue Node tries to lease as a router (lacks 'router' role)
+	rogueTS, rogueSig := leasePoP(t, privNode, nodePeer.String())
 	rogueLeaseReq := &api.RouterLeaseRequest{
-		PeerId:    nodePeer.String(),
-		Addresses: []string{"/ip4/127.0.0.1/tcp/6001/p2p/" + nodePeer.String()},
-		Biscuit:   enrollNodeResp.BiscuitToken, // Node biscuit doesn't have router role
+		PeerId:             nodePeer.String(),
+		Addresses:          []string{"/ip4/127.0.0.1/tcp/6001/p2p/" + nodePeer.String()},
+		Biscuit:            enrollNodeResp.BiscuitToken, // Node biscuit doesn't have router role
+		Timestamp:          rogueTS,
+		ChallengeSignature: rogueSig,
 	}
 	reqData, _ = proto.Marshal(rogueLeaseReq)
 
@@ -467,6 +482,72 @@ func TestNodeAndRouterRegistrationFlow(t *testing.T) {
 	}
 	if resp.StatusCode != http.StatusForbidden {
 		t.Errorf("expectedStatusForbidden (403) for rogue router lease, got: %s", resp.Status)
+	}
+
+	// 7. Lease poisoning by an enrolled node. Routers send their biscuit to
+	// every peer they authenticate, so the node holds a copy; a lease that
+	// needed only the biscuit let it rewrite the router's addresses for every
+	// joining peer. The node signs the challenge with the only key it has.
+	for name, poisoned := range map[string]*api.RouterLeaseRequest{
+		"no challenge": {
+			PeerId:    routerPeer.String(),
+			Addresses: []string{},
+			Biscuit:   enrollRouterResp.BiscuitToken,
+		},
+		"challenge signed with the node's key": func() *api.RouterLeaseRequest {
+			ts, sig := leasePoP(t, privNode, routerPeer.String())
+			return &api.RouterLeaseRequest{
+				PeerId:             routerPeer.String(),
+				Addresses:          []string{"/ip4/203.0.113.66/tcp/4001/p2p/" + routerPeer.String()},
+				Biscuit:            enrollRouterResp.BiscuitToken,
+				Timestamp:          ts,
+				ChallengeSignature: sig,
+			}
+		}(),
+		"stale router signature": func() *api.RouterLeaseRequest {
+			ts := time.Now().Add(-challengeMaxAge - time.Minute).UnixMilli()
+			sig, err := privRouter.Sign(api.RouterLeaseChallenge(routerPeer.String(), ts))
+			if err != nil {
+				t.Fatal(err)
+			}
+			return &api.RouterLeaseRequest{
+				PeerId:             routerPeer.String(),
+				Addresses:          []string{},
+				Biscuit:            enrollRouterResp.BiscuitToken,
+				Timestamp:          ts,
+				ChallengeSignature: sig,
+			}
+		}(),
+	} {
+		reqData, err := proto.Marshal(poisoned)
+		if err != nil {
+			t.Fatalf("marshal poisoned lease (%s): %v", name, err)
+		}
+		resp, err = client.Post(baseURL+"/routers/lease", "application/x-protobuf", bytes.NewReader(reqData))
+		if err != nil {
+			t.Fatalf("POST poisoned lease (%s) failed: %v", name, err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Errorf("poisoned lease (%s): got %s, want 401", name, resp.Status)
+		}
+	}
+	// The router's advertised addresses are untouched.
+	resp, err = client.Get(baseURL + "/info")
+	if err != nil {
+		t.Fatalf("GET /info failed: %v", err)
+	}
+	body, err = io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if err != nil {
+		t.Fatalf("read /info: %v", err)
+	}
+	var infoAfter api.ControlPlaneInfoResponse
+	if err := proto.Unmarshal(body, &infoAfter); err != nil {
+		t.Fatalf("unmarshal /info: %v", err)
+	}
+	if !reflect.DeepEqual(infoAfter.RouterAddresses, routerAddresses) {
+		t.Errorf("router addresses after poisoning attempts = %v, want %v", infoAfter.RouterAddresses, routerAddresses)
 	}
 }
 
@@ -986,6 +1067,163 @@ func enrollPoP(t *testing.T, priv crypto.PrivKey, peerID string) (int64, []byte)
 	return ts, sig
 }
 
+// registerPoP signs the POST /register proof-of-possession challenge.
+func registerPoP(t *testing.T, priv crypto.PrivKey, peerID string) (int64, []byte) {
+	t.Helper()
+	ts := time.Now().UnixMilli()
+	sig, err := priv.Sign(api.RegisterChallenge(peerID, ts))
+	if err != nil {
+		t.Fatalf("failed to sign register challenge: %v", err)
+	}
+	return ts, sig
+}
+
+// leasePoP signs the POST /routers/lease proof-of-possession challenge.
+func leasePoP(t *testing.T, priv crypto.PrivKey, peerID string) (int64, []byte) {
+	t.Helper()
+	ts := time.Now().UnixMilli()
+	sig, err := priv.Sign(api.RouterLeaseChallenge(peerID, ts))
+	if err != nil {
+		t.Fatalf("failed to sign lease challenge: %v", err)
+	}
+	return ts, sig
+}
+
+// TestRegisterRequiresProofOfPossession pins audit finding H1: POST /register
+// trusted peer_id from the body, so any OIDC identity with a node binding
+// could register a victim's peer_id with any public key, overwrite the
+// victim's record (NULLing owner_id and autonomous_recovery) and break the
+// victim's next /refresh. The JWT says who is asking; the signed challenge
+// says they hold the key they are binding.
+func TestRegisterRequiresProofOfPossession(t *testing.T) {
+	issuer, mintToken := startCustomMockOIDC(t)
+	srv, store, baseURL := setupTestServer(t, issuer)
+	defer func() {
+		_ = srv.Close()
+		_ = store.Close()
+	}()
+	ctx := context.Background()
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	if err := store.SaveMeshPolicy(ctx, nil, []*api.PolicyBinding{
+		{Role: api.RoleNode, Members: []string{api.SystemAuthenticated}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	post := func(req *api.EnrollRequest) (int, string) {
+		t.Helper()
+		data, err := proto.Marshal(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := client.Post(baseURL+"/register", "application/x-protobuf", bytes.NewReader(data))
+		if err != nil {
+			t.Fatalf("/register failed: %v", err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatalf("read /register response: %v", err)
+		}
+		return resp.StatusCode, string(body)
+	}
+
+	victimPriv, victimID := newTestKey(t)
+	victimPub, err := crypto.MarshalPublicKey(victimPriv.GetPublic())
+	if err != nil {
+		t.Fatal(err)
+	}
+	attackerPriv, attackerID := newTestKey(t)
+	attackerPub, err := crypto.MarshalPublicKey(attackerPriv.GetPublic())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The victim enrolls, with the admin-granted flag the hijack used to strip.
+	ts, sig := registerPoP(t, victimPriv, victimID.String())
+	if status, body := post(&api.EnrollRequest{
+		Jwt: mintToken(map[string]interface{}{"sub": "victim"}), PeerId: victimID.String(), PublicKey: victimPub,
+		RequestedRole: api.RoleNode, Timestamp: ts, ChallengeSignature: sig,
+	}); status != http.StatusOK {
+		t.Fatalf("victim registration: got %d (%s), want 200", status, body)
+	}
+	if err := store.SetNodeAutonomousRecovery(ctx, victimID.String(), true); err != nil {
+		t.Fatal(err)
+	}
+
+	attackerJWT := mintToken(map[string]interface{}{"sub": "attacker"})
+	cases := map[string]struct {
+		req  *api.EnrollRequest
+		want int
+	}{
+		"victim peer_id, attacker key, no challenge": {
+			req:  &api.EnrollRequest{Jwt: attackerJWT, PeerId: victimID.String(), PublicKey: attackerPub, RequestedRole: api.RoleNode},
+			want: http.StatusBadRequest, // peer_id is not the key's own
+		},
+		"victim peer_id and public key, no challenge": {
+			req:  &api.EnrollRequest{Jwt: attackerJWT, PeerId: victimID.String(), PublicKey: victimPub, RequestedRole: api.RoleNode},
+			want: http.StatusUnauthorized,
+		},
+		"victim peer_id and public key, challenge signed by the attacker": {
+			req: func() *api.EnrollRequest {
+				ts, sig := registerPoP(t, attackerPriv, victimID.String())
+				return &api.EnrollRequest{Jwt: attackerJWT, PeerId: victimID.String(), PublicKey: victimPub, RequestedRole: api.RoleNode, Timestamp: ts, ChallengeSignature: sig}
+			}(),
+			want: http.StatusUnauthorized,
+		},
+		"own key, challenge for another endpoint": {
+			req: func() *api.EnrollRequest {
+				ts, sig := enrollPoP(t, attackerPriv, attackerID.String())
+				return &api.EnrollRequest{Jwt: attackerJWT, PeerId: attackerID.String(), PublicKey: attackerPub, RequestedRole: api.RoleNode, Timestamp: ts, ChallengeSignature: sig}
+			}(),
+			want: http.StatusUnauthorized,
+		},
+		"own key, stale challenge": {
+			req: func() *api.EnrollRequest {
+				ts := time.Now().Add(-challengeMaxAge - time.Minute).UnixMilli()
+				sig, err := attackerPriv.Sign(api.RegisterChallenge(attackerID.String(), ts))
+				if err != nil {
+					t.Fatal(err)
+				}
+				return &api.EnrollRequest{Jwt: attackerJWT, PeerId: attackerID.String(), PublicKey: attackerPub, RequestedRole: api.RoleNode, Timestamp: ts, ChallengeSignature: sig}
+			}(),
+			want: http.StatusUnauthorized,
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			if status, body := post(tc.req); status != tc.want {
+				t.Errorf("got %d (%s), want %d", status, body, tc.want)
+			}
+		})
+	}
+
+	// The victim's record survived every attempt intact.
+	victim, err := store.GetNode(ctx, victimID.String())
+	if err != nil {
+		t.Fatalf("victim record: %v", err)
+	}
+	if !bytes.Equal(victim.PublicKey, victimPub) {
+		t.Error("victim's public key was overwritten")
+	}
+	if !victim.AutonomousRecovery {
+		t.Error("victim's autonomous_recovery flag was reset")
+	}
+	if _, err := store.GetNode(ctx, attackerID.String()); err != storage.ErrNotFound {
+		t.Errorf("attacker's failed attempts left a record: err = %v", err)
+	}
+
+	// The same attacker, proving its own key, registers normally.
+	ts, sig = registerPoP(t, attackerPriv, attackerID.String())
+	if status, body := post(&api.EnrollRequest{
+		Jwt: attackerJWT, PeerId: attackerID.String(), PublicKey: attackerPub,
+		RequestedRole: api.RoleNode, Timestamp: ts, ChallengeSignature: sig,
+	}); status != http.StatusOK {
+		t.Fatalf("honest registration: got %d (%s), want 200", status, body)
+	}
+}
+
 // TestBootstrapEnrollmentRequiresProofOfPossession pins the fix for
 // GHSA-hp3x-79wr-rx66 on both bootstrap endpoints: neither GET /enroll/status
 // nor a repeated POST /enroll may reveal an enrollment's status or biscuit to
@@ -1256,7 +1494,7 @@ func TestRouterLeaseRevocation(t *testing.T) {
 
 	// enrollLeaseRouter mints a router biscuit and, unless orphan, the
 	// EnrolledNode record backing it.
-	enrollLeaseRouter := func(expiresAt time.Time, orphan bool) (peer.ID, []byte) {
+	enrollLeaseRouter := func(expiresAt time.Time, orphan bool) (crypto.PrivKey, peer.ID, []byte) {
 		t.Helper()
 		priv, pub, err := crypto.GenerateKeyPair(crypto.Ed25519, -1)
 		if err != nil {
@@ -1281,15 +1519,18 @@ func TestRouterLeaseRevocation(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		return routerPeer, routerBiscuit
+		return priv, routerPeer, routerBiscuit
 	}
 
-	postLease := func(routerPeer peer.ID, routerBiscuit []byte) int {
+	postLease := func(priv crypto.PrivKey, routerPeer peer.ID, routerBiscuit []byte) int {
 		t.Helper()
+		ts, sig := leasePoP(t, priv, routerPeer.String())
 		leaseData, _ := proto.Marshal(&api.RouterLeaseRequest{
-			PeerId:    routerPeer.String(),
-			Addresses: []string{"/ip4/127.0.0.1/tcp/4001/p2p/" + routerPeer.String()},
-			Biscuit:   routerBiscuit,
+			PeerId:             routerPeer.String(),
+			Addresses:          []string{"/ip4/127.0.0.1/tcp/4001/p2p/" + routerPeer.String()},
+			Biscuit:            routerBiscuit,
+			Timestamp:          ts,
+			ChallengeSignature: sig,
 		})
 		resp, err := client.Post(baseURL+"/routers/lease", "application/x-protobuf", bytes.NewReader(leaseData))
 		if err != nil {
@@ -1300,8 +1541,8 @@ func TestRouterLeaseRevocation(t *testing.T) {
 	}
 
 	// Admitted router renews; the same router refuses after /admin/revoke.
-	routerPeer, routerBiscuit := enrollLeaseRouter(time.Time{}, false)
-	if got := postLease(routerPeer, routerBiscuit); got != http.StatusOK {
+	routerPriv, routerPeer, routerBiscuit := enrollLeaseRouter(time.Time{}, false)
+	if got := postLease(routerPriv, routerPeer, routerBiscuit); got != http.StatusOK {
 		t.Fatalf("lease before revocation: got %d, want 200", got)
 	}
 	revokeData, _ := proto.Marshal(&api.TokenRevokeRequest{PeerId: routerPeer.String()})
@@ -1315,19 +1556,19 @@ func TestRouterLeaseRevocation(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("revoke: got %s, want 200", resp.Status)
 	}
-	if got := postLease(routerPeer, routerBiscuit); got != http.StatusForbidden {
+	if got := postLease(routerPriv, routerPeer, routerBiscuit); got != http.StatusForbidden {
 		t.Fatalf("lease after revocation: got %d, want 403", got)
 	}
 
 	// A lapsed OIDC session is the other admission arm.
-	expiredPeer, expiredBiscuit := enrollLeaseRouter(time.Now().Add(-time.Hour), false)
-	if got := postLease(expiredPeer, expiredBiscuit); got != http.StatusUnauthorized {
+	expiredPriv, expiredPeer, expiredBiscuit := enrollLeaseRouter(time.Now().Add(-time.Hour), false)
+	if got := postLease(expiredPriv, expiredPeer, expiredBiscuit); got != http.StatusUnauthorized {
 		t.Fatalf("lease with lapsed session: got %d, want 401", got)
 	}
 
 	// A valid biscuit with no enrollment record behind it renews nothing.
-	orphanPeer, orphanBiscuit := enrollLeaseRouter(time.Time{}, true)
-	if got := postLease(orphanPeer, orphanBiscuit); got != http.StatusUnauthorized {
+	orphanPriv, orphanPeer, orphanBiscuit := enrollLeaseRouter(time.Time{}, true)
+	if got := postLease(orphanPriv, orphanPeer, orphanBiscuit); got != http.StatusUnauthorized {
 		t.Fatalf("lease without enrollment record: got %d, want 401", got)
 	}
 }
@@ -1387,10 +1628,13 @@ func TestRouterLeaseUnderRotatedKey(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	leaseTS, leaseSig := leasePoP(t, priv, routerPeer.String())
 	leaseData, err := proto.Marshal(&api.RouterLeaseRequest{
-		PeerId:    routerPeer.String(),
-		Addresses: []string{"/ip4/127.0.0.1/tcp/4001/p2p/" + routerPeer.String()},
-		Biscuit:   routerBiscuit,
+		PeerId:             routerPeer.String(),
+		Addresses:          []string{"/ip4/127.0.0.1/tcp/4001/p2p/" + routerPeer.String()},
+		Biscuit:            routerBiscuit,
+		Timestamp:          leaseTS,
+		ChallengeSignature: leaseSig,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1622,11 +1866,14 @@ func TestTokenRefreshAndRevocation(t *testing.T) {
 	})
 
 	nodePubKeyBytes, _ := crypto.MarshalPublicKey(pubNode)
+	nodeTS, nodeSig := registerPoP(t, privNode, nodePeer.String())
 	enrollNodeReq := &api.EnrollRequest{
-		Jwt:           nodeJWT,
-		PeerId:        nodePeer.String(),
-		PublicKey:     nodePubKeyBytes,
-		RequestedRole: api.RoleNode,
+		Jwt:                nodeJWT,
+		PeerId:             nodePeer.String(),
+		PublicKey:          nodePubKeyBytes,
+		RequestedRole:      api.RoleNode,
+		Timestamp:          nodeTS,
+		ChallengeSignature: nodeSig,
 	}
 	reqData, _ := proto.Marshal(enrollNodeReq)
 
@@ -1758,11 +2005,14 @@ func TestNodeProactiveTokenRefresh(t *testing.T) {
 
 	// Enroll via registration endpoint
 	nodePubKeyBytes, _ := crypto.MarshalPublicKey(pubNode)
+	nodeTS, nodeSig := registerPoP(t, privNode, nodePeer.String())
 	enrollNodeReq := &api.EnrollRequest{
-		Jwt:           nodeJWT,
-		PeerId:        nodePeer.String(),
-		PublicKey:     nodePubKeyBytes,
-		RequestedRole: api.RoleNode,
+		Jwt:                nodeJWT,
+		PeerId:             nodePeer.String(),
+		PublicKey:          nodePubKeyBytes,
+		RequestedRole:      api.RoleNode,
+		Timestamp:          nodeTS,
+		ChallengeSignature: nodeSig,
 	}
 	reqData, _ := proto.Marshal(enrollNodeReq)
 
@@ -2199,11 +2449,14 @@ func TestAuthDenialPaths(t *testing.T) {
 			t.Fatal(err)
 		}
 		pubBytes, _ := crypto.MarshalPublicKey(pubNode)
+		ts, sig := registerPoP(t, privNode, pID.String())
 		reqData, _ := proto.Marshal(&api.EnrollRequest{
-			Jwt:           jwtStr,
-			PeerId:        pID.String(),
-			PublicKey:     pubBytes,
-			RequestedRole: api.RoleNode,
+			Jwt:                jwtStr,
+			PeerId:             pID.String(),
+			PublicKey:          pubBytes,
+			RequestedRole:      api.RoleNode,
+			Timestamp:          ts,
+			ChallengeSignature: sig,
 		})
 		return reqData
 	}
@@ -2347,11 +2600,14 @@ func TestOIDCSessionTTLIsConfigurable(t *testing.T) {
 	}
 	pubBytes, _ := crypto.MarshalPublicKey(pubNode)
 	enrolledAt := time.Now()
+	regTS, regSig := registerPoP(t, privNode, nodePeer.String())
 	reqData, _ := proto.Marshal(&api.EnrollRequest{
-		Jwt:           mintToken(map[string]interface{}{"sub": "short-session"}),
-		PeerId:        nodePeer.String(),
-		PublicKey:     pubBytes,
-		RequestedRole: api.RoleNode,
+		Jwt:                mintToken(map[string]interface{}{"sub": "short-session"}),
+		PeerId:             nodePeer.String(),
+		PublicKey:          pubBytes,
+		RequestedRole:      api.RoleNode,
+		Timestamp:          regTS,
+		ChallengeSignature: regSig,
 	})
 	resp, err := client.Post(baseURL+"/register", "application/x-protobuf", bytes.NewReader(reqData))
 	if err != nil {
@@ -2439,11 +2695,14 @@ func TestBanSurvivesKeypairRegeneration(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		ts, sig := registerPoP(t, priv, pID.String())
 		reqData, _ := proto.Marshal(&api.EnrollRequest{
-			Jwt:           mintToken(map[string]interface{}{"sub": sub}),
-			PeerId:        pID.String(),
-			PublicKey:     pubBytes,
-			RequestedRole: api.RoleNode,
+			Jwt:                mintToken(map[string]interface{}{"sub": sub}),
+			PeerId:             pID.String(),
+			PublicKey:          pubBytes,
+			RequestedRole:      api.RoleNode,
+			Timestamp:          ts,
+			ChallengeSignature: sig,
 		})
 		resp, err := client.Post(baseURL+"/register", "application/x-protobuf", bytes.NewReader(reqData))
 		if err != nil {

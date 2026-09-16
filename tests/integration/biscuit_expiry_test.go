@@ -98,10 +98,6 @@ func TestBiscuitExpiryIsEnforcedOnEveryPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pubBytes, err := crypto.MarshalPublicKey(pubKey)
-	if err != nil {
-		t.Fatal(err)
-	}
 
 	jwtToken := mintToken(map[string]interface{}{
 		"sub":   "expiry-user",
@@ -109,7 +105,7 @@ func TestBiscuitExpiryIsEnforcedOnEveryPath(t *testing.T) {
 	})
 
 	mintedAt := time.Now()
-	enrollResp := registerOnControlPlane(t, cpPort, peerID, pubBytes, jwtToken)
+	enrollResp := registerOnControlPlane(t, cpPort, peerID, privKey, jwtToken)
 	biscuitToken := enrollResp.BiscuitToken
 	cpPubKey := ed25519.PublicKey(enrollResp.ControlPlanePublicKey)
 
@@ -157,14 +153,25 @@ func TestBiscuitExpiryIsEnforcedOnEveryPath(t *testing.T) {
 	}
 }
 
-func registerOnControlPlane(t *testing.T, cpPort int, clientID peer.ID, pubBytes []byte, jwtToken string) *api.EnrollResponse {
+func registerOnControlPlane(t *testing.T, cpPort int, clientID peer.ID, privKey crypto.PrivKey, jwtToken string) *api.EnrollResponse {
 	t.Helper()
 
+	pubBytes, err := crypto.MarshalPublicKey(privKey.GetPublic())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := time.Now().UnixMilli()
+	sig, err := privKey.Sign(api.RegisterChallenge(clientID.String(), ts))
+	if err != nil {
+		t.Fatal(err)
+	}
 	reqBytes, err := proto.Marshal(&api.EnrollRequest{
-		Jwt:           jwtToken,
-		PeerId:        clientID.String(),
-		PublicKey:     pubBytes,
-		RequestedRole: api.RoleNode,
+		Jwt:                jwtToken,
+		PeerId:             clientID.String(),
+		PublicKey:          pubBytes,
+		RequestedRole:      api.RoleNode,
+		Timestamp:          ts,
+		ChallengeSignature: sig,
 	})
 	if err != nil {
 		t.Fatal(err)

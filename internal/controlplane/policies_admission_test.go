@@ -64,11 +64,14 @@ func TestPoliciesRequiresAnAdmissibleNode(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	ts, sig := registerPoP(t, privNode, nodePeer.String())
 	enrollReq := &api.EnrollRequest{
-		Jwt:           mintToken(map[string]interface{}{"sub": "node-alice", "groups": []string{"users"}}),
-		PeerId:        nodePeer.String(),
-		PublicKey:     nodePubKeyBytes,
-		RequestedRole: api.RoleNode,
+		Jwt:                mintToken(map[string]interface{}{"sub": "node-alice", "groups": []string{"users"}}),
+		PeerId:             nodePeer.String(),
+		PublicKey:          nodePubKeyBytes,
+		RequestedRole:      api.RoleNode,
+		Timestamp:          ts,
+		ChallengeSignature: sig,
 	}
 	reqData, err := proto.Marshal(enrollReq)
 	if err != nil {

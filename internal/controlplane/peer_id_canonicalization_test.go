@@ -135,11 +135,20 @@ func TestBannedNodeCannotRegisterUnderAnAlias(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		// The challenge is over the canonical id whatever spelling the request
+		// carries, as the control plane canonicalizes before checking it.
+		decoded, err := peer.Decode(peerID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ts, sig := registerPoP(t, priv, decoded.String())
 		reqData, err := proto.Marshal(&api.EnrollRequest{
-			Jwt:           mintToken(map[string]interface{}{"sub": sub}),
-			PeerId:        peerID,
-			PublicKey:     pubBytes,
-			RequestedRole: api.RoleNode,
+			Jwt:                mintToken(map[string]interface{}{"sub": sub}),
+			PeerId:             peerID,
+			PublicKey:          pubBytes,
+			RequestedRole:      api.RoleNode,
+			Timestamp:          ts,
+			ChallengeSignature: sig,
 		})
 		if err != nil {
 			t.Fatalf("failed to marshal enroll request: %v", err)

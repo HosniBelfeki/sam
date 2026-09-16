@@ -169,14 +169,20 @@ func TestPolicyGrantsReachTheMintedToken(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		_ = privKey
+		ts := time.Now().UnixMilli()
+		sig, err := privKey.Sign(api.RegisterChallenge(peerID.String(), ts))
+		if err != nil {
+			t.Fatal(err)
+		}
 
 		reqBytes, err := proto.Marshal(&api.EnrollRequest{
-			Jwt:           mintToken(map[string]interface{}{"sub": "node-alice"}),
-			PeerId:        peerID.String(),
-			PublicKey:     pubBytes,
-			RequestedRole: api.RoleNode,
-			Labels:        labels,
+			Jwt:                mintToken(map[string]interface{}{"sub": "node-alice"}),
+			PeerId:             peerID.String(),
+			PublicKey:          pubBytes,
+			RequestedRole:      api.RoleNode,
+			Labels:             labels,
+			Timestamp:          ts,
+			ChallengeSignature: sig,
 		})
 		if err != nil {
 			t.Fatal(err)

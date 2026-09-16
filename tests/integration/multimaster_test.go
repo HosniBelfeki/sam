@@ -215,12 +215,7 @@ roles: []
 	}
 	defer func() { _ = clientHost.Close() }()
 
-	pubKey := clientHost.Peerstore().PubKey(clientHost.ID())
-	pubBytes, err := crypto.MarshalPublicKey(pubKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	clientBiscuit := enrollClientOnControlPlane(t, portB, clientHost.ID(), pubBytes, nodeJWT)
+	clientBiscuit := enrollClientOnControlPlane(t, portB, clientHost.ID(), clientHost.Peerstore().PrivKey(clientHost.ID()), nodeJWT)
 
 	// 9. Assert that client host can connect and authenticate directly with Router A (registered with CP A!)
 	// This proves Router A accepts biscuits issued by CP B because they share the key-ring.
@@ -280,14 +275,25 @@ roles: []
 	t.Log("Successfully verified multi-master control plane signature trust!")
 }
 
-func enrollClientOnControlPlane(t *testing.T, cpPort int, clientID peer.ID, pubBytes []byte, jwtToken string) []byte {
+func enrollClientOnControlPlane(t *testing.T, cpPort int, clientID peer.ID, privKey crypto.PrivKey, jwtToken string) []byte {
 	t.Helper()
 
+	pubBytes, err := crypto.MarshalPublicKey(privKey.GetPublic())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := time.Now().UnixMilli()
+	sig, err := privKey.Sign(api.RegisterChallenge(clientID.String(), ts))
+	if err != nil {
+		t.Fatal(err)
+	}
 	req := &api.EnrollRequest{
-		Jwt:           jwtToken,
-		PeerId:        clientID.String(),
-		PublicKey:     pubBytes,
-		RequestedRole: api.RoleNode,
+		Jwt:                jwtToken,
+		PeerId:             clientID.String(),
+		PublicKey:          pubBytes,
+		RequestedRole:      api.RoleNode,
+		Timestamp:          ts,
+		ChallengeSignature: sig,
 	}
 	reqBytes, err := proto.Marshal(req)
 	if err != nil {
