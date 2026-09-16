@@ -1332,6 +1332,83 @@ func TestRouterLeaseRevocation(t *testing.T) {
 	}
 }
 
+// TestRouterLeaseUnderRotatedKey covers the rotation grace window on
+// /routers/lease: both keys are valid, the retiring one is listed first, and
+// the biscuit is signed by the new one, so the role check has to run under the
+// key that verified it rather than the first key in the ring.
+func TestRouterLeaseUnderRotatedKey(t *testing.T) {
+	issuer, _ := startCustomMockOIDC(t)
+	srv, store, baseURL := setupTestServer(t, issuer)
+	defer func() {
+		_ = srv.Close()
+		_ = store.Close()
+	}()
+	ctx := context.Background()
+
+	newPub, newPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RotateKeys(ctx, newPriv, newPub, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	valid, err := store.GetAllValidKeys(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(valid) != 2 || bytes.Equal(valid[0].Public, newPub) {
+		t.Fatalf("keyring is not [retiring, new]: %d keys", len(valid))
+	}
+
+	priv, pub, err := crypto.GenerateKeyPair(crypto.Ed25519, -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	routerPeer, err := peer.IDFromPrivateKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pubBytes, err := crypto.MarshalPublicKey(pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	routerBiscuit, err := identity.MintBootstrapBiscuitToken(newPriv, routerPeer, api.RoleRouter, time.Now().Add(time.Hour), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.EnrollNode(ctx, &storage.EnrolledNode{
+		PeerID:         routerPeer.String(),
+		PublicKey:      pubBytes,
+		Biscuit:        routerBiscuit,
+		Role:           api.RoleRouter,
+		EnrollmentType: "BOOTSTRAP",
+		EnrolledAt:     time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	leaseData, err := proto.Marshal(&api.RouterLeaseRequest{
+		PeerId:    routerPeer.String(),
+		Addresses: []string{"/ip4/127.0.0.1/tcp/4001/p2p/" + routerPeer.String()},
+		Biscuit:   routerBiscuit,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Post(baseURL+"/routers/lease", "application/x-protobuf", bytes.NewReader(leaseData))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("lease with biscuit signed by the new key: got %d (%s), want 200", resp.StatusCode, body)
+	}
+}
+
 // enrollRefreshTestNode enrolls a bootstrap node directly in the store and
 // returns its key and currently issued biscuit, ready to drive /refresh.
 func enrollRefreshTestNode(t *testing.T, ctx context.Context, store storage.Store) (crypto.PrivKey, []byte) {

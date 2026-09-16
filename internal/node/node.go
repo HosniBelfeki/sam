@@ -939,21 +939,7 @@ func (n *SamNode) performRouterAuthHandshake(s network.Stream, biscuitBytes []by
 	// Enforce role("router") inside the biscuit, under the key that verified:
 	// with several valid keys loaded (rotation grace) the first is not
 	// necessarily the signer.
-	authorizer, err := b.Authorizer(verifyingKey, identity.AuthorizerOptions(n.BiscuitTimeout)...)
-	if err != nil {
-		return false, fmt.Errorf("authorizer instantiation failed: %w", err)
-	}
-
-	authorizer.AddCheck(biscuit.Check{Queries: []biscuit.Rule{
-		{
-			Body: []biscuit.Predicate{
-				{Name: api.FactRole, IDs: []biscuit.Term{biscuit.String(api.RoleRouter)}},
-			},
-		},
-	}})
-	authorizer.AddPolicy(api.AllowIfTruePolicy)
-
-	if err := authorizer.Authorize(); err != nil {
+	if err := identity.RequireRole(b, verifyingKey, api.RoleRouter, n.BiscuitTimeout); err != nil {
 		return false, fmt.Errorf("%w: remote peer lacks router authorization role: %w", ErrFatalAuth, err)
 	}
 
@@ -1592,27 +1578,12 @@ func (n *SamNode) HandleAuthHandshake(s network.Stream) {
 		return
 	}
 
-	b, verifyingKey, err := identity.VerifyBiscuitAndGetKey(exchange.Biscuit, remotePeer, n.getTrustedPublicKeys(), n.BiscuitTimeout)
+	// One verifier call enforces signature, expiry and the authority-block peer
+	// binding, and reports when the admission lapses.
+	expiry, err := identity.VerifyBiscuitAndGetExpiry(exchange.Biscuit, remotePeer, n.getTrustedPublicKeys(), n.BiscuitTimeout)
 	if err != nil {
 		logger.Warnf("[AuthN] Authorization failed for %s: %v", remotePeer, err)
 		return
-	}
-
-	// 4. Enforce hardware binding: token must include node(<remotePeerID>)
-	if err := identity.RequireAuthorityBinding(b, remotePeer); err != nil {
-		logger.Warnf("[AuthN] %v", err)
-		return
-	}
-
-	expiry := time.Now().Add(n.BiscuitTimeout)
-	if authorizer, authErr := b.Authorizer(verifyingKey, identity.AuthorizerOptions(n.BiscuitTimeout)...); authErr == nil {
-		identity.EnforceExpiration(authorizer)
-		authorizer.AddPolicy(api.AllowIfTruePolicy)
-		if authErr := authorizer.Authorize(); authErr == nil {
-			if e, expErr := identity.ExpirationOf(authorizer); expErr == nil {
-				expiry = e
-			}
-		}
 	}
 
 	n.authPeers.Store(remotePeer, expiry)
