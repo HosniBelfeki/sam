@@ -97,7 +97,7 @@ func (n *SamNode) WithBiscuitAuth(next func(network.Stream, RequestContext)) net
 			}
 			logger.Infow("Stream Accounting",
 				"peer_id", remotePeer.String(),
-				"target", target,
+				"target", truncateForLog(target),
 				"protocol", reqCtx.Protocol,
 				"bytes_read", ts.bytesRead.Load(),
 				"bytes_written", ts.bytesWritten.Load(),

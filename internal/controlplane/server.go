@@ -210,24 +210,33 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/readyz", s.HandleReadyz)
 	mux.Handle("/metrics", promhttp.Handler())
 	mux.HandleFunc("/info", s.HandleInfo)
-	mux.HandleFunc("/register", s.HandleRegister)
+	mux.HandleFunc("/register", noStore(s.HandleRegister))
 	mux.HandleFunc("/keys", s.HandleKeys)
 	mux.HandleFunc("/routers/lease", s.HandleRouterLease)
 	mux.HandleFunc("/policies", s.HandlePolicies)
-	mux.HandleFunc("/enroll", s.HandleEnroll)
-	mux.HandleFunc("/enroll/status", s.HandleEnrollStatus)
-	mux.HandleFunc("/refresh", s.HandleRefresh)
+	mux.HandleFunc("/enroll", noStore(s.HandleEnroll))
+	mux.HandleFunc("/enroll/status", noStore(s.HandleEnrollStatus))
+	mux.HandleFunc("/refresh", noStore(s.HandleRefresh))
 	mux.HandleFunc("/nodes/catalog", s.HandleNodeCatalog)
-	mux.HandleFunc("/admin/bootstrap-tokens", s.HandleAdminBootstrapTokens)
-	mux.HandleFunc("/admin/bootstrap-tokens/", s.HandleAdminBootstrapTokenAction)
-	mux.HandleFunc("/admin/enrollments", s.HandleAdminEnrollments)
-	mux.HandleFunc("/admin/enrollments/", s.HandleAdminEnrollmentAction)
-	mux.HandleFunc("/admin/nodes/", s.HandleAdminNodeAction)
-	mux.HandleFunc("/admin/revoke", s.HandleAdminRevoke)
-	mux.HandleFunc("/admin/status", s.HandleAdminStatus)
-	mux.HandleFunc("/user/status", s.HandleUserStatus)
-	mux.HandleFunc("/user/bootstrap-tokens", s.HandleUserBootstrapTokens)
-	mux.HandleFunc("/user/revoke", s.HandleUserRevoke)
+	mux.HandleFunc("/admin/bootstrap-tokens", noStore(s.HandleAdminBootstrapTokens))
+	mux.HandleFunc("/admin/bootstrap-tokens/", noStore(s.HandleAdminBootstrapTokenAction))
+	mux.HandleFunc("/admin/enrollments", noStore(s.HandleAdminEnrollments))
+	mux.HandleFunc("/admin/enrollments/", noStore(s.HandleAdminEnrollmentAction))
+	mux.HandleFunc("/admin/nodes/", noStore(s.HandleAdminNodeAction))
+	mux.HandleFunc("/admin/revoke", noStore(s.HandleAdminRevoke))
+	mux.HandleFunc("/admin/status", noStore(s.HandleAdminStatus))
+	mux.HandleFunc("/user/status", noStore(s.HandleUserStatus))
+	mux.HandleFunc("/user/bootstrap-tokens", noStore(s.HandleUserBootstrapTokens))
+	mux.HandleFunc("/user/revoke", noStore(s.HandleUserRevoke))
+}
+
+// noStore marks responses that carry credentials (biscuits, bootstrap tokens,
+// enrolled-node records) as uncacheable by any intermediary or browser.
+func noStore(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		h(w, r)
+	}
 }
 
 func (s *Server) discoverProviders() error {
@@ -698,16 +707,11 @@ func (s *Server) HandleRefresh(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Fetch all valid signing keys
-	validKeys, err := s.store.GetAllValidKeys(ctx)
+	trustedKeys, err := s.store.GetAllValidPublicKeys(ctx)
 	if err != nil {
 		logger.Errorf("Failed to retrieve valid signing keys: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
-	}
-
-	var trustedKeys []ed25519.PublicKey
-	for _, k := range validKeys {
-		trustedKeys = append(trustedKeys, k.Public)
 	}
 
 	// Verify current biscuit signature and extract peer ID. Expiry is not
@@ -919,7 +923,7 @@ func (s *Server) HandleKeys(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	validKeys, err := s.store.GetAllValidKeys(r.Context())
+	validKeys, err := s.store.GetAllValidPublicKeys(r.Context())
 	if err != nil {
 		logger.Errorf("Failed to retrieve valid keys: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -928,7 +932,7 @@ func (s *Server) HandleKeys(w http.ResponseWriter, r *http.Request) {
 
 	var pubKeys [][]byte
 	for _, k := range validKeys {
-		pubKeys = append(pubKeys, k.Public)
+		pubKeys = append(pubKeys, k)
 	}
 
 	resp := &api.KeysResponse{
@@ -975,16 +979,11 @@ func (s *Server) HandleRouterLease(w http.ResponseWriter, r *http.Request) {
 	canonical := pID.String()
 
 	// Fetch all valid public keys from CP to authorize router biscuit
-	validKeys, err := s.store.GetAllValidKeys(r.Context())
+	cpPubKeys, err := s.store.GetAllValidPublicKeys(r.Context())
 	if err != nil {
 		logger.Errorf("Failed to retrieve valid keys: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
-	}
-
-	var cpPubKeys []ed25519.PublicKey
-	for _, k := range validKeys {
-		cpPubKeys = append(cpPubKeys, k.Public)
 	}
 
 	// Verify Biscuit and enforce expected remote peer id
@@ -1092,12 +1091,8 @@ func (s *Server) HandlePolicies(w http.ResponseWriter, r *http.Request) {
 			if strings.HasPrefix(authHeader, "Bearer ") {
 				biscuitBytes, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(authHeader, "Bearer "))
 				if err == nil {
-					validKeys, err := s.store.GetAllValidKeys(r.Context())
+					trustedKeys, err := s.store.GetAllValidPublicKeys(r.Context())
 					if err == nil {
-						var trustedKeys []ed25519.PublicKey
-						for _, k := range validKeys {
-							trustedKeys = append(trustedKeys, k.Public)
-						}
 						peerID, err := identity.VerifyAndExtractPeerID(trustedKeys, biscuitBytes, s.config.BiscuitTimeout)
 						if err == nil {
 							nodeRecord, nodeErr := s.store.GetNode(r.Context(), peerID.String())
@@ -1715,7 +1710,10 @@ func (s *Server) HandleAdminBootstrapTokens(w http.ResponseWriter, r *http.Reque
 	defer func() { _ = r.Body.Close() }()
 
 	if req.Role == "" {
-		req.Role = api.RoleRouter
+		// No silent default: the old one was router, the most privileged
+		// role a token can carry.
+		http.Error(w, "role is required (e.g. \"sam:role:node\")", http.StatusBadRequest)
+		return
 	}
 	if req.TTLHours <= 0 {
 		req.TTLHours = 24
@@ -2589,6 +2587,12 @@ func marshalPolicyJSON(roles []*api.PolicyRole, bindings []*api.PolicyBinding) (
 // so an admin gets a clear validation error instead of users hitting
 // unexplained authorization failures later.
 const maxIdentityFactBudget = 900
+
+// ValidatePolicyConfig checks a mesh policy the way POST /policies does; any
+// other writer of the policy (e.g. a seed file) must run it too.
+func ValidatePolicyConfig(req *api.PolicyConfigUpdateRequest) error {
+	return validatePolicyConfig(req)
+}
 
 func validatePolicyConfig(req *api.PolicyConfigUpdateRequest) error {
 	roleNames := make(map[string]bool)

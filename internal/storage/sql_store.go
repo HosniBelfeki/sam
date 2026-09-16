@@ -19,7 +19,9 @@ import (
 	"crypto/ed25519"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -52,6 +54,11 @@ func NewSQLStore(driverName, dataSourceName string) (*SQLStore, error) {
 		// Callers (e.g. integration tests that copy DB files) can override this by
 		// passing a DSN containing custom query parameter parameters (e.g. "?_pragma=journal_mode(DELETE)&_pragma=busy_timeout(5000)").
 		dataSourceName = dataSourceName + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
+	}
+	if driverName == "sqlite" {
+		if err := restrictSQLiteFileMode(dataSourceName); err != nil {
+			return nil, err
+		}
 	}
 	db, err := sql.Open(actualDriver, dataSourceName)
 	if err != nil {
@@ -110,6 +117,41 @@ func NewSQLStore(driverName, dataSourceName string) (*SQLStore, error) {
 
 func (s *SQLStore) isPostgres() bool {
 	return strings.Contains(s.driverName, "postgres") || strings.Contains(s.driverName, "pgx")
+}
+
+// sqliteFilePath extracts the on-disk path from a SQLite DSN, or "" for
+// in-memory databases.
+func sqliteFilePath(dsn string) string {
+	path := strings.TrimPrefix(dsn, "file:")
+	if i := strings.IndexByte(path, '?'); i >= 0 {
+		path = path[:i]
+	}
+	if path == "" || strings.Contains(path, ":memory:") {
+		return ""
+	}
+	return path
+}
+
+// restrictSQLiteFileMode makes the database owner-only. The keyring holds the
+// mesh signing private keys, and the SQLite driver otherwise creates the file
+// 0644 (minus umask). The file is created here, before the driver opens it,
+// because SQLite gives the -wal and -shm side files the main file's mode.
+func restrictSQLiteFileMode(dsn string) error {
+	path := sqliteFilePath(dsn)
+	if path == "" {
+		return nil
+	}
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return fmt.Errorf("failed to create database file %s: %w", path, err)
+	}
+	_ = f.Close()
+	for _, p := range []string{path, path + "-wal", path + "-shm"} {
+		if err := os.Chmod(p, 0o600); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("failed to restrict permissions on %s: %w", p, err)
+		}
+	}
+	return nil
 }
 
 type migration struct {
@@ -571,6 +613,28 @@ func (s *SQLStore) GetAllValidKeys(ctx context.Context) ([]KeyPair, error) {
 			Public:     ed25519.PublicKey(pubCopy),
 			Expiration: expiration,
 		})
+	}
+	return keys, rows.Err()
+}
+
+// GetAllValidPublicKeys implements Store.
+func (s *SQLStore) GetAllValidPublicKeys(ctx context.Context) ([]ed25519.PublicKey, error) {
+	query := s.rebind(`SELECT public_key FROM keyring WHERE expiration IS NULL OR expiration > ?`)
+	rows, err := s.db.QueryContext(ctx, query, time.Now().UnixMilli())
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var keys []ed25519.PublicKey
+	for rows.Next() {
+		var pub []byte
+		if err := rows.Scan(&pub); err != nil {
+			return nil, err
+		}
+		pubCopy := make([]byte, len(pub))
+		copy(pubCopy, pub)
+		keys = append(keys, ed25519.PublicKey(pubCopy))
 	}
 	return keys, rows.Err()
 }

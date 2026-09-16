@@ -1124,14 +1124,14 @@ func (n *SamNode) RefreshEnrollment(ctx context.Context) error {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxControlPlaneBodyBytes))
 		return &RefreshError{
 			StatusCode: resp.StatusCode,
 			Message:    fmt.Sprintf("refresh failed with status %s: %s", resp.Status, string(body)),
 		}
 	}
 
-	respData, err := io.ReadAll(resp.Body)
+	respData, err := io.ReadAll(io.LimitReader(resp.Body, maxControlPlaneBodyBytes))
 	if err != nil {
 		return fmt.Errorf("failed to read response: %w", err)
 	}
@@ -1983,7 +1983,8 @@ func (n *SamNode) StartIngressServer(ctx context.Context) error {
 				)
 			}()
 
-			logger.Infof("[Ingress] Received request: %s %s", r.Method, r.URL.Path)
+			// The path is remote-controlled and the peer is not yet authorized:
+			// it is logged only after VerifyBiscuitToken passes.
 			path := r.URL.Path
 			parts := strings.SplitN(strings.TrimPrefix(path, "/"), "/", 3)
 			if len(parts) < 2 {
@@ -2050,7 +2051,7 @@ func (n *SamNode) StartIngressServer(ctx context.Context) error {
 
 			svc, ok := n.services.Get(serviceName)
 			if !ok {
-				logger.Errorf("[Ingress] Service not found: %s", serviceName)
+				logger.Errorf("[Ingress] Service not found: %s", truncateForLog(serviceName))
 				http.Error(w, "Service not found", http.StatusNotFound)
 				return
 			}
@@ -2059,7 +2060,7 @@ func (n *SamNode) StartIngressServer(ctx context.Context) error {
 				http.Error(w, "Service not found", http.StatusNotFound)
 				return
 			}
-			logger.Infof("[Ingress] Forwarding to service %s, upstreamPath: %q", serviceName, upstreamPath)
+			logger.Infof("[Ingress] %s from %s: forwarding to service %s, upstreamPath: %q", r.Method, remotePeer, serviceName, truncateForLog(upstreamPath))
 
 			if upstreamPath == "" {
 				r.URL.Path = "/"

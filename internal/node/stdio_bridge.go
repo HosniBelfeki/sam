@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"os/exec"
 	"sync"
 
@@ -38,6 +37,9 @@ type StdioBridge struct {
 	mu      sync.Mutex
 	clients map[chan string]bool
 	calls   map[string]chan string
+	// closed is set once the stdout reader has stopped; the backend can no
+	// longer answer, so requests are refused instead of hanging.
+	closed bool
 }
 
 func (b *StdioBridge) Start() {
@@ -45,6 +47,7 @@ func (b *StdioBridge) Start() {
 	b.calls = make(map[string]chan string)
 	go func() {
 		scanner := bufio.NewScanner(b.stdout)
+		scanner.Buffer(make([]byte, 0, 64<<10), maxRequestBodyBytes)
 		for scanner.Scan() {
 			line := scanner.Text()
 
@@ -73,7 +76,17 @@ func (b *StdioBridge) Start() {
 			b.mu.Unlock()
 		}
 
+		if err := scanner.Err(); err != nil {
+			logger.Errorf("[StdioBridge] backend stdout unreadable, refusing further requests: %v", err)
+		} else {
+			logger.Warnf("[StdioBridge] backend closed stdout, refusing further requests")
+		}
+		if b.cmd != nil && b.cmd.Process != nil {
+			_ = b.cmd.Process.Kill()
+		}
+
 		b.mu.Lock()
+		b.closed = true
 		for ch := range b.clients {
 			close(ch)
 			delete(b.clients, ch)
@@ -89,10 +102,6 @@ func (b *StdioBridge) Start() {
 func (b *StdioBridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("Connection", "keep-alive")
-
 		flusher, ok := w.(http.Flusher)
 		if !ok {
 			http.Error(w, "Streaming unsupported!", http.StatusInternalServerError)
@@ -101,9 +110,17 @@ func (b *StdioBridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		ch := make(chan string, 10)
 		b.mu.Lock()
+		if b.closed {
+			b.mu.Unlock()
+			http.Error(w, "Backend process is no longer running", http.StatusServiceUnavailable)
+			return
+		}
 		b.clients[ch] = true
 		b.mu.Unlock()
 
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
 		// Flush headers immediately to establish the stream
 		w.WriteHeader(http.StatusOK)
 		flusher.Flush()
@@ -156,6 +173,11 @@ func (b *StdioBridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			reqIDStr := fmt.Sprintf("%v", reqID)
 			callCh := make(chan string, 1)
 			b.mu.Lock()
+			if b.closed {
+				b.mu.Unlock()
+				http.Error(w, "Backend process is no longer running", http.StatusServiceUnavailable)
+				return
+			}
 			b.calls[reqIDStr] = callCh
 			b.mu.Unlock()
 			ch = callCh
@@ -171,6 +193,11 @@ func (b *StdioBridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		b.mu.Lock()
+		if b.closed {
+			b.mu.Unlock()
+			http.Error(w, "Backend process is no longer running", http.StatusServiceUnavailable)
+			return
+		}
 		_, err = b.stdin.Write(append(body, '\n'))
 		b.mu.Unlock()
 
@@ -192,6 +219,7 @@ func (b *StdioBridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		case line, ok := <-ch:
 			if !ok {
+				http.Error(w, "Backend process exited before answering", http.StatusServiceUnavailable)
 				return
 			}
 			w.Header().Set("Content-Type", "application/json")
@@ -206,10 +234,7 @@ func (b *StdioBridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func createStdioBridgeHandler(cmdBackend *api.CommandBackend) (http.Handler, *exec.Cmd, error) {
 	cmd := exec.Command(cmdBackend.Command[0], cmdBackend.Command[1:]...)
-	cmd.Env = os.Environ()
-	for k, v := range cmdBackend.Env {
-		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, v))
-	}
+	cmd.Env = backendEnv(cmdBackend.Env)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

@@ -412,6 +412,9 @@ func (s *Server) seedPolicyOnFirstBoot(ctx context.Context) error {
 		seed.Roles = defaultDevPolicyRoles()
 		logger.Warn("Seeding OPEN development mesh policy (enrolled nodes may declare any label and register any service); provide --policy-file to restrict")
 	}
+	if err := controlplane.ValidatePolicyConfig(&seed); err != nil {
+		return fmt.Errorf("invalid seed mesh policy: %w", err)
+	}
 	if err := s.store.SaveMeshPolicy(ctx, seed.Roles, seed.Bindings); err != nil {
 		return fmt.Errorf("failed to seed mesh policy: %w", err)
 	}

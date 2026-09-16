@@ -142,11 +142,11 @@ func (n *SamNode) ReEnrollWithRefreshToken(ctx context.Context) error {
 
 func (n *SamNode) processEnrollResponse(resp *http.Response) (*api.EnrollResponse, error) {
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxControlPlaneBodyBytes))
 		return nil, fmt.Errorf("enrollment failed with status %s: %s", resp.Status, string(body))
 	}
 
-	respData, err := io.ReadAll(resp.Body)
+	respData, err := io.ReadAll(io.LimitReader(resp.Body, maxControlPlaneBodyBytes))
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %v", err)
 	}
@@ -262,11 +262,11 @@ func (n *SamNode) EnrollBootstrap(ctx context.Context, controlPlaneURL string, b
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxControlPlaneBodyBytes))
 		return fmt.Errorf("enrollment failed with status %s: %s", resp.Status, string(body))
 	}
 
-	respData, err := io.ReadAll(resp.Body)
+	respData, err := io.ReadAll(io.LimitReader(resp.Body, maxControlPlaneBodyBytes))
 	if err != nil {
 		return fmt.Errorf("failed to read response body: %w", err)
 	}
@@ -322,13 +322,13 @@ func (n *SamNode) EnrollBootstrap(ctx context.Context, controlPlaneURL string, b
 				}
 
 				if hResp.StatusCode != http.StatusOK {
-					body, _ := io.ReadAll(hResp.Body)
+					body, _ := io.ReadAll(io.LimitReader(hResp.Body, maxControlPlaneBodyBytes))
 					_ = hResp.Body.Close()
 					logger.Warnf("Status check returned status %s: %s", hResp.Status, string(body))
 					continue
 				}
 
-				hRespData, err := io.ReadAll(hResp.Body)
+				hRespData, err := io.ReadAll(io.LimitReader(hResp.Body, maxControlPlaneBodyBytes))
 				_ = hResp.Body.Close()
 				if err != nil {
 					logger.Warnf("Failed to read status response body: %v", err)

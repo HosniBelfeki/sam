@@ -174,5 +174,10 @@ func (o *Options) Validate() error {
 	if o.RequiredRole == "" {
 		return fmt.Errorf("RequiredRole must be specified")
 	}
+	// ed25519 verification panics on a wrong-size key, and this one comes
+	// from a flag or FFI config.
+	if len(o.ControlPlanePubKey) > 0 && len(o.ControlPlanePubKey) != ed25519.PublicKeySize {
+		return fmt.Errorf("control plane public key must be %d bytes, got %d", ed25519.PublicKeySize, len(o.ControlPlanePubKey))
+	}
 	return nil
 }

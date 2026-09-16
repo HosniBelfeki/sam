@@ -150,6 +150,10 @@ type Store interface {
 	// GetAllValidKeys retrieves the active key pair and any non-expired historical key pairs.
 	GetAllValidKeys(ctx context.Context) ([]KeyPair, error)
 
+	// GetAllValidPublicKeys is GetAllValidKeys for verifiers: the same key
+	// set without the private halves.
+	GetAllValidPublicKeys(ctx context.Context) ([]ed25519.PublicKey, error)
+
 	// RotateKeys rotates the current key to a new key pair and sets the expiration of the old key.
 	RotateKeys(ctx context.Context, newPriv ed25519.PrivateKey, newPub ed25519.PublicKey, gracePeriod time.Duration) error
 

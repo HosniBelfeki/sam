@@ -160,3 +160,78 @@ func TestStdioBridge_ServeHTTP_POSTCallWaitsForMatchingReply(t *testing.T) {
 		t.Fatalf("body = %q, want %q", got, reply)
 	}
 }
+
+// A single backend line larger than bufio.Scanner's 64 KiB default used to
+// stop the reader for good; results up to the request-body cap must flow.
+func TestStdioBridge_ServeHTTP_LargeReplyIsDelivered(t *testing.T) {
+	b, stdoutWriter, _ := newPipeBridge()
+	defer func() { _ = stdoutWriter.Close() }()
+
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"jsonrpc":"2.0","id":7,"method":"big"}`))
+	rec := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		b.ServeHTTP(rec, req)
+		close(done)
+	}()
+	waitFor(t, "call registration", func() bool {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		return len(b.calls) > 0
+	})
+
+	reply := `{"jsonrpc":"2.0","id":7,"result":"` + strings.Repeat("x", 100<<10) + `"}`
+	_, _ = stdoutWriter.Write([]byte(reply + "\n"))
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("ServeHTTP did not return after a >64 KiB reply")
+	}
+	if rec.Code != http.StatusOK || rec.Body.String() != reply {
+		t.Fatalf("status %d, body len %d; want 200 and %d bytes", rec.Code, rec.Body.Len(), len(reply))
+	}
+}
+
+// Once the backend's stdout is gone the bridge cannot answer anyone: callers
+// get a 503 immediately rather than hanging until their own deadline.
+func TestStdioBridge_ServeHTTP_RefusesAfterBackendExit(t *testing.T) {
+	b, stdoutWriter, _ := newPipeBridge()
+
+	// In-flight call sees the backend go away.
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"ping"}`))
+	rec := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		b.ServeHTTP(rec, req)
+		close(done)
+	}()
+	waitFor(t, "call registration", func() bool {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		return len(b.calls) > 0
+	})
+	_ = stdoutWriter.Close()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("in-flight call hung after the backend closed stdout")
+	}
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("in-flight status = %d, want 503", rec.Code)
+	}
+
+	// Later callers are refused up front.
+	waitFor(t, "bridge to mark itself closed", func() bool {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		return b.closed
+	})
+	for _, method := range []string{http.MethodPost, http.MethodGet} {
+		rec := httptest.NewRecorder()
+		b.ServeHTTP(rec, httptest.NewRequest(method, "/", strings.NewReader(`{"jsonrpc":"2.0","id":2,"method":"ping"}`)))
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Errorf("%s after exit: status = %d, want 503", method, rec.Code)
+		}
+	}
+}

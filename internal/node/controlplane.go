@@ -30,6 +30,11 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// maxControlPlaneBodyBytes caps every response body read from the control
+// plane or an IdP: a misbehaving or impersonated server must not be able to
+// make the node buffer arbitrary amounts of memory.
+const maxControlPlaneBodyBytes = 1 << 20
+
 // FetchControlPlaneInfo retrieves the latest configuration from the control plane's /info endpoint.
 func FetchControlPlaneInfo(ctx context.Context, controlPlaneURL string) (*api.ControlPlaneInfoResponse, error) {
 	if !strings.HasPrefix(controlPlaneURL, "http://") && !strings.HasPrefix(controlPlaneURL, "https://") {
@@ -52,7 +57,7 @@ func FetchControlPlaneInfo(ctx context.Context, controlPlaneURL string) (*api.Co
 	}
 	defer resp.Body.Close() //nolint:errcheck
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxControlPlaneBodyBytes))
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
@@ -92,7 +97,7 @@ func FetchControlPlaneKeys(ctx context.Context, controlPlaneURL string) ([]ed255
 	}
 	defer resp.Body.Close() //nolint:errcheck
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxControlPlaneBodyBytes))
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
@@ -235,7 +240,7 @@ func FetchMeshPolicy(ctx context.Context, controlPlaneURL string, biscuitToken [
 	}
 	defer resp.Body.Close() //nolint:errcheck
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxControlPlaneBodyBytes))
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}

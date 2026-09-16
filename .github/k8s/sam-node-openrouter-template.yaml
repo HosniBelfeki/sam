@@ -45,7 +45,10 @@ spec:
           - "4000"
         env:
           - name: OPENROUTER_API_KEY
-            value: "${OPENROUTER_API_KEY}"
+            valueFrom:
+              secretKeyRef:
+                name: openrouter-secret-${ENV_NAME}
+                key: api-key
         ports:
           - containerPort: 4000
         resources:

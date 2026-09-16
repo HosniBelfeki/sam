@@ -1,0 +1,50 @@
+# Keep secrets, local state and build outputs out of every image build
+# context. Every Dockerfile at the root does `COPY . .` into the builder
+# stage; final images copy only the binary, but the builder layer still
+# receives whatever is here.
+
+# VCS metadata (binaries are built with -buildvcs=false)
+.git
+.gitignore
+
+# Local control-plane / node state and credentials
+*.db
+*.db-wal
+*.db-shm
+*.key
+*.pem
+*.p12
+*.jks
+*.keystore
+admin-token
+join-token
+policies.*
+.env
+.env.*
+mobile/logcat.txt
+
+# Build outputs and caches
+bin/
+dist/
+node_modules/
+__pycache__/
+.venv/
+*.test
+*.out
+coverage.*
+mobile/sam-node-app/build/
+site/public/
+site/resources/
+rootfs.ext4
+rootfs.tar
+
+# Test artifacts
+tests/e2e/logs/
+tests/integration/logs/
+tests/integration/scratch/
+tests/ui/playwright-report/
+tests/ui/test-results/
+
+# Reports written at the repo root
+audit.md
+security-audit.md

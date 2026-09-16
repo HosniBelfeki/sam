@@ -16,6 +16,7 @@ package node
 
 import (
 	"container/ring"
+	"fmt"
 	"net/url"
 	"strings"
 	"sync"
@@ -29,8 +30,19 @@ type RingBufferSink struct {
 	buffer *ring.Ring
 }
 
+const (
+	logBufferLines = 500
+	// maxLogLineBytes bounds each retained line so the ring's memory is
+	// bounded too (logBufferLines * maxLogLineBytes), whatever a remote peer
+	// manages to get logged.
+	maxLogLineBytes = 4 << 10
+	// maxRemoteLogBytes is how much of a remote-controlled string a log
+	// message may carry; see truncateForLog.
+	maxRemoteLogBytes = 256
+)
+
 var globalLogBuffer = &RingBufferSink{
-	buffer: ring.New(500), // Keep last 500 lines
+	buffer: ring.New(logBufferLines),
 }
 
 func init() {
@@ -46,10 +58,22 @@ func (s *RingBufferSink) Write(p []byte) (n int, err error) {
 
 	// zap writes complete log lines per Write call
 	line := strings.TrimSuffix(string(p), "\n")
+	if len(line) > maxLogLineBytes {
+		line = line[:maxLogLineBytes] + "…[truncated]"
+	}
 	s.buffer.Value = line
 	s.buffer = s.buffer.Next()
 
 	return len(p), nil
+}
+
+// truncateForLog bounds a string that a remote peer chose (a request path, a
+// tool result, a target name) before it reaches the logs.
+func truncateForLog(s string) string {
+	if len(s) <= maxRemoteLogBytes {
+		return s
+	}
+	return fmt.Sprintf("%s…(+%d bytes)", s[:maxRemoteLogBytes], len(s)-maxRemoteLogBytes)
 }
 
 // Sync implements zap.Sink

@@ -49,6 +49,54 @@ func newTestStore(t *testing.T) Store {
 	return store
 }
 
+// TestSQLiteFilesAreOwnerOnly pins the on-disk mode of the database and its
+// WAL side files: the keyring table holds the mesh signing private keys.
+func TestSQLiteFilesAreOwnerOnly(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "keys.db")
+	// A pre-existing world-readable file (e.g. created by an older release)
+	// must be tightened on open, not just newly created ones.
+	if err := os.WriteFile(dbPath, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewSQLStore("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLStore: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	// A write forces the WAL and SHM files into existence.
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+	if err := store.SaveInitialKey(context.Background(), priv, pub); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{dbPath, dbPath + "-wal", dbPath + "-shm"} {
+		fi, err := os.Stat(p)
+		if err != nil {
+			t.Fatalf("stat %s: %v", p, err)
+		}
+		if mode := fi.Mode().Perm(); mode != 0o600 {
+			t.Errorf("%s mode = %o, want 0600", p, mode)
+		}
+	}
+}
+
+func TestSQLiteFilePath(t *testing.T) {
+	cases := map[string]string{
+		"keys.db":                              "keys.db",
+		"/data/keys.db?_pragma=busy_timeout(5)": "/data/keys.db",
+		"file:/data/keys.db?mode=rwc":          "/data/keys.db",
+		":memory:":                             "",
+		"file::memory:?cache=shared":           "",
+		"":                                     "",
+	}
+	for dsn, want := range cases {
+		if got := sqliteFilePath(dsn); got != want {
+			t.Errorf("sqliteFilePath(%q) = %q, want %q", dsn, got, want)
+		}
+	}
+}
+
 func TestKeyRingOps(t *testing.T) {
 	store := newTestStore(t)
 	defer func() { _ = store.Close() }()

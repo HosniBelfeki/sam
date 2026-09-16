@@ -2793,6 +2793,54 @@ func TestAdminBootstrapTokensList(t *testing.T) {
 	}
 }
 
+// A bootstrap token's role used to default to router, the most privileged one,
+// when omitted. It is now required, and the plaintext-token response is
+// marked uncacheable.
+func TestAdminBootstrapTokenRoleRequiredAndNoStore(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "cp.db")
+	store, err := storage.NewSQLStore("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("failed to open store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	srv, err := NewServer(Options{
+		DriverName:       "sqlite",
+		DataSourceName:   dbPath,
+		AdminToken:       "test-admin-token",
+		AllowedAudiences: []string{"sam-mesh-audience"},
+	}, store)
+	if err != nil {
+		t.Fatalf("failed to create server: %v", err)
+	}
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	post := func(body string) *http.Response {
+		req, _ := http.NewRequest(http.MethodPost, ts.URL+"/admin/bootstrap-tokens", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer test-admin-token")
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := ts.Client().Do(req)
+		if err != nil {
+			t.Fatalf("POST: %v", err)
+		}
+		_ = resp.Body.Close()
+		return resp
+	}
+
+	if resp := post(`{"max_usages":1}`); resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("missing role: status = %s, want 400", resp.Status)
+	}
+	resp := post(`{"role":"sam:role:node","max_usages":1}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("with role: status = %s, want 201", resp.Status)
+	}
+	if got := resp.Header.Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store", got)
+	}
+}
+
 // /info carries the whole ban set so a node or router that restarted, or was
 // offline when MeshEvent_BANNED was published, can reconcile against it. A
 // peer that is not banned must not appear, or consumers would blocklist it.

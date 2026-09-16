@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
 	"sort"
 	"sync"
@@ -147,10 +146,7 @@ func (m *MCPService) backendTransport() (mcp.Transport, error) {
 			return nil, fmt.Errorf("missing command for command-backed MCP service %q", m.info.GetName())
 		}
 		cmd := exec.Command(x.Command.Command[0], x.Command.Command[1:]...)
-		cmd.Env = os.Environ()
-		for k, v := range x.Command.Env {
-			cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, v))
-		}
+		cmd.Env = backendEnv(x.Command.Env)
 		return &boundedTransport{
 			Transport: &mcp.CommandTransport{Command: cmd},
 			slots:     m.sessionSlots(),

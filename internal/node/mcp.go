@@ -463,7 +463,7 @@ func (n *SamNode) fetchRemoteServiceCatalog(ctx context.Context, peerID peer.ID,
 	}
 	var services []*api.ServiceInfo
 	if err := json.Unmarshal([]byte(text.Text), &services); err != nil {
-		logger.Warnf("[Discovery] catalog unmarshal failed; raw text from %s: %q", peerID, text.Text)
+		logger.Warnf("[Discovery] catalog unmarshal failed; raw text from %s: %q", peerID, truncateForLog(text.Text))
 		return nil, fmt.Errorf("unmarshal: %w", err)
 	}
 	return services, nil

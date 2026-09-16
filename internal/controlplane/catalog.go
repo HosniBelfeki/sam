@@ -15,7 +15,6 @@
 package controlplane
 
 import (
-	"crypto/ed25519"
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -155,15 +154,11 @@ func (s *Server) HandleNodeCatalog(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	validKeys, err := s.store.GetAllValidKeys(ctx)
+	trustedKeys, err := s.store.GetAllValidPublicKeys(ctx)
 	if err != nil {
 		logger.Errorf("Failed to retrieve valid signing keys: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
-	}
-	var trustedKeys []ed25519.PublicKey
-	for _, k := range validKeys {
-		trustedKeys = append(trustedKeys, k.Public)
 	}
 
 	peerID, err := identity.VerifyAndExtractPeerID(trustedKeys, biscuitBytes, s.config.BiscuitTimeout)
