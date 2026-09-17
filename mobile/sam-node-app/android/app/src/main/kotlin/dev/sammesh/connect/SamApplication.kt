@@ -1,4 +1,4 @@
-package com.example.sam_agent
+package dev.sammesh.connect
 
 import android.app.Application
 import androidx.appfunctions.service.AppFunctionConfiguration

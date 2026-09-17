@@ -47,8 +47,9 @@ import (
 var logger = golog.Logger("sam-one")
 
 const (
-	joinTokenPrefix  = "sam_tok_"
-	adminTokenPrefix = "sam_adm_"
+	joinTokenPrefix   = "sam_tok_"
+	adminTokenPrefix  = "sam_adm_"
+	deviceTokenPrefix = "sam_dev_"
 
 	joinTokenFile  = "join-token"
 	adminTokenFile = "admin-token"
@@ -64,6 +65,11 @@ const (
 	// routerTokenTTL bounds the per-boot single-use token the embedded router
 	// enrolls with; it never leaves the process.
 	routerTokenTTL = time.Hour
+
+	// DeviceTokenTTL bounds a device enrollment token: long enough to walk
+	// over and scan the QR code, short enough that a screenshot of it goes
+	// stale.
+	DeviceTokenTTL = time.Hour
 )
 
 // Options configures the standalone all-in-one server.
@@ -87,6 +93,11 @@ type Options struct {
 	// JoinToken is the cluster join token; auto-generated and persisted in
 	// DataDir when empty.
 	JoinToken string
+	// DisableJoinToken runs without any standing join token: devices then
+	// enroll only with explicitly minted bootstrap tokens or through OIDC.
+	// The right setting for a fleet; the default keeps `sam-node join` on a
+	// laptop zero-config.
+	DisableJoinToken bool
 	// AdminToken protects the admin REST API; auto-generated and persisted in
 	// DataDir when empty.
 	AdminToken string
@@ -172,6 +183,9 @@ func (o *Options) Default() {
 func (o *Options) Validate() error {
 	if _, err := wsListenMultiaddr(o.BindAddress); err != nil {
 		return fmt.Errorf("invalid bind address %q: %w", o.BindAddress, err)
+	}
+	if o.DisableJoinToken && o.JoinToken != "" {
+		return fmt.Errorf("a join token was supplied together with DisableJoinToken")
 	}
 	if o.ExternalURL != "" {
 		if _, err := externalMultiaddr(o.ExternalURL); err != nil {
@@ -262,14 +276,16 @@ func (s *Server) Start(ctx context.Context) error {
 		return err
 	}
 
-	s.joinToken = s.opts.JoinToken
-	if s.joinToken == "" {
-		if s.joinToken, err = loadOrCreateTokenFile(filepath.Join(s.opts.DataDir, joinTokenFile), joinTokenPrefix); err != nil {
-			return fmt.Errorf("failed to provision join token: %w", err)
+	if !s.opts.DisableJoinToken {
+		s.joinToken = s.opts.JoinToken
+		if s.joinToken == "" {
+			if s.joinToken, err = loadOrCreateTokenFile(filepath.Join(s.opts.DataDir, joinTokenFile), joinTokenPrefix); err != nil {
+				return fmt.Errorf("failed to provision join token: %w", err)
+			}
 		}
-	}
-	if err := s.ensureBootstrapToken(ctx, s.joinToken, api.RoleNode, joinTokenMaxUsages, joinTokenTTL, "sam-one join token"); err != nil {
-		return fmt.Errorf("failed to register join token: %w", err)
+		if err := s.ensureBootstrapToken(ctx, s.joinToken, api.RoleNode, joinTokenMaxUsages, joinTokenTTL, "sam-one join token"); err != nil {
+			return fmt.Errorf("failed to register join token: %w", err)
+		}
 	}
 
 	// Per-boot single-use credential for the embedded router's stock
@@ -375,14 +391,50 @@ func (s *Server) Close() error {
 // Addr returns the public host:port actually bound (useful with port 0).
 func (s *Server) Addr() string { return s.publicAddr }
 
+// PublicURL is the base URL clients should reach this server on: the
+// configured external URL, else the bound listener over plain HTTP.
+func (s *Server) PublicURL() string {
+	if s.opts.ExternalURL != "" {
+		return strings.TrimRight(s.opts.ExternalURL, "/")
+	}
+	return "http://" + s.publicAddr
+}
+
 // AdminToken returns the resolved admin API token.
 func (s *Server) AdminToken() string { return s.adminToken }
 
-// JoinToken returns the resolved cluster join token.
+// JoinToken returns the resolved cluster join token, or "" when the server
+// runs with DisableJoinToken.
 func (s *Server) JoinToken() string { return s.joinToken }
+
+// JoinTokenPath is where an auto-generated join token is persisted, for
+// `sam-node join --bootstrap-token-path`.
+func (s *Server) JoinTokenPath() string { return filepath.Join(s.opts.DataDir, joinTokenFile) }
 
 // PeerID returns the embedded router's peer ID.
 func (s *Server) PeerID() string { return s.router.Host.ID().String() }
+
+// MintDeviceEnrollmentToken registers a fresh node bootstrap token good for
+// maxUsages enrollments (1 = burned by the first device; more lets one code
+// on a projector enroll a room) and returns its plaintext once. Unlike the
+// join token it is never persisted; a device that missed the window simply
+// gets a new one, and `sam-one token revoke` ends a shared one early.
+func (s *Server) MintDeviceEnrollmentToken(ctx context.Context, ttl time.Duration, maxUsages int) (string, error) {
+	if ttl <= 0 {
+		ttl = DeviceTokenTTL
+	}
+	if maxUsages <= 0 {
+		maxUsages = 1
+	}
+	tok, err := generateToken(deviceTokenPrefix)
+	if err != nil {
+		return "", err
+	}
+	if err := s.ensureBootstrapToken(ctx, tok, api.RoleNode, maxUsages, ttl, "sam-one device enrollment via "+s.PublicURL()); err != nil {
+		return "", fmt.Errorf("failed to register device enrollment token: %w", err)
+	}
+	return tok, nil
+}
 
 // seedPolicyOnFirstBoot installs the mesh policy only when none exists; the
 // database stays authoritative afterwards.

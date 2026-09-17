@@ -22,3 +22,6 @@ Welcome to the User & Operator Guides. This section provides detailed documentat
 
 5. **[SAM Mobile App](mobile-app/)**
    Turn your mobile device into a SAM node, exposing sensors and telemetry securely to the mesh, and integrating with native OS assistants.
+
+6. **[Device Enrollment (QR Code)](device-enrollment/)**
+   Enroll phones by scanning a single-use `sam://enroll` code printed by `sam-one`, including publishing a laptop on a public https URL through a tunnel.

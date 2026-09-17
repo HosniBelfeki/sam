@@ -37,8 +37,8 @@ Exposes capabilities directly to the OS registry, allowing native assistants (li
 
 ## How to Use the Application
 
-1.  **Enrollment**: Enter the **Control plane URL** (e.g., `https://bananas.sam-mesh.dev`) and your **Enrollment JWT**.
-2.  **API Token**: Set a local API token (defaults to `secret-token`) to secure local access.
+1.  **Enrollment**: Tap **Scan enrollment code** and scan the `sam://enroll` QR code printed by `sam-one` (see [Device Enrollment](../device-enrollment/)), or open **Enter details manually** to paste a bootstrap token, or sign in through the control plane's identity provider (browser or device login) with its **Control plane URL** (e.g., `https://bananas.sam-mesh.dev`).
+2.  **API Token**: A local API token securing local access is generated on first launch; view or regenerate it on the Config tab.
 3.  **Start Node**: Launches the background Go node runtime.
 4.  **Dashboard**: Monitor connected peers and DHT size.
 5.  **Services Tab**: Enable/Disable embedded sensors (Battery/Location) to expose them to the mesh.

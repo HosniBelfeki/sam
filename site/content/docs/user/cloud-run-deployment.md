@@ -151,7 +151,9 @@ provider starts for propagation on first call.
 
 ## 6. Operate with the CLI
 
-The `sam-one` binary doubles as an admin client for the running service:
+The `sam-one` binary doubles as an admin client for the running service.
+It reads the admin credential from `SAM_ADMIN_TOKEN` or a file named by
+`--admin-token-path`, never from a flag value:
 
 ```bash
 export SAM_ADMIN_TOKEN="$ADMIN_TOKEN"
@@ -159,8 +161,12 @@ export SAM_ADMIN_TOKEN="$ADMIN_TOKEN"
 # Mint a scoped, single-use enrollment token
 sam-one token create --server "$URL" --role sam:role:node --max-usages 1
 
-# List tokens and their usage
+# Same, rendered as a QR code for the SAM mobile app (add --max-usages N for a room)
+sam-one token qr --server "$URL"
+
+# List tokens with their usage and status; revoke one by id prefix
 sam-one token list --server "$URL"
+sam-one token revoke <token-id> --server "$URL"
 
 # Ban a peer from the mesh
 sam-one admin ban --server "$URL" <peer-id>
@@ -196,4 +202,6 @@ sam-one --data-dir /var/lib/sam-one
 A free port is picked and published in the startup banner together with
 the generated tokens; pass `--port 8080` (and optionally
 `--bind-address`) for a fixed one, and `--external-url https://mesh.example.com`
-when fronted by a reverse proxy or DNS name.
+when fronted by a reverse proxy or DNS name. On a laptop behind NAT,
+`--tunnel cloudflare` publishes the port on a temporary public https URL
+instead; see [Device Enrollment](../device-enrollment/).

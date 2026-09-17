@@ -16,6 +16,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -40,17 +41,23 @@ func newFakeAdminAPI(t *testing.T) *httptest.Server {
 		}
 		switch r.Method {
 		case http.MethodPost:
-			var req map[string]any
+			// Decode into the shared wire type, as the control plane does, so a
+			// client that drifts from it fails here.
+			var req api.BootstrapTokenRequest
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				http.Error(w, "bad body", http.StatusBadRequest)
 				return
 			}
+			if !req.AutonomousRecovery || req.MaxUsages != 1 || req.TTLHours != 24 || req.Description != "note" {
+				http.Error(w, fmt.Sprintf("unexpected request %+v", req), http.StatusBadRequest)
+				return
+			}
 			w.WriteHeader(http.StatusCreated)
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"id":         "abcdef123456",
-				"token":      "sam-bt-fresh",
-				"role":       req["role"],
-				"expires_at": "2026-12-31T00:00:00Z",
+			_ = json.NewEncoder(w).Encode(api.BootstrapTokenResponse{
+				ID:        "abcdef123456",
+				Token:     "sam-bt-fresh",
+				Role:      req.Role,
+				ExpiresAt: "2026-12-31T00:00:00Z",
 			})
 		case http.MethodGet:
 			_ = json.NewEncoder(w).Encode([]storage.BootstrapToken{{
@@ -64,6 +71,17 @@ func newFakeAdminAPI(t *testing.T) *httptest.Server {
 		default:
 			http.Error(w, "method", http.StatusMethodNotAllowed)
 		}
+	})
+	mux.HandleFunc("/admin/bootstrap-tokens/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer adm-tok" {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if r.Method != http.MethodDelete || r.URL.Path != "/admin/bootstrap-tokens/abcdef123456" {
+			http.Error(w, "wrong revoke request "+r.Method+" "+r.URL.Path, http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("/admin/revoke", func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer adm-tok" {
@@ -87,7 +105,7 @@ func TestAdminClient(t *testing.T) {
 	ts := newFakeAdminAPI(t)
 	c := &adminClient{client: ts.Client(), server: ts.URL, token: "adm-tok"}
 
-	created, err := c.createToken(api.RoleNode, 24, 1, "note")
+	created, err := c.createToken(api.RoleNode, 24, 1, "note", true)
 	if err != nil {
 		t.Fatalf("createToken failed: %v", err)
 	}
@@ -107,6 +125,15 @@ func TestAdminClient(t *testing.T) {
 		t.Fatalf("banPeer failed: %v", err)
 	}
 
+	// Revocation accepts the id prefix `token list` prints and sends the
+	// full id; an unknown prefix never reaches the DELETE route.
+	if id, err := c.revokeToken("abcdef"); err != nil || id != "abcdef123456" {
+		t.Fatalf("revokeToken by prefix = (%q, %v)", id, err)
+	}
+	if _, err := c.revokeToken("zzz"); err == nil || !strings.Contains(err.Error(), "no bootstrap token") {
+		t.Fatalf("revokeToken unknown prefix: err = %v", err)
+	}
+
 	bad := &adminClient{client: ts.Client(), server: ts.URL, token: "wrong"}
 	if _, err := bad.listTokens(); err == nil || !strings.Contains(err.Error(), "401") {
 		t.Errorf("expected 401 error with wrong token, got %v", err)
@@ -118,6 +145,10 @@ func TestResolveAdminToken(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "admin-token"), []byte("sam_adm_file\n"), 0o600); err != nil {
 		t.Fatalf("failed to write token file: %v", err)
 	}
+	explicit := filepath.Join(t.TempDir(), "my-admin-token")
+	if err := os.WriteFile(explicit, []byte(" sam_adm_explicit\n"), 0o600); err != nil {
+		t.Fatalf("failed to write explicit token file: %v", err)
+	}
 
 	t.Setenv("SAM_ADMIN_TOKEN", "")
 	if got, err := resolveAdminToken("", dir); err != nil || got != "sam_adm_file" {
@@ -128,8 +159,18 @@ func TestResolveAdminToken(t *testing.T) {
 	if got, err := resolveAdminToken("", dir); err != nil || got != "sam_adm_env" {
 		t.Errorf("env precedence = %q, %v; want sam_adm_env", got, err)
 	}
-	if got, err := resolveAdminToken("sam_adm_flag", dir); err != nil || got != "sam_adm_flag" {
-		t.Errorf("flag precedence = %q, %v; want sam_adm_flag", got, err)
+	if got, err := resolveAdminToken(explicit, dir); err != nil || got != "sam_adm_explicit" {
+		t.Errorf("--admin-token-path precedence = %q, %v; want sam_adm_explicit (trimmed)", got, err)
+	}
+
+	// A path that is set but unusable must not fall through to env or data-dir.
+	if _, err := resolveAdminToken(filepath.Join(t.TempDir(), "missing"), dir); err == nil {
+		t.Error("expected an error for a missing --admin-token-path")
+	}
+	empty := filepath.Join(t.TempDir(), "empty")
+	_ = os.WriteFile(empty, []byte("\n"), 0o600)
+	if _, err := resolveAdminToken(empty, dir); err == nil {
+		t.Error("expected an error for an empty --admin-token-path")
 	}
 
 	t.Setenv("SAM_ADMIN_TOKEN", "")

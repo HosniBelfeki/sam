@@ -5,7 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart';
 
 class SamDartMcpServer {
-  static const MethodChannel _channel = MethodChannel('com.example.sam_agent/mesh_expose');
+  static const MethodChannel _channel = MethodChannel('dev.sammesh.connect/mesh_expose');
   HttpServer? _server;
   final List<HttpResponse> _sseClients = [];
   // Android loopback is shared by every installed app, so the port alone is

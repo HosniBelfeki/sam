@@ -7,7 +7,7 @@ plugins {
 }
 
 android {
-    namespace = "com.example.sam_agent"
+    namespace = "dev.sammesh.connect"
     compileSdk = 37 // Keep as 37, Gradle usually maps this correctly, but let's check if it needs to be 37
     ndkVersion = flutter.ndkVersion
 
@@ -17,8 +17,7 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.example.sam_agent"
+        applicationId = "dev.sammesh.connect"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion
