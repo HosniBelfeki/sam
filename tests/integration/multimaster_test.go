@@ -29,6 +29,7 @@ import (
 	"github.com/google/sam/api"
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/crypto"
+	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-msgio"
 	"github.com/multiformats/go-multiaddr"
@@ -235,44 +236,46 @@ roles: []
 		t.Fatalf("failed to connect client to Router A: %v", err)
 	}
 
-	t.Log("Opening auth stream to Router A...")
-	s, err := clientHost.NewStream(context.Background(), routerInfoA.ID, api.AuthProtocolID)
-	if err != nil {
-		t.Fatalf("failed to open auth stream: %v", err)
-	}
-	defer func() { _ = s.Close() }()
-
-	t.Log("Writing auth frame with CP B biscuit to Router A...")
-	writer := msgio.NewVarintWriter(s)
-	authFrame := &api.AuthFrame{Biscuit: clientBiscuit}
-	authFrameBytes, err := proto.Marshal(authFrame)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := writer.WriteMsg(authFrameBytes); err != nil {
-		t.Fatalf("failed to write auth frame: %v", err)
-	}
-
-	t.Log("Reading auth response from Router A...")
-	reader := msgio.NewVarintReaderSize(s, 1024*64)
-	respMsg, err := reader.ReadMsg()
-	if err != nil {
-		t.Fatalf("failed to read response from Router A: %v\nRouter A Stderr:\n%s\nRouter A Stdout:\n%s\nCP A Stderr:\n%s\nCP B Stderr:\n%s",
+	t.Log("Authenticating to Router A with the CP B biscuit...")
+	if err := authenticateWithRouter(ctxConnect, clientHost, routerInfoA.ID, clientBiscuit); err != nil {
+		t.Fatalf("mutual auth with Router A failed: %v\nRouter A Stderr:\n%s\nRouter A Stdout:\n%s\nCP A Stderr:\n%s\nCP B Stderr:\n%s",
 			err, stderrRouterA.String(), stdoutRouterA.String(), stderrCP_A.String(), stderrCP_B.String())
-	}
-	defer reader.ReleaseMsg(respMsg)
-
-	var authResp api.AuthResponse
-	if err := proto.Unmarshal(respMsg, &authResp); err != nil {
-		t.Fatalf("failed to unmarshal response: %v", err)
-	}
-
-	if !authResp.Success {
-		t.Fatalf("mutual auth with Router A was rejected: %s\nRouter A Stderr:\n%s\nRouter A Stdout:\n%s\nCP A Stderr:\n%s\nCP B Stderr:\n%s",
-			authResp.Error, stderrRouterA.String(), stdoutRouterA.String(), stderrCP_A.String(), stderrCP_B.String())
 	}
 
 	t.Log("Successfully verified multi-master control plane signature trust!")
+}
+
+// authenticateWithRouter runs the node side of the auth handshake on
+// api.AuthProtocolID, which is what admits h to the router's relay.
+func authenticateWithRouter(ctx context.Context, h host.Host, router peer.ID, biscuit []byte) error {
+	s, err := h.NewStream(ctx, router, api.AuthProtocolID)
+	if err != nil {
+		return fmt.Errorf("open auth stream: %w", err)
+	}
+	defer func() { _ = s.Close() }()
+	_ = s.SetDeadline(time.Now().Add(5 * time.Second))
+
+	authFrameBytes, err := proto.Marshal(&api.AuthFrame{Biscuit: biscuit})
+	if err != nil {
+		return err
+	}
+	if err := msgio.NewVarintWriter(s).WriteMsg(authFrameBytes); err != nil {
+		return fmt.Errorf("write auth frame: %w", err)
+	}
+	reader := msgio.NewVarintReaderSize(s, 1024*64)
+	respMsg, err := reader.ReadMsg()
+	if err != nil {
+		return fmt.Errorf("read auth response: %w", err)
+	}
+	defer reader.ReleaseMsg(respMsg)
+	var authResp api.AuthResponse
+	if err := proto.Unmarshal(respMsg, &authResp); err != nil {
+		return fmt.Errorf("decode auth response: %w", err)
+	}
+	if !authResp.Success {
+		return fmt.Errorf("router rejected the handshake: %s", authResp.Error)
+	}
+	return nil
 }
 
 func enrollClientOnControlPlane(t *testing.T, cpPort int, clientID peer.ID, privKey crypto.PrivKey, jwtToken string) []byte {

@@ -87,6 +87,21 @@ func TestCheckPeerLabels(t *testing.T) {
 			t.Error("expected error, got nil")
 		}
 	})
+
+	// A router's biscuit is a valid, trusted, peer-bound identity, but a
+	// router is not a service provider; only role(node) may be dialled as one.
+	t.Run("router biscuit is not a provider", func(t *testing.T) {
+		routerTok, err := identity.MintBootstrapBiscuitToken(cpPriv, providerPeer, api.RoleRouter, expiry, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := node.checkPeerLabels(routerTok, providerPeer, nil); err == nil {
+			t.Error("a router's biscuit must not pass the provider gate")
+		}
+		if err := node.checkPeerLabels(mint(cpPriv, providerPeer, nil), providerPeer, nil); err != nil {
+			t.Errorf("a node's biscuit with no requirement must pass: %v", err)
+		}
+	})
 }
 
 // The egress floor is the operator's, and a caller cannot waive it by asking
@@ -188,11 +203,12 @@ func TestCheckPeerLabelsEnforcesEgressFloor(t *testing.T) {
 	}
 }
 
-// VerifyPeerLabels short-circuits when there is nothing to check. With a floor
-// configured there always is, so the short-circuit must not swallow it: the
-// gate has to run even for a caller that asked for nothing, which is the
-// difference between a floor and a suggestion.
-func TestVerifyPeerLabelsDoesNotShortCircuitPastTheFloor(t *testing.T) {
+// VerifyPeerLabels has no short-circuit: with nothing to attest it still has
+// to establish that the peer is an enrolled member, and with a floor
+// configured there is always something to attest. Either way a caller that
+// asked for nothing is gated, which is the difference between a floor and a
+// suggestion, and between a provider and a peer that merely announced.
+func TestVerifyPeerLabelsDoesNotShortCircuit(t *testing.T) {
 	node := &SamNode{
 		BiscuitTimeout: 500 * time.Millisecond,
 		nodeConfig:     &NodeConfigComplete{EgressRequireLabels: map[string]string{"jurisdiction": "eu"}},
@@ -210,10 +226,11 @@ func TestVerifyPeerLabelsDoesNotShortCircuitPastTheFloor(t *testing.T) {
 		t.Fatal("a caller requiring nothing must still be gated when a floor is configured")
 	}
 
-	// Without a floor, the same call is the documented no-op.
+	// Without a floor the gate still runs: an unenrolled peer is not a
+	// provider just because nobody asked for a label.
 	node.nodeConfig = &NodeConfigComplete{}
-	if err := node.VerifyPeerLabels(context.Background(), peer.ID("some-peer"), nil); err != nil {
-		t.Errorf("with no floor and no requirement the gate must not run: %v", err)
+	if err := node.VerifyPeerLabels(context.Background(), peer.ID("some-peer"), nil); err == nil {
+		t.Error("with no floor and no requirement the gate must still verify the peer's identity")
 	}
 }
 

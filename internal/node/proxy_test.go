@@ -123,17 +123,9 @@ func TestDatapathIntegration(t *testing.T) {
 		}
 	}()
 
-	// Setup identity for Node B (the caller proxy) and trust it on Node A
-	rootPub, rootPriv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatalf("gen root: %v", err)
-	}
-	if err := buildAndSaveBiscuit(nodeB, rootPriv); err != nil {
-		t.Fatalf("buildAndSaveBiscuit: %v", err)
-	}
-	nodeA.keysMu.Lock()
-	nodeA.trustedKeys = append(nodeA.trustedKeys, TrustedKey{Key: rootPub, ReceivedAt: time.Now()})
-	nodeA.keysMu.Unlock()
+	// Both nodes enrolled under one root: B (the caller proxy) authenticates
+	// to A, and A must show B a verifiable identity before B forwards to it.
+	enrollUnderRoot(t, nodeA, nodeB)
 
 	// Connect Node B to Node A directly
 	err = nodeB.Host.Connect(ctx, peer.AddrInfo{ID: nodeA.Host.ID(), Addrs: nodeA.Host.Addrs()})
@@ -468,17 +460,8 @@ func TestStdioDatapathIntegration(t *testing.T) {
 	}
 	defer func() { _ = nodeB.Host.Close() }()
 
-	// Setup identity for Node B (the caller proxy) and trust it on Node A
-	rootPub, rootPriv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatalf("gen root: %v", err)
-	}
-	if err := buildAndSaveBiscuit(nodeB, rootPriv); err != nil {
-		t.Fatalf("buildAndSaveBiscuit: %v", err)
-	}
-	nodeA.keysMu.Lock()
-	nodeA.trustedKeys = append(nodeA.trustedKeys, TrustedKey{Key: rootPub, ReceivedAt: time.Now()})
-	nodeA.keysMu.Unlock()
+	// Both nodes enrolled under one root (see TestDatapathIntegration).
+	enrollUnderRoot(t, nodeA, nodeB)
 
 	// Connect Node B to Node A directly
 	err = nodeB.Host.Connect(ctx, peer.AddrInfo{ID: nodeA.Host.ID(), Addrs: nodeA.Host.Addrs()})
@@ -656,16 +639,7 @@ func TestDatapathHeadersAndRoutingTable(t *testing.T) {
 		}
 	}()
 
-	rootPub, rootPriv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatalf("gen root: %v", err)
-	}
-	if err := buildAndSaveBiscuit(nodeB, rootPriv); err != nil {
-		t.Fatalf("buildAndSaveBiscuit: %v", err)
-	}
-	nodeA.keysMu.Lock()
-	nodeA.trustedKeys = append(nodeA.trustedKeys, TrustedKey{Key: rootPub, ReceivedAt: time.Now()})
-	nodeA.keysMu.Unlock()
+	enrollUnderRoot(t, nodeA, nodeB)
 
 	err = nodeB.Host.Connect(ctx, peer.AddrInfo{ID: nodeA.Host.ID(), Addrs: nodeA.Host.Addrs()})
 	if err != nil {

@@ -41,6 +41,11 @@ const (
 	DefaultStaleAfter = 30 * time.Second
 	// DefaultMaxProviders bounds the consumer-side provider table.
 	DefaultMaxProviders = 1024
+	// MaxProvidersPerSigner bounds how many entries one peer may hold in
+	// the table: entries are keyed by signer|type|service, so without this
+	// a single peer announcing many service names could evict everyone
+	// else's entries (the global cap evicts oldest, not loudest).
+	MaxProvidersPerSigner = 16
 	// maxAnnounceSkew rejects announcements too old or too far in the
 	// future (replay/clock defense; pubsub dedup handles exact replays).
 	maxAnnounceSkew = 2 * time.Minute

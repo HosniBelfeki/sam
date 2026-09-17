@@ -132,8 +132,14 @@ func (d *Discovery) observe(msg *pubsub.Message) {
 
 	d.viewMu.Lock()
 	defer d.viewMu.Unlock()
-	if _, exists := d.providers[entryKey]; !exists && len(d.providers) >= d.maxProviders {
-		d.evictOldestLocked()
+	if _, exists := d.providers[entryKey]; !exists {
+		// The signer's own oldest entry goes first: a peer that announces
+		// more than its share only ever displaces itself.
+		if d.countBySignerLocked(signer) >= MaxProvidersPerSigner {
+			d.evictOldestLocked(signer)
+		} else if len(d.providers) >= d.maxProviders {
+			d.evictOldestLocked("")
+		}
 	}
 	d.providers[entryKey] = Provider{
 		PeerID:  signer,
@@ -149,10 +155,25 @@ func (d *Discovery) observe(msg *pubsub.Message) {
 	}
 }
 
-func (d *Discovery) evictOldestLocked() {
+func (d *Discovery) countBySignerLocked(signer string) int {
+	n := 0
+	for _, p := range d.providers {
+		if p.PeerID == signer {
+			n++
+		}
+	}
+	return n
+}
+
+// evictOldestLocked removes the least recently seen entry, restricted to
+// one signer's entries when signer is non-empty.
+func (d *Discovery) evictOldestLocked(signer string) {
 	var oldestKey string
 	var oldest time.Time
 	for k, p := range d.providers {
+		if signer != "" && p.PeerID != signer {
+			continue
+		}
 		if oldestKey == "" || p.LastSeen.Before(oldest) {
 			oldestKey, oldest = k, p.LastSeen
 		}

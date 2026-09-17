@@ -121,7 +121,9 @@ func (a *nodeRelayACL) AllowReserve(p peer.ID, addr multiaddr.Multiaddr) bool {
 }
 
 func (a *nodeRelayACL) AllowConnect(src peer.ID, srcAddr multiaddr.Multiaddr, dest peer.ID) bool {
-	return a.node.isAdmitted(dest)
+	// Both ends: an unauthenticated source could otherwise open circuits to
+	// every admitted peer through this node.
+	return a.node.isAdmitted(src) && a.node.isAdmitted(dest)
 }
 
 // isAdmitted reports whether a peer completed the auth handshake and its token
@@ -150,8 +152,6 @@ type SamNode struct {
 	RouterPeerID         peer.ID
 	authenticatedRouters map[peer.ID]bool
 	peerLastEventTime    map[string]int64
-	receivedMsgs         map[string][]string
-	topics               map[string]*pubsub.Topic
 	mu                   sync.Mutex
 	nodeConfig           *NodeConfigComplete
 	revokedPeers         *lru.Cache[string, int64]
@@ -284,8 +284,6 @@ func NewSamNode(cfg Options) (*SamNode, error) {
 		Store:                cfg.Store,
 		trustedKeys:          trustedKeys,
 		peerLastEventTime:    make(map[string]int64),
-		receivedMsgs:         make(map[string][]string),
-		topics:               make(map[string]*pubsub.Topic),
 		authenticatedRouters: make(map[peer.ID]bool),
 		nodeConfig:           cfg.NodeConfig,
 		AllowLoopback:        cfg.AllowLoopback,
@@ -567,12 +565,24 @@ func (n *SamNode) Start(ctx context.Context) error {
 		}
 	}
 
-	// Initialize Gossipsub for control plane events
-	ps, err := pubsub.NewGossipSub(ctx, h)
+	// Initialize Gossipsub for control plane events. StrictSign is the
+	// library default; it is pinned because the event validator and the
+	// per-author rate limit key on msg.GetFrom(), which only the signature
+	// makes trustworthy.
+	ps, err := pubsub.NewGossipSub(ctx, h, pubsub.WithMessageSignaturePolicy(pubsub.StrictSign))
 	if err != nil {
 		return err
 	}
 	n.PubSub = ps
+	// Validate control-plane events before GossipSub accepts or re-forwards
+	// them: one ed25519 verify per message, so a peer flooding the topic with
+	// junk costs itself the verify and never reaches the subscriber or the
+	// next hop. Without this the rate limit ran first, keyed on the
+	// forwarding peer, and a flood via the router exhausted the router's
+	// budget so real ban and rotation events were dropped.
+	if err := ps.RegisterTopicValidator(api.GossipEvents, n.validateMeshEvent); err != nil {
+		return fmt.Errorf("register mesh event validator: %w", err)
+	}
 
 	// Interest-scoped service announcements (provider + consumer roles).
 	n.Discovery = samdiscovery.New(ps, h.ID())
@@ -1232,32 +1242,18 @@ func (n *SamNode) listenForControlPlaneEvents(ctx context.Context) {
 			return
 		}
 
-		if !n.rateLimiter.Allow(msg.ReceivedFrom.String()) {
-			logger.Warnw("[Mesh Event] rate limit exceeded, dropping message", "event", meshEventRateLimitDrop, "peer", msg.ReceivedFrom.String())
+		// validateMeshEvent already rejected anything unsigned, misspelled or
+		// stale; what arrives here is a genuine control-plane event. The limit
+		// is on the author, so a burst from one control plane cannot be
+		// blamed on the router that relayed it.
+		if !n.rateLimiter.Allow(msg.GetFrom().String()) {
+			logger.Warnw("[Mesh Event] rate limit exceeded, dropping message", "event", meshEventRateLimitDrop, "peer", msg.GetFrom().String())
 			continue
 		}
 
 		var event api.MeshEvent
 		if err := proto.Unmarshal(msg.Data, &event); err != nil {
 			logger.Errorf("[Mesh Event] Failed to unmarshal event from %s: %v", msg.ReceivedFrom, err)
-			continue
-		}
-
-		// Since the signature is verified against our list of trusted control plane public keys
-		// in verifyEvent below, any message with a valid signature is cryptographically
-		// proven to have been authored by one of the control planes. We do not restrict msg.GetFrom()
-		// to a single RouterPeerID because there can be multiple control plane replicas in a cluster,
-		// each with its own PeerID.
-
-		if !n.verifyEvent(&event) {
-			logger.Warnw("[Mesh Event] potential spoofing attempt: invalid event signature", "event", meshEventSpoofingAttempt, "peer", msg.ReceivedFrom.String())
-			continue
-		}
-
-		// Freshness check: reject events older than the threshold to prevent replay attacks
-		eventTime := time.UnixMilli(event.Timestamp)
-		if time.Since(eventTime) > FreshnessThreshold || time.Until(eventTime) > FreshnessThreshold {
-			logger.Warnw("[Mesh Event] dropping stale or future event", "event", meshEventStaleEvent, "peer", msg.ReceivedFrom.String(), "timestamp", event.Timestamp)
 			continue
 		}
 
@@ -1440,45 +1436,28 @@ func (n *SamNode) verifyEvent(event *api.MeshEvent) bool {
 	return false
 }
 
-func (n *SamNode) subscribeToTopic(ctx context.Context, topicName string) error {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	if _, ok := n.topics[topicName]; ok {
-		return nil
+// validateMeshEvent is the GossipSub validator for api.GossipEvents. Reject
+// means the message is dropped and not re-forwarded; the signature is checked
+// against the trusted control-plane keys, so any peer whose libp2p key
+// signed the pubsub envelope still cannot get an unsigned event past here. A
+// stale event is ignored rather than rejected: it may be a genuine event
+// that arrived late, and there is no reason to penalize its forwarder.
+func (n *SamNode) validateMeshEvent(_ context.Context, from peer.ID, msg *pubsub.Message) pubsub.ValidationResult {
+	var event api.MeshEvent
+	if err := proto.Unmarshal(msg.Data, &event); err != nil {
+		logger.Warnw("[Mesh Event] rejecting undecodable event", "event", meshEventSpoofingAttempt, "peer", from.String())
+		return pubsub.ValidationReject
 	}
-
-	topic, err := n.PubSub.Join(topicName)
-	if err != nil {
-		return err
+	if !n.verifyEvent(&event) {
+		logger.Warnw("[Mesh Event] potential spoofing attempt: invalid event signature", "event", meshEventSpoofingAttempt, "peer", from.String())
+		return pubsub.ValidationReject
 	}
-
-	sub, err := topic.Subscribe()
-	if err != nil {
-		return err
+	eventTime := time.UnixMilli(event.Timestamp)
+	if time.Since(eventTime) > FreshnessThreshold || time.Until(eventTime) > FreshnessThreshold {
+		logger.Warnw("[Mesh Event] dropping stale or future event", "event", meshEventStaleEvent, "peer", from.String(), "timestamp", event.Timestamp)
+		return pubsub.ValidationIgnore
 	}
-
-	n.topics[topicName] = topic
-
-	logger.Infof("[PubSub] Started subscription background loop for topic: %s", topicName)
-	go func() {
-		defer func() {
-			sub.Cancel()
-			logger.Infof("[PubSub] Exited subscription background loop for topic: %s", topicName)
-		}()
-		for {
-			msg, err := sub.Next(context.Background())
-			if err != nil {
-				logger.Errorf("[PubSub] subscription Next() error for topic %s: %v", topicName, err)
-				return
-			}
-			logger.Debugf("[PubSub] Received message on topic %s from %s: %s", topicName, msg.ReceivedFrom, string(msg.Data))
-			n.mu.Lock()
-			n.receivedMsgs[topicName] = append(n.receivedMsgs[topicName], string(msg.Data))
-			n.mu.Unlock()
-		}
-	}()
-	return nil
+	return pubsub.ValidationAccept
 }
 
 func (n *SamNode) startDiscovery(ctx context.Context, meshID string, interval time.Duration) {

@@ -144,9 +144,9 @@ func (n *SamNode) egressFloor() map[string]string {
 // constrained does not get to opt out of it by saying nothing.
 func (n *SamNode) VerifyPeerLabels(ctx context.Context, peerID peer.ID, required map[string]string) error {
 	floor := n.egressFloor()
-	if len(required) == 0 && len(floor) == 0 {
-		return nil
-	}
+	// No early return for an empty requirement: with nothing to attest this
+	// still verifies that the peer holds a control-plane-signed biscuit bound
+	// to it, which is what makes a discovered peer a provider at all.
 	key := labelGateKey(peerID, required, floor)
 	if until, ok := n.peerLabelGate.Get(key); ok && time.Now().Before(until) {
 		return nil
@@ -170,7 +170,7 @@ func (n *SamNode) VerifyPeerLabels(ctx context.Context, peerID peer.ID, required
 func (n *SamNode) checkPeerLabels(providerBiscuit []byte, peerID peer.ID, required map[string]string) error {
 	floor := n.egressFloor()
 	if len(providerBiscuit) == 0 {
-		return fmt.Errorf("provider %s returned no identity biscuit; cannot attest required labels %v (egress floor %v)", peerID, required, floor)
+		return fmt.Errorf("provider %s returned no identity biscuit; not an enrolled peer (required labels %v, egress floor %v)", peerID, required, floor)
 	}
 
 	n.keysMu.RLock()
@@ -186,6 +186,11 @@ func (n *SamNode) checkPeerLabels(providerBiscuit []byte, peerID peer.ID, requir
 	b, key, err := identity.VerifyBiscuitAndGetKey(providerBiscuit, peerID, trustedKeys, n.BiscuitTimeout)
 	if err != nil {
 		return fmt.Errorf("provider %s biscuit verification failed: %w", peerID, err)
+	}
+	// Only nodes host services. A router's or an admin's biscuit is a valid
+	// mesh identity but not a provider, and must not be dialled as one.
+	if err := identity.RequireRole(b, key, api.RoleNode, n.BiscuitTimeout); err != nil {
+		return fmt.Errorf("provider %s is not enrolled as a node: %w", peerID, err)
 	}
 
 	authorizer, err := b.Authorizer(key, identity.AuthorizerOptions(n.BiscuitTimeout)...)

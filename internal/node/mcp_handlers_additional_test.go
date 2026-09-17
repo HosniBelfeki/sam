@@ -57,43 +57,6 @@ func TestHandleDiscoverRemoteServices(t *testing.T) {
 	}
 }
 
-func TestHandleMeshPubsub(t *testing.T) {
-	ctx := context.Background()
-	node, cleanup := startBareNode(t, ctx)
-	defer cleanup()
-
-	// Subscribe
-	res, _, err := node.handleSubscribeTopic(context.Background(), &mcp.CallToolRequest{}, SubscribeTopicParams{
-		Topic: "test-topic",
-	})
-	if err != nil {
-		t.Fatalf("handleSubscribeTopic failed: %v", err)
-	}
-	if res.Content[0].(*mcp.TextContent).Text != "Subscribed" {
-		t.Errorf("expected Subscribed")
-	}
-
-	// Publish
-	_, _, err = node.handleMeshPubsubBroadcast(context.Background(), &mcp.CallToolRequest{}, MeshPubsubBroadcastParams{
-		Topic:   "test-topic",
-		Payload: "test-message",
-	})
-	if err != nil {
-		t.Fatalf("handleMeshPubsubBroadcast failed: %v", err)
-	}
-
-	// Poll
-	res, _, err = node.handlePollMessages(context.Background(), &mcp.CallToolRequest{}, PollMessagesParams{
-		Topic: "test-topic",
-	})
-	if err != nil {
-		t.Fatalf("handlePollMessages failed: %v", err)
-	}
-	if len(res.Content) == 0 {
-		t.Fatalf("expected content in poll messages")
-	}
-}
-
 func TestHandleGetMeshInfo(t *testing.T) {
 	ctx := context.Background()
 	node, cleanup := startBareNode(t, ctx)

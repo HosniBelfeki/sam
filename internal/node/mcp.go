@@ -77,24 +77,6 @@ func NewMCPServer(node *SamNode) *mcp.Server {
 		Description: "Discover remote services in the mesh. Provide only `type` to browse every reachable service of that type (returns name + description for each); add `name` to target a specific service. For `type: inference`, each result's `local_proxy_url` is called directly over HTTP (NOT via call_remote_tool) — the response includes a usage hint with the exact headers required.",
 	}, node.handleDiscoverRemoteServices)
 
-	// Add the mesh_pubsub_broadcast tool.
-	mcp.AddTool(mcpServer, &mcp.Tool{
-		Name:        "mesh_pubsub_broadcast",
-		Description: "Publish an event payload to a custom GossipSub topic",
-	}, node.handleMeshPubsubBroadcast)
-
-	// Add the poll_messages tool.
-	mcp.AddTool(mcpServer, &mcp.Tool{
-		Name:        "poll_messages",
-		Description: "Poll for incoming messages on custom GossipSub topics",
-	}, node.handlePollMessages)
-
-	// Add the subscribe_topic tool.
-	mcp.AddTool(mcpServer, &mcp.Tool{
-		Name:        "subscribe_topic",
-		Description: "Subscribe to a custom GossipSub topic",
-	}, node.handleSubscribeTopic)
-
 	// Add the get_mesh_info tool.
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "get_mesh_info",
@@ -378,14 +360,13 @@ func (n *SamNode) ConnectMCPSession(ctx context.Context, targetPeer peer.ID, tar
 		return nil, nil, fmt.Errorf("%w by %s: %s", ErrAuthRejected, targetPeer, resp.Error)
 	}
 
-	// The gate runs when the caller requires labels or when the operator's
-	// egress floor does: a caller that requires nothing is still held to the
-	// floor (checkPeerLabels ANDs both).
-	if len(requiredLabels) > 0 || len(n.egressFloor()) > 0 {
-		if err := n.checkPeerLabels(resp.Biscuit, targetPeer, requiredLabels); err != nil {
-			cleanup()
-			return nil, nil, err
-		}
+	// The provider's biscuit is verified unconditionally: signature, expiry and
+	// binding to targetPeer. Discovery (DHT, gossip) names whoever announced
+	// the service; only this says the peer is enrolled. Caller-required labels
+	// and the operator's egress floor are additional checks on the same token.
+	if err := n.checkPeerLabels(resp.Biscuit, targetPeer, requiredLabels); err != nil {
+		cleanup()
+		return nil, nil, err
 	}
 
 	// Handoff to SDK using custom transport

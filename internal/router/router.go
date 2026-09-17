@@ -96,6 +96,12 @@ func (a *relayACL) AllowConnect(src peer.ID, srcAddr multiaddr.Multiaddr, dest p
 		logger.Debugf("[Relay] Rejecting connect from %s to %s: dest is banned", src, dest)
 		return false
 	}
+	// Both ends must have authenticated: every node authenticates to the
+	// router on connect, so a source that has not is not a mesh member.
+	if _, ok := a.r.authenticatedPeers.Load(src); !ok {
+		logger.Debugf("[Relay] Rejecting connect from %s to %s: src not authenticated", src, dest)
+		return false
+	}
 	_, ok := a.r.authenticatedPeers.Load(dest)
 	if !ok {
 		logger.Debugf("[Relay] Rejecting connect from %s to %s: dest not authenticated", src, dest)
@@ -340,13 +346,21 @@ func (r *Router) Start() error {
 		return err
 	}
 
-	// Setup PubSub
-	ps, err := pubsub.NewGossipSub(r.ctx, hostNode)
+	// Setup PubSub. StrictSign is the default; pinned because the event
+	// validator trusts msg.GetFrom().
+	ps, err := pubsub.NewGossipSub(r.ctx, hostNode, pubsub.WithMessageSignaturePolicy(pubsub.StrictSign))
 	if err != nil {
 		_ = hostNode.Close()
 		return err
 	}
 	r.PubSub = ps
+	// The router is the hub every node gossips through. Validating here
+	// stops a junk event at the first hop instead of fanning it out to every
+	// attached node, each of which would spend a verify on it.
+	if err := ps.RegisterTopicValidator(api.GossipEvents, r.validateMeshEvent); err != nil {
+		_ = hostNode.Close()
+		return fmt.Errorf("register mesh event validator: %w", err)
+	}
 
 	topic, err := ps.Join(api.GossipEvents)
 	if err != nil {
@@ -714,6 +728,31 @@ func (r *Router) verifyEvent(event *api.MeshEvent) bool {
 	return false
 }
 
+// meshEventFreshness bounds how far an event's timestamp may be from now
+// before it is treated as a replay (or a clock the router cannot trust).
+const meshEventFreshness = 5 * time.Minute
+
+// validateMeshEvent is the GossipSub validator for api.GossipEvents: reject
+// (drop and do not forward) anything undecodable or not signed by a trusted
+// control plane, ignore anything stale.
+func (r *Router) validateMeshEvent(_ context.Context, from peer.ID, msg *pubsub.Message) pubsub.ValidationResult {
+	var event api.MeshEvent
+	if err := proto.Unmarshal(msg.Data, &event); err != nil {
+		logger.Warnf("[Router Event] Rejecting undecodable event from %s", from)
+		return pubsub.ValidationReject
+	}
+	if !r.verifyEvent(&event) {
+		logger.Warnf("[Router Event] Potential spoofing attempt: invalid signature on event from %s", from)
+		return pubsub.ValidationReject
+	}
+	eventTime := time.UnixMilli(event.Timestamp)
+	if time.Since(eventTime) > meshEventFreshness || time.Until(eventTime) > meshEventFreshness {
+		logger.Warnf("[Router Event] Dropping stale or future event from %s", from)
+		return pubsub.ValidationIgnore
+	}
+	return pubsub.ValidationAccept
+}
+
 func (r *Router) listenForControlPlaneEvents(ctx context.Context) {
 	defer r.wg.Done()
 	if r.EventTopic == nil {
@@ -732,20 +771,10 @@ func (r *Router) listenForControlPlaneEvents(ctx context.Context) {
 			return
 		}
 
+		// validateMeshEvent already rejected anything unsigned or stale.
 		var event api.MeshEvent
 		if err := proto.Unmarshal(msg.Data, &event); err != nil {
 			logger.Errorf("[Router Event] Failed to unmarshal event from %s: %v", msg.ReceivedFrom, err)
-			continue
-		}
-
-		if !r.verifyEvent(&event) {
-			logger.Warnf("[Router Event] Potential spoofing attempt: invalid signature on event from %s", msg.ReceivedFrom)
-			continue
-		}
-
-		eventTime := time.UnixMilli(event.Timestamp)
-		if time.Since(eventTime) > 5*time.Minute || time.Until(eventTime) > 5*time.Minute {
-			logger.Warnf("[Router Event] Dropping stale or future event from %s", msg.ReceivedFrom)
 			continue
 		}
 
