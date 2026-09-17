@@ -55,11 +55,18 @@ play() {
   curl --silent --show-error --fail-with-body --header "@${auth_header}" "$@"
 }
 
+# A 2xx with the field missing would otherwise send us on to edits/null.
+require() {
+  [[ -n "$2" && "$2" != "null" ]] || { echo "$1" >&2; exit 1; }
+}
+
 edit_id=$(play -X POST "${api}/edits" -H 'Content-Type: application/json' -d '{}' | jq -r .id)
+require "failed to open an edit: no id in the response" "${edit_id}"
 echo "opened edit ${edit_id}"
 
 version_code=$(play -X POST "${upload}/edits/${edit_id}/bundles?uploadType=media" \
   -H 'Content-Type: application/octet-stream' --data-binary "@${bundle}" | jq -r .versionCode)
+require "bundle upload returned no versionCode" "${version_code}"
 echo "uploaded ${bundle} as versionCode ${version_code}"
 
 release=$(jq -nc --arg track "${track}" --arg vc "${version_code}" \

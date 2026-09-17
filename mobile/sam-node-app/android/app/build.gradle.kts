@@ -48,8 +48,9 @@ android {
     buildTypes {
         release {
             if (hasReleaseSigning) {
-                signingConfig = signingConfigs.create("release") {
-                    storeFile = file(releaseStoreFile!!)
+                signingConfig = signingConfigs.maybeCreate("release").apply {
+                    // Relative storeFile paths resolve against android/, where key.properties lives.
+                    storeFile = rootProject.file(releaseStoreFile!!)
                     storePassword = releaseStorePassword
                     keyAlias = releaseKeyAlias
                     keyPassword = releaseKeyPassword

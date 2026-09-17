@@ -110,7 +110,8 @@ mobile-app-apk-emulator: mobile-ffi-android-x86_64 mobile-app-google-services
 # ANDROID_KEY_PASSWORD environment variables (see mobile/sam-node-app/README.md).
 .PHONY: mobile-app-bundle
 mobile-app-bundle: mobile-app-jnilibs-arm64 mobile-app-google-services
-	@if [ ! -f $(MOBILE_APP_DIR)/android/key.properties ] && [ -z "$$ANDROID_KEYSTORE_PATH" ]; then \
+	@if [ ! -f $(MOBILE_APP_DIR)/android/key.properties ] && \
+	   { [ -z "$$ANDROID_KEYSTORE_PATH" ] || [ -z "$$ANDROID_KEYSTORE_PASSWORD" ] || [ -z "$$ANDROID_KEY_ALIAS" ] || [ -z "$$ANDROID_KEY_PASSWORD" ]; }; then \
 		echo "Error: no upload key configured; Google Play rejects debug-signed bundles." >&2; \
 		echo "Create $(MOBILE_APP_DIR)/android/key.properties or export ANDROID_KEYSTORE_PATH, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS and ANDROID_KEY_PASSWORD. See $(MOBILE_APP_DIR)/README.md#publishing-to-google-play." >&2; \
 		exit 1; \
