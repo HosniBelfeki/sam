@@ -58,5 +58,5 @@ dependencies {
     ksp("androidx.appfunctions:appfunctions-compiler:$appFunctionsVersion")
 
     // JNA for calling Go C exports
-    implementation("net.java.dev.jna:jna:5.14.0@aar")
+    implementation("net.java.dev.jna:jna:5.19.1@aar")
 }
