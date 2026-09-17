@@ -60,7 +60,7 @@ teardown() {
     -v "${data_vol}:/data" \
     -v "${labels_config}:/etc/sam/node-config.yaml:ro" \
     "sam-node:local" \
-    join --config /etc/sam/node-config.yaml --data-dir /data "http://sam-control-plane:8080"
+    join --config /etc/sam/node-config.yaml --data-dir /data --insecure-control-plane "http://sam-control-plane:8080"
   MESH_CONTAINERS+=("${node_name}-join")
 
   run mesh_wait_for_log "${node_name}-join" "OAuth Device Authorization Flow" 20
@@ -207,7 +207,7 @@ sys.exit(0 if b'\x05label' in raw and b'\x06region' in raw and b'\x02eu' in raw 
     $(mesh_get_add_hosts) \
     -v "${data_vol}:/data" \
     "sam-node:local" \
-    join --data-dir /data --bootstrap-token "${node_token}" "http://sam-control-plane:8080"
+    join --data-dir /data --bootstrap-token "${node_token}" --insecure-control-plane "http://sam-control-plane:8080"
 
   # 3. Start the node container with stored identity
   docker run -d \
