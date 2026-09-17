@@ -25,33 +25,9 @@ jobs:
         with:
           go-version: stable
           cache: false
-      - name: Set up Java
-        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
-        with:
-          distribution: 'temurin'
-          java-version: '17'
-      - name: Set up Android NDK
-        run: |
-          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses
-          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "ndk;26.1.10909125"
-      - name: Set up Flutter
-        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
-        with:
-          channel: 'stable'
-      - name: Build Mobile App
-        env:
-          GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
-          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
-        run: make mobile-app-apk
-      - name: Restore files rewritten by the Flutter build
-        # `flutter build` re-resolves pubspec.lock (and may rewrite
-        # analysis_options.yaml), leaving the tree dirty and failing
-        # GoReleaser's git state validation. Build outputs are untracked, so
-        # restoring tracked files keeps the APK available for the upload step.
-        run: |
-          git -C mobile/sam-node-app checkout -- .
-          git status --porcelain
       - name: Run GoReleaser
+        # The mobile app is built and attached to this release by the
+        # parallel "Mobile App" workflow (.github/workflows/mobile.yml).
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           distribution: goreleaser
@@ -59,9 +35,3 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: Upload Mobile App to Release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-          TAG_NAME: ${{ github.ref_name }}
-        run: gh release upload "$TAG_NAME" mobile/sam-node-app/build/app/outputs/flutter-apk/app-release.apk --clobber
