@@ -197,6 +197,8 @@ spec:
           name: p2p-udp
         args:
         - "--control-plane=http://sam-control-plane.sam.svc.cluster.local:8080"
+        # In-cluster plaintext; the cluster network is the trust boundary.
+        - "--insecure-control-plane"
         - "--listen=/ip4/0.0.0.0/tcp/4501"
         - "--listen=/ip4/0.0.0.0/udp/4501/quic-v1"
         - "--jwt-path=/var/run/secrets/tokens/sam-token"
@@ -304,6 +306,7 @@ spec:
           - "run"
           - "--config=/etc/sam/sam-node.yaml"
           - "--control-plane=http://sam-control-plane.sam.svc.cluster.local:8080"
+          - "--insecure-control-plane"
           - "--jwt-path=/var/run/secrets/tokens/sam-token"
           - "--api-token-path=/var/run/secrets/sam/api-token"
         volumeMounts:

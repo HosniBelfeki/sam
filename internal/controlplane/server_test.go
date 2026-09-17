@@ -267,6 +267,14 @@ func TestControlPlaneBasic(t *testing.T) {
 	if len(keys.PublicKeys) != 1 {
 		t.Errorf("expected 1 valid public key, got %d", len(keys.PublicKeys))
 	}
+	// The set is self-certifying for anyone already holding a listed key.
+	verified, err := api.VerifyKeysResponse(&keys, []ed25519.PublicKey{ed25519.PublicKey(keys.PublicKeys[0])}, time.Now())
+	if err != nil {
+		t.Fatalf("/keys response does not verify under its own listed key: %v", err)
+	}
+	if len(verified) != 1 {
+		t.Errorf("verified key set has %d keys, want 1", len(verified))
+	}
 }
 
 func TestNodeAndRouterRegistrationFlow(t *testing.T) {
@@ -2059,8 +2067,16 @@ func TestNodeProactiveTokenRefresh(t *testing.T) {
 		t.Fatalf("failed to save initial expiration: %v", err)
 	}
 
-	n := &node.SamNode{
-		Store: nStore,
+	// The node trusts the key enrollment handed it, as a real node would; the
+	// refreshed token is verified against that key before it is adopted.
+	n, err := node.NewSamNode(node.Options{
+		PrivKey:            privNode,
+		Store:              nStore,
+		ControlPlanePubKey: enrollNodeResp.ControlPlanePublicKey,
+		ListenAddrs:        []string{"/ip4/127.0.0.1/tcp/0"},
+	})
+	if err != nil {
+		t.Fatalf("NewSamNode: %v", err)
 	}
 
 	// Trigger proactive refresh

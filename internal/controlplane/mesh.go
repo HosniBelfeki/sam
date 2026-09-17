@@ -15,6 +15,7 @@
 package controlplane
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"fmt"
@@ -130,7 +131,7 @@ func (p *P2PMeshAdapter) PublishEvent(ctx context.Context, eventType api.MeshEve
 
 	var privKey ed25519.PrivateKey
 	if p.store != nil {
-		key, _, err := p.store.GetCurrentKey(ctx)
+		key, err := p.signingKeyFor(ctx, eventType, payload)
 		if err != nil {
 			return fmt.Errorf("failed to retrieve signing key for event publishing: %w", err)
 		}
@@ -173,6 +174,37 @@ func (p *P2PMeshAdapter) PublishEvent(ctx context.Context, eventType api.MeshEve
 
 	logger.Infof("[P2PMeshAdapter] Published MeshEvent %v to topic %s (peerID: %s)", eventType, api.GossipEvents, peerID)
 	return nil
+}
+
+// signingKeyFor picks the key receivers can verify with. A KEY_ROTATION
+// announces newPub, which nobody trusts yet, so it is signed by the key just
+// retired into its grace period (the one with the latest expiration that is
+// not newPub); every other event is signed by the current key.
+func (p *P2PMeshAdapter) signingKeyFor(ctx context.Context, eventType api.MeshEvent_Type, newPub []byte) (ed25519.PrivateKey, error) {
+	if eventType != api.MeshEvent_KEY_ROTATION {
+		key, _, err := p.store.GetCurrentKey(ctx)
+		return key, err
+	}
+	pairs, err := p.store.GetAllValidKeys(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var retiring *storage.KeyPair
+	for i := range pairs {
+		kp := &pairs[i]
+		if kp.Expiration.IsZero() || bytes.Equal(kp.Public, newPub) {
+			continue
+		}
+		if retiring == nil || kp.Expiration.After(retiring.Expiration) {
+			retiring = kp
+		}
+	}
+	if retiring == nil {
+		// First key ever: there is no previous key and nobody to convince.
+		key, _, err := p.store.GetCurrentKey(ctx)
+		return key, err
+	}
+	return retiring.Private, nil
 }
 
 func (p *P2PMeshAdapter) DiscoverServices(ctx context.Context, serviceType string) ([]*ServiceAnnouncement, error) {

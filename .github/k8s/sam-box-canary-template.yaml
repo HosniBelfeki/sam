@@ -78,6 +78,7 @@ spec:
           - "run"
           - "--config=/etc/sam/sam-node.yaml"
           - "--control-plane=http://sam-control-plane-${ENV_NAME}.${NAMESPACE}.svc.cluster.local:8080"
+          - "--insecure-control-plane"
           - "--jwt-path=/var/run/secrets/tokens/sam-token"
           # Socket only: with no TCP listener there is no API token to leak, and
           # the socket's permissions are the credential.

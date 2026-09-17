@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/base64"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -139,9 +140,13 @@ func TestSyncMeshConfig(t *testing.T) {
 		t.Fatalf("Failed to marshal info: %v", err)
 	}
 
-	cpPub, _, _ := ed25519.GenerateKey(nil)
-	gracePub, _, _ := ed25519.GenerateKey(nil)
-	keysBody, err := proto.Marshal(&api.KeysResponse{PublicKeys: [][]byte{cpPub, gracePub}})
+	cpPub, cpPriv, _ := ed25519.GenerateKey(nil)
+	gracePub, gracePriv, _ := ed25519.GenerateKey(nil)
+	keysResp := &api.KeysResponse{PublicKeys: [][]byte{cpPub, gracePub}}
+	if err := api.SignKeysResponse(keysResp, []ed25519.PrivateKey{cpPriv, gracePriv}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	keysBody, err := proto.Marshal(keysResp)
 	if err != nil {
 		t.Fatalf("Failed to marshal keys: %v", err)
 	}
@@ -175,13 +180,18 @@ func TestSyncMeshConfig(t *testing.T) {
 		t.Errorf("Expected empty result for empty store, got pubKey=%v, addrs=%v", pubKey, addrs)
 	}
 
-	// Save initial config with explicit control plane URL
+	// Save initial config with explicit control plane URL. The node trusts
+	// only cpPub, as after enrollment; the grace key must be learned through
+	// cpPub's signature on the set.
 	testPubKey := []byte("test-pub-key")
 	if err := store.SaveMeshConfig(testPubKey, []string{"/ip4/1.2.3.4/tcp/1234"}); err != nil {
 		t.Fatalf("Failed to save mesh config: %v", err)
 	}
 	if err := store.SaveControlPlaneURL(server.URL); err != nil {
 		t.Fatalf("Failed to save control plane URL: %v", err)
+	}
+	if err := store.SaveTrustedKeys([]TrustedKey{{Key: cpPub, ReceivedAt: time.Now()}}); err != nil {
+		t.Fatalf("SaveTrustedKeys: %v", err)
 	}
 
 	// Call SyncMeshConfig, it should fetch new addrs from server
@@ -220,6 +230,103 @@ func TestSyncMeshConfig(t *testing.T) {
 	}
 	if len(savedAddrsStr) != 1 || savedAddrsStr[0] != expectedInfo.RouterAddresses[0] {
 		t.Errorf("Expected saved addrs %v, got %v", expectedInfo.RouterAddresses, savedAddrsStr)
+	}
+}
+
+// Whoever answers /keys must already be the control plane: a set that is not
+// signed by a key the node trusts leaves the trust set untouched.
+func TestSyncMeshConfigRefusesUntrustedKeySet(t *testing.T) {
+	cpPub, _, _ := ed25519.GenerateKey(nil)
+	attackerPub, attackerPriv, _ := ed25519.GenerateKey(nil)
+
+	infoBody, err := proto.Marshal(&api.ControlPlaneInfoResponse{RouterAddresses: []string{"/ip4/127.0.0.1/tcp/4001"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for name, keysResp := range map[string]*api.KeysResponse{
+		"unsigned set": {PublicKeys: [][]byte{cpPub, attackerPub}},
+		"set signed only by the attacker": func() *api.KeysResponse {
+			r := &api.KeysResponse{PublicKeys: [][]byte{cpPub, attackerPub}}
+			if err := api.SignKeysResponse(r, []ed25519.PrivateKey{attackerPriv, attackerPriv}, time.Now()); err != nil {
+				t.Fatal(err)
+			}
+			return r
+		}(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			keysBody, err := proto.Marshal(keysResp)
+			if err != nil {
+				t.Fatal(err)
+			}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/keys" {
+					_, _ = w.Write(keysBody)
+					return
+				}
+				_, _ = w.Write(infoBody)
+			}))
+			defer server.Close()
+
+			store, err := NewStore(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close() //nolint:errcheck
+			if err := store.SaveMeshConfig(cpPub, nil); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.SaveControlPlaneURL(server.URL); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.SaveTrustedKeys([]TrustedKey{{Key: cpPub, ReceivedAt: time.Now()}}); err != nil {
+				t.Fatal(err)
+			}
+
+			if _, _, _, err := SyncMeshConfig(context.Background(), store); err != nil {
+				t.Fatalf("SyncMeshConfig: %v", err)
+			}
+
+			trusted, err := store.LoadTrustedKeys()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(trusted) != 1 || !trusted[0].Key.Equal(cpPub) {
+				t.Fatalf("trust set was replaced by an unverified /keys answer: %d keys", len(trusted))
+			}
+		})
+	}
+}
+
+// The control plane is the trust root, so a plaintext hop to it is refused
+// unless the operator opted in; loopback is the standalone case and is fine.
+func TestControlPlaneClientRefusesPlaintextToNonLoopback(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := proto.Marshal(&api.ControlPlaneInfoResponse{})
+		_, _ = w.Write(body)
+	}))
+	defer server.Close()
+	// httptest binds 127.0.0.1; spell it as a non-loopback name that the
+	// transport must refuse before any connection is attempted.
+	nonLoopbackURL := strings.Replace(server.URL, "127.0.0.1", "sam-control-plane.invalid", 1)
+
+	t.Cleanup(func() { SetAllowInsecureControlPlane(false) })
+
+	if _, err := FetchControlPlaneInfo(context.Background(), server.URL); err != nil {
+		t.Fatalf("loopback plaintext must be accepted: %v", err)
+	}
+
+	_, err := FetchControlPlaneInfo(context.Background(), nonLoopbackURL)
+	if !errors.Is(err, api.ErrInsecureControlPlaneURL) {
+		t.Fatalf("plaintext to a non-loopback host: err = %v, want %v", err, api.ErrInsecureControlPlaneURL)
+	}
+
+	// With the opt-in the request is attempted; the name does not resolve,
+	// which is a dial error, not the policy error.
+	SetAllowInsecureControlPlane(true)
+	_, err = FetchControlPlaneInfo(context.Background(), nonLoopbackURL)
+	if err == nil || errors.Is(err, api.ErrInsecureControlPlaneURL) {
+		t.Fatalf("with --insecure-control-plane the policy must not be what fails: %v", err)
 	}
 }
 

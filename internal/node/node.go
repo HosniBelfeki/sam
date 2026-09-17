@@ -1127,7 +1127,7 @@ func (n *SamNode) RefreshEnrollment(ctx context.Context) error {
 	b64Biscuit := base64.StdEncoding.EncodeToString(currentBiscuit)
 	httpReq.Header.Set("Authorization", "Bearer "+b64Biscuit)
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := controlPlaneHTTPClient(30 * time.Second)
 	resp, err := client.Do(httpReq)
 	if err != nil {
 		return fmt.Errorf("http request failed: %w", err)
@@ -1135,11 +1135,14 @@ func (n *SamNode) RefreshEnrollment(ctx context.Context) error {
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusForbidden {
-		logger.Errorf("Refresh rejected: Node is banned (403 Forbidden). Initiating hard-kill.")
-		if n.Host != nil {
-			_ = n.Host.Close()
+		// Not fatal on its own: a 403 is a claim by whoever answered, and
+		// only a verified MeshEvent_BANNED is the control plane's word. The
+		// node keeps serving on its current biscuit until that expires.
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxControlPlaneBodyBytes))
+		return &RefreshError{
+			StatusCode: resp.StatusCode,
+			Message:    fmt.Sprintf("refresh refused (403 Forbidden): %s", string(body)),
 		}
-		os.Exit(1)
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -1164,6 +1167,13 @@ func (n *SamNode) RefreshEnrollment(ctx context.Context) error {
 		return fmt.Errorf("refresh error: %s", refreshResp.ErrorMessage)
 	}
 
+	// Same checks as enrollment: the token must be signed by a key this node
+	// already trusts and carry the role it runs as, or a response from the
+	// wrong party would replace a good identity with a useless one.
+	if err := n.verifyOwnBiscuit(refreshResp.BiscuitToken); err != nil {
+		return fmt.Errorf("refreshed biscuit rejected: %w", err)
+	}
+
 	// Save new biscuit and its expiration
 	if err := n.Store.SaveIdentity(refreshResp.BiscuitToken); err != nil {
 		return fmt.Errorf("failed to save refreshed identity: %w", err)
@@ -1174,6 +1184,44 @@ func (n *SamNode) RefreshEnrollment(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// verifyOwnBiscuit checks a token the control plane handed this node: signed
+// by a trusted key, bound to this peer, and carrying the configured role.
+func (n *SamNode) verifyOwnBiscuit(token []byte) error {
+	if len(token) == 0 {
+		return errors.New("empty biscuit token")
+	}
+	n.keysMu.RLock()
+	trusted := publicKeysOf(n.trustedKeys)
+	n.keysMu.RUnlock()
+	if len(trusted) == 0 {
+		return errors.New("no trusted control plane keys loaded")
+	}
+	var peerID peer.ID
+	if n.Host != nil {
+		peerID = n.Host.ID()
+	} else {
+		privBytes, err := n.Store.LoadKey()
+		if err != nil {
+			return fmt.Errorf("load node key: %w", err)
+		}
+		priv, err := crypto.UnmarshalPrivateKey(privBytes)
+		if err != nil {
+			return fmt.Errorf("corrupted node key: %w", err)
+		}
+		if peerID, err = peer.IDFromPrivateKey(priv); err != nil {
+			return err
+		}
+	}
+	_, key, err := identity.VerifyBiscuitAndGetKey(token, peerID, trusted, n.BiscuitTimeout)
+	if err != nil {
+		return err
+	}
+	if n.config.RequiredRole == "" {
+		return nil
+	}
+	return identity.VerifyBiscuitRole(token, key, n.config.RequiredRole, n.BiscuitTimeout)
 }
 
 func (n *SamNode) renewWithRefreshToken(ctx context.Context, clientSecret string) (string, error) {

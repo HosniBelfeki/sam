@@ -6,7 +6,9 @@ image:
 replicaCount: 1
 
 # Required: control plane URL the node enrolls with,
-# e.g. http://sam-mesh-control-plane:8080
+# e.g. http://sam-mesh-control-plane:8080. A plaintext http:// URL makes the
+# chart pass --insecure-control-plane: whoever answers it becomes the node's
+# trust root, so use https:// for anything beyond the cluster network.
 controlPlaneUrl: ""
 
 # Audience of the projected ServiceAccount token; must be one of the control

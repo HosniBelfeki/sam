@@ -497,6 +497,7 @@ if [[ -z "${MESH_HELPERS_LOADED:-}" ]]; then
       --log-level debug \
       --discovery-interval 2s \
       --control-plane "http://sam-control-plane:8080" \
+      --insecure-control-plane \
       --client-id "sam-mesh-audience" \
       --oidc-issuer "http://mock-oidc:18080" \
       --listen "/ip4/0.0.0.0/udp/5001/quic-v1" \

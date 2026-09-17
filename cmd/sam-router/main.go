@@ -27,23 +27,24 @@ import (
 )
 
 var (
-	controlPlaneURL    string
-	listenAddrs        []string
-	externalAddrs      []string
-	keysSyncInterval   time.Duration
-	leaseRenewInterval time.Duration
-	oidcToken          string
-	bootstrapToken     string
-	bootstrapTokenPath string
-	jwtPath            string
-	keysPath           string
-	allowLoopback      bool
-	connsPerSourceIP   int
-	logLevel           string
-	dhtProviderAddrTTL time.Duration
-	dhtMaxRecordAge    time.Duration
-	lowWaterMark       int
-	highWaterMark      int
+	controlPlaneURL      string
+	insecureControlPlane bool
+	listenAddrs          []string
+	externalAddrs        []string
+	keysSyncInterval     time.Duration
+	leaseRenewInterval   time.Duration
+	oidcToken            string
+	bootstrapToken       string
+	bootstrapTokenPath   string
+	jwtPath              string
+	keysPath             string
+	allowLoopback        bool
+	connsPerSourceIP     int
+	logLevel             string
+	dhtProviderAddrTTL   time.Duration
+	dhtMaxRecordAge      time.Duration
+	lowWaterMark         int
+	highWaterMark        int
 )
 
 var logger = golog.Logger("sam-router-cli")
@@ -66,22 +67,23 @@ func main() {
 			}
 
 			opts := router.Options{
-				ControlPlaneURL:    controlPlaneURL,
-				ListenAddrs:        listenAddrs,
-				ExternalAddrs:      externalAddrs,
-				KeysSyncInterval:   keysSyncInterval,
-				LeaseRenewInterval: leaseRenewInterval,
-				OIDCToken:          oidcToken,
-				BootstrapToken:     bootstrapToken,
-				BootstrapTokenPath: bootstrapTokenPath,
-				JWTPath:            jwtPath,
-				KeysDBPath:         keysPath,
-				AllowLoopback:      allowLoopback,
-				ConnsPerSourceIP:   connsPerSourceIP,
-				DHTProviderAddrTTL: dhtProviderAddrTTL,
-				DHTMaxRecordAge:    dhtMaxRecordAge,
-				LowWaterMark:       lowWaterMark,
-				HighWaterMark:      highWaterMark,
+				ControlPlaneURL:           controlPlaneURL,
+				AllowInsecureControlPlane: insecureControlPlane,
+				ListenAddrs:               listenAddrs,
+				ExternalAddrs:             externalAddrs,
+				KeysSyncInterval:          keysSyncInterval,
+				LeaseRenewInterval:        leaseRenewInterval,
+				OIDCToken:                 oidcToken,
+				BootstrapToken:            bootstrapToken,
+				BootstrapTokenPath:        bootstrapTokenPath,
+				JWTPath:                   jwtPath,
+				KeysDBPath:                keysPath,
+				AllowLoopback:             allowLoopback,
+				ConnsPerSourceIP:          connsPerSourceIP,
+				DHTProviderAddrTTL:        dhtProviderAddrTTL,
+				DHTMaxRecordAge:           dhtMaxRecordAge,
+				LowWaterMark:              lowWaterMark,
+				HighWaterMark:             highWaterMark,
 			}
 
 			r, err := router.NewRouter(cmd.Context(), opts)
@@ -103,6 +105,7 @@ func main() {
 	}
 
 	rootCmd.Flags().StringVar(&controlPlaneURL, "control-plane", "http://127.0.0.1:8080", "Control Plane web service URL")
+	rootCmd.Flags().BoolVar(&insecureControlPlane, "insecure-control-plane", false, "Accept a plaintext http:// control plane URL to a non-loopback host (whoever answers it becomes this router's trust root; only for networks you already trust)")
 	rootCmd.Flags().StringSliceVar(&listenAddrs, "listen", []string{"/ip4/0.0.0.0/tcp/5001", "/ip6/::/tcp/5001"}, "libp2p Listen Addresses")
 	rootCmd.Flags().StringSliceVar(&externalAddrs, "external-addr", []string{}, "External addresses to announce to control plane")
 	rootCmd.Flags().DurationVar(&keysSyncInterval, "keys-sync-interval", 5*time.Minute, "Key synchronization polling interval")

@@ -30,6 +30,11 @@ spec:
             - "run"
             - "--config=/etc/sam/sam-node.yaml"
             - "--control-plane={{ required "controlPlaneUrl is required" .Values.controlPlaneUrl }}"
+            {{- if hasPrefix "http://" .Values.controlPlaneUrl }}
+            # Plaintext to a non-loopback control plane is refused unless opted
+            # in; an in-cluster Service URL is the expected case.
+            - "--insecure-control-plane"
+            {{- end }}
             - "--jwt-path=/var/run/secrets/tokens/sam-token"
             - "--bind-addr={{ .Values.bindAddr }}"
             {{- range .Values.extraArgs }}

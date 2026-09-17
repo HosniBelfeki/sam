@@ -107,6 +107,9 @@ spec:
         {{- end }}
         args:
         - "--control-plane=http://{{ include "sam-mesh.fullname" . }}-control-plane:{{ .Values.controlPlane.service.port }}"
+        # In-cluster plaintext to the chart's own control-plane Service; the
+        # cluster network is the trust boundary here.
+        - "--insecure-control-plane"
         - "--listen=/ip4/0.0.0.0/tcp/4501"
         - "--listen=/ip4/0.0.0.0/udp/4501/quic-v1"
         {{- if .Values.router.externalAddrs }}

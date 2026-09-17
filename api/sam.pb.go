@@ -1718,8 +1718,16 @@ func (x *PolicyConfigUpdateResponse) GetError() string {
 }
 
 type KeysResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	PublicKeys    [][]byte               `protobuf:"bytes,1,rep,name=public_keys,json=publicKeys,proto3" json:"public_keys,omitempty"`
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	PublicKeys [][]byte               `protobuf:"bytes,1,rep,name=public_keys,json=publicKeys,proto3" json:"public_keys,omitempty"`
+	// Unix milliseconds at which the set was signed; receivers reject responses
+	// outside a short freshness window so a captured set cannot be replayed.
+	Timestamp int64 `protobuf:"varint,2,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
+	// One ed25519 signature per entry of public_keys, by that key, over the
+	// deterministic encoding of this message with signatures cleared. A
+	// receiver trusting any key still valid on the control plane can verify
+	// the whole set (see api.VerifyKeysResponse).
+	Signatures    [][]byte `protobuf:"bytes,3,rep,name=signatures,proto3" json:"signatures,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1757,6 +1765,20 @@ func (*KeysResponse) Descriptor() ([]byte, []int) {
 func (x *KeysResponse) GetPublicKeys() [][]byte {
 	if x != nil {
 		return x.PublicKeys
+	}
+	return nil
+}
+
+func (x *KeysResponse) GetTimestamp() int64 {
+	if x != nil {
+		return x.Timestamp
+	}
+	return 0
+}
+
+func (x *KeysResponse) GetSignatures() [][]byte {
+	if x != nil {
+		return x.Signatures
 	}
 	return nil
 }
@@ -3140,10 +3162,14 @@ const file_api_sam_proto_rawDesc = "" +
 	"\bbindings\x18\x02 \x03(\v2\x15.sam.v1.PolicyBindingR\bbindings\"L\n" +
 	"\x1aPolicyConfigUpdateResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
-	"\x05error\x18\x02 \x01(\tR\x05error\"/\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\"m\n" +
 	"\fKeysResponse\x12\x1f\n" +
 	"\vpublic_keys\x18\x01 \x03(\fR\n" +
-	"publicKeys\"}\n" +
+	"publicKeys\x12\x1c\n" +
+	"\ttimestamp\x18\x02 \x01(\x03R\ttimestamp\x12\x1e\n" +
+	"\n" +
+	"signatures\x18\x03 \x03(\fR\n" +
+	"signatures\"}\n" +
 	"\x13TokenRefreshRequest\x12/\n" +
 	"\x13challenge_signature\x18\x01 \x01(\fR\x12challengeSignature\x12\x1c\n" +
 	"\ttimestamp\x18\x02 \x01(\x03R\ttimestamp\x12\x17\n" +

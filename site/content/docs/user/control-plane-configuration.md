@@ -39,13 +39,14 @@ The Router is a dedicated GossipSub helper that maintains stable network address
 
 | CLI Flag | Default Value | Description |
 | :--- | :--- | :--- |
-| `--control-plane` | `http://127.0.0.1:8080` | Control Plane web service URL. |
+| `--control-plane` | `http://127.0.0.1:8080` | Control Plane web service URL. Plaintext `http://` is accepted only for a loopback host. |
+| `--insecure-control-plane` | `false` | Accept a plaintext `http://` control-plane URL to a non-loopback host (e.g. an in-cluster Service). Whoever answers that URL becomes the router's trust root, so leave this off outside a network you already trust. The same flag exists on `sam-node`. |
 | `--listen` | `/ip4/0.0.0.0/tcp/5001`, `/ip6/::/tcp/5001` | Comma-separated libp2p multiaddrs to listen on. |
 | `--external-addr` | *None* | External multiaddrs to announce to control plane. |
 | `--keys-path` | `router.key` | Path to save/load persistent private key (determines Peer ID). |
 | `--jwt-path` | *None* | Path to file containing OIDC JWT token for enrollment. |
 | `--oidc-token` | *None* | Direct OIDC ID token or bootstrap secret token for enrollment. |
-| `--keys-sync-interval` | `5m` | Key synchronization polling interval. |
+| `--keys-sync-interval` | `5m` | Key synchronization polling interval. `GET /keys` returns the valid key set signed by every key in it; the router (and nodes, at start-up) accept the set only if one of those signatures verifies under a key they already trust, so the first key always comes from enrollment and a rotation is learned from the retiring key. |
 | `--lease-renew-interval` | `300s` | Lease renewal registration interval. |
 | `--allow-loopback` | `false` | Allow loopback and link-local addresses for discovery (development only). |
 

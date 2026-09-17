@@ -15,6 +15,7 @@
 package controlplane
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -157,5 +158,51 @@ func TestP2PMeshAdapter_PublishAndSubscribe(t *testing.T) {
 	}
 	if !ed25519.Verify(pub, eventData, sig) {
 		t.Fatalf("ed25519 signature verification failed for published MeshEvent")
+	}
+}
+
+// A KEY_ROTATION announces a key nobody trusts yet, so it has to be signed by
+// the key being retired: that is the only signature a node holding the old
+// key can check. Signing with the new key (the store's current key after the
+// rotation) made every node drop the announcement as a spoofing attempt.
+func TestKeyRotationEventIsSignedByTheRetiringKey(t *testing.T) {
+	ctx := context.Background()
+	store, err := storage.NewSQLStore("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	oldPub, oldPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveInitialKey(ctx, oldPriv, oldPub); err != nil {
+		t.Fatal(err)
+	}
+	newPub, newPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RotateKeys(ctx, newPriv, newPub, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+
+	adapter := &P2PMeshAdapter{store: store}
+	signer, err := adapter.signingKeyFor(ctx, api.MeshEvent_KEY_ROTATION, newPub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(signer, oldPriv) {
+		t.Error("KEY_ROTATION must be signed by the retiring key, which is the one receivers still trust")
+	}
+
+	// Every other event is signed by the current key.
+	signer, err = adapter.signingKeyFor(ctx, api.MeshEvent_BANNED, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(signer, newPriv) {
+		t.Error("a BANNED event after rotation must be signed by the current key")
 	}
 }

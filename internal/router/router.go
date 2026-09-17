@@ -420,7 +420,7 @@ func (r *Router) enroll(peerID peer.ID) error {
 		return err
 	}
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := r.controlPlaneClient(30 * time.Second)
 	resp, err := client.Post(r.config.ControlPlaneURL+"/register", "application/x-protobuf", bytes.NewReader(data))
 	if err != nil {
 		return err
@@ -481,7 +481,7 @@ func (r *Router) enrollBootstrap(peerID peer.ID) error {
 		return err
 	}
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := r.controlPlaneClient(30 * time.Second)
 	resp, err := client.Post(r.config.ControlPlaneURL+"/enroll", "application/x-protobuf", bytes.NewReader(data))
 	if err != nil {
 		return err
@@ -668,7 +668,7 @@ func (r *Router) recoverAfterLease401() error {
 }
 
 func (r *Router) syncKeys() error {
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := r.controlPlaneClient(10 * time.Second)
 	resp, err := client.Get(r.config.ControlPlaneURL + "/keys")
 	if err != nil {
 		return err
@@ -689,19 +689,38 @@ func (r *Router) syncKeys() error {
 		return err
 	}
 
-	r.keysMu.Lock()
-	var newKeys []ed25519.PublicKey
-	for _, kb := range keysResp.PublicKeys {
-		if len(kb) == ed25519.PublicKeySize {
-			newKeys = append(newKeys, ed25519.PublicKey(kb))
-		}
+	// Only a set signed by a key this router already trusts may replace
+	// the trust set; anything else is whoever answered the URL.
+	newKeys, err := api.VerifyKeysResponse(&keysResp, r.getTrustedPublicKeys(), time.Now())
+	if err != nil {
+		return fmt.Errorf("/keys response rejected: %w", err)
 	}
+
+	r.keysMu.Lock()
 	r.trustedPublicKeys = newKeys
 	r.keysMu.Unlock()
 
 	logger.Debugf("Synced %d valid public keys from control plane", len(newKeys))
 	return nil
 }
+
+// controlPlaneClient is the client for every request to the control plane;
+// its transport re-checks the plaintext policy on each hop, redirects included.
+func (r *Router) controlPlaneClient(timeout time.Duration) *http.Client {
+	return &http.Client{
+		Timeout: timeout,
+		Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			if err := api.ValidateControlPlaneTransport(req.URL.String(), r.config.AllowInsecureControlPlane); err != nil {
+				return nil, err
+			}
+			return http.DefaultTransport.RoundTrip(req)
+		}),
+	}
+}
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
 
 func (r *Router) getTrustedPublicKeys() []ed25519.PublicKey {
 	r.keysMu.RLock()
@@ -890,7 +909,7 @@ func (r *Router) renewLease() {
 		}
 		data, _ := proto.Marshal(req)
 
-		client := &http.Client{Timeout: 10 * time.Second}
+		client := r.controlPlaneClient(10 * time.Second)
 		resp, err := client.Post(r.config.ControlPlaneURL+"/routers/lease", "application/x-protobuf", bytes.NewReader(data))
 		if err != nil {
 			logger.Errorf("Failed to renew lease with control plane: %v", err)
@@ -1009,7 +1028,7 @@ func (r *Router) runFederationLoop() {
 }
 
 func (r *Router) connectBootstrapRouters() {
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := r.controlPlaneClient(10 * time.Second)
 	// Taken before the request: anything banned after this point cannot be
 	// reflected in the answer, so reconciliation must not read its absence as
 	// an unban (see reconcileBannedPeers).
@@ -1333,7 +1352,7 @@ func (r *Router) RefreshEnrollment(ctx context.Context) error {
 	b64Biscuit := base64.StdEncoding.EncodeToString(currentBiscuit)
 	httpReq.Header.Set("Authorization", "Bearer "+b64Biscuit)
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := r.controlPlaneClient(10 * time.Second)
 	resp, err := client.Do(httpReq)
 	if err != nil {
 		return fmt.Errorf("http request failed: %w", err)
@@ -1347,11 +1366,11 @@ func (r *Router) RefreshEnrollment(ctx context.Context) error {
 	}
 
 	if resp.StatusCode == http.StatusForbidden {
-		logger.Errorf("Refresh rejected: Router is banned (403 Forbidden). Hard-killing router.")
-		if r.Host != nil {
-			_ = r.Host.Close()
-		}
-		os.Exit(1)
+		// A 403 is a claim by whoever answered; only a verified
+		// MeshEvent_BANNED is the control plane's word. Keep serving on the
+		// current biscuit until it expires.
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("refresh refused (403 Forbidden): %s", string(body))
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -1373,6 +1392,12 @@ func (r *Router) RefreshEnrollment(ctx context.Context) error {
 		return fmt.Errorf("refresh error: %s", refreshResp.ErrorMessage)
 	}
 
+	// Same checks as enrollment: signed by a trusted key, bound to this
+	// router, carrying the router role.
+	if err := r.verifyOwnBiscuit(refreshResp.BiscuitToken, peerID); err != nil {
+		return fmt.Errorf("refreshed biscuit rejected: %w", err)
+	}
+
 	// Update local biscuit token and expiration under lock
 	r.keysMu.Lock()
 	r.biscuitToken = refreshResp.BiscuitToken
@@ -1381,6 +1406,18 @@ func (r *Router) RefreshEnrollment(ctx context.Context) error {
 
 	logger.Infof("Router biscuit token refreshed successfully.")
 	return nil
+}
+
+func (r *Router) verifyOwnBiscuit(token []byte, peerID peer.ID) error {
+	trusted := r.getTrustedPublicKeys()
+	if len(trusted) == 0 {
+		return fmt.Errorf("no trusted control plane keys loaded")
+	}
+	_, key, err := identity.VerifyBiscuitAndGetKey(token, peerID, trusted, r.config.BiscuitTimeout)
+	if err != nil {
+		return err
+	}
+	return identity.VerifyBiscuitRole(token, key, r.config.RequiredRole, r.config.BiscuitTimeout)
 }
 
 func (r *Router) runBiscuitRenewalLoop() {

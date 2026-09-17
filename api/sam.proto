@@ -249,6 +249,14 @@ message PolicyConfigUpdateResponse {
 
 message KeysResponse {
   repeated bytes public_keys = 1;
+  // Unix milliseconds at which the set was signed; receivers reject responses
+  // outside a short freshness window so a captured set cannot be replayed.
+  int64 timestamp = 2;
+  // One ed25519 signature per entry of public_keys, by that key, over the
+  // deterministic encoding of this message with signatures cleared. A
+  // receiver trusting any key still valid on the control plane can verify
+  // the whole set (see api.VerifyKeysResponse).
+  repeated bytes signatures = 3;
 }
 
 message TokenRefreshRequest {

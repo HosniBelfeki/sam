@@ -85,7 +85,8 @@ teardown() {
     "sam-node:local" \
     run \
     --data-dir /data \
-    --control-plane "http://sam-control-plane:8080"
+    --control-plane "http://sam-control-plane:8080" \
+    --insecure-control-plane
   MESH_CONTAINERS+=("${node_name}")
 
   mesh_wait_for_log "${node_name}" "Using stored identity." 20
@@ -152,6 +153,7 @@ sys.exit(0 if b'\x05label' in raw and b'\x06region' in raw and b'\x02eu' in raw 
     "sam-node:local" \
     run \
     --control-plane "http://sam-control-plane:8080" \
+    --insecure-control-plane \
     --jwt-path "/var/run/secrets/tokens/sa-token"
   MESH_CONTAINERS+=("${node_name}")
 
@@ -216,7 +218,8 @@ sys.exit(0 if b'\x05label' in raw and b'\x06region' in raw and b'\x02eu' in raw 
     "sam-node:local" \
     run \
     --data-dir /data \
-    --control-plane "http://sam-control-plane:8080"
+    --control-plane "http://sam-control-plane:8080" \
+    --insecure-control-plane
   MESH_CONTAINERS+=("${node_name}")
 
   mesh_wait_for_log "${node_name}" "Using stored identity." 20

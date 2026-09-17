@@ -28,6 +28,9 @@ tests:
       - contains:
           path: spec.template.spec.containers[0].args
           content: --external-addr=/dns4/sam-mesh-router/tcp/4501
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --insecure-control-plane
       - notExists:
           path: spec.template.spec.containers[0].ports[0].hostPort
 

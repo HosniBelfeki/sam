@@ -49,6 +49,7 @@ spec:
           - "run"
           - "--config=/etc/sam/sam-node.yaml"
           - "--control-plane=http://sam-control-plane-${ENV_NAME}.${NAMESPACE}.svc.cluster.local:8080"
+          - "--insecure-control-plane"
           - "--jwt-path=/var/run/secrets/tokens/sam-token"
         ports:
         - containerPort: 8080

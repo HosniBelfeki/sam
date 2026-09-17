@@ -112,7 +112,7 @@ func (n *SamNode) enrollHTTP(ctx context.Context, controlPlaneURL, jwt string, p
 	}
 	httpReq.Header.Set("Content-Type", "application/x-protobuf")
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := controlPlaneHTTPClient(30 * time.Second)
 	resp, err := client.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("HTTP request failed: %v", err)
@@ -255,7 +255,7 @@ func (n *SamNode) EnrollBootstrap(ctx context.Context, controlPlaneURL string, b
 	enrollURL := controlPlaneURL + "/enroll"
 	logger.Infof("Enrolling via Bootstrap token at %s", enrollURL)
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := controlPlaneHTTPClient(30 * time.Second)
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", enrollURL, bytes.NewReader(data))
 	if err != nil {
 		return fmt.Errorf("failed to create HTTP request: %w", err)

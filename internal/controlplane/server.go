@@ -957,20 +957,25 @@ func (s *Server) HandleKeys(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	validKeys, err := s.store.GetAllValidPublicKeys(r.Context())
+	validKeys, err := s.store.GetAllValidKeys(r.Context())
 	if err != nil {
 		logger.Errorf("Failed to retrieve valid keys: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
-	var pubKeys [][]byte
+	resp := &api.KeysResponse{}
+	privs := make([]ed25519.PrivateKey, 0, len(validKeys))
 	for _, k := range validKeys {
-		pubKeys = append(pubKeys, k)
+		resp.PublicKeys = append(resp.PublicKeys, k.Public)
+		privs = append(privs, k.Private)
 	}
-
-	resp := &api.KeysResponse{
-		PublicKeys: pubKeys,
+	// Signed by every valid key: a receiver still on a key in its grace
+	// period verifies with that one and learns the new one from the set.
+	if err := api.SignKeysResponse(resp, privs, time.Now()); err != nil {
+		logger.Errorf("Failed to sign keys response: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
 	}
 
 	respData, err := proto.Marshal(resp)
