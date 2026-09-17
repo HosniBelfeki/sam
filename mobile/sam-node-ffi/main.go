@@ -88,6 +88,15 @@ func EnrollNodeBootstrap(dataDir *C.char, controlPlaneURL *C.char, bootstrapToke
 	return nil
 }
 
+//export UnenrollNode
+func UnenrollNode(dataDir *C.char) *C.char {
+	err := ffi.UnenrollNode(C.GoString(dataDir))
+	if err != nil {
+		return C.CString(err.Error())
+	}
+	return nil
+}
+
 //export FetchControlPlaneInfoJSON
 func FetchControlPlaneInfoJSON(controlPlaneURL *C.char) *C.char {
 	goControlPlaneURL := C.GoString(controlPlaneURL)
