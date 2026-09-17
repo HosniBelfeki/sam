@@ -106,6 +106,8 @@ func NewServiceRegistry(d dhtProvider, backendProbeTimeout time.Duration) *Servi
 // A backend that does not answer is registered but not advertised, rather than
 // rejected: backends routinely start after the node does, and the reprovide
 // loop picks them up once they answer.
+//
+// registering a name again replaces the instance and tears the old one down
 func (r *ServiceRegistry) Register(ctx context.Context, svc Service) error {
 	info := svc.Info()
 	if info.Type == api.ServiceType_SERVICE_TYPE_UNSPECIFIED {
@@ -164,8 +166,15 @@ func (r *ServiceRegistry) Register(ctx context.Context, svc Service) error {
 	}
 
 	r.mu.Lock()
+	replaced := r.services[info.Name]
 	r.services[info.Name] = svc
 	r.mu.Unlock()
+
+	if replaced != nil && replaced != svc {
+		if err := replaced.Teardown(); err != nil {
+			logger.Errorf("[ServiceRegistry] Teardown replaced %s: %v", info.Name, err)
+		}
+	}
 
 	if probeErr == nil {
 		logger.Infof("[ServiceRegistry] Registered %s/%s (name CID: %s, type CID: %s)", info.Type, info.Name, srvNameCID, srvTypeCID)

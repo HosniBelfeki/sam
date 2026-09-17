@@ -395,3 +395,31 @@ func TestServiceRegistry_BackendProbeTimeoutIsConfigurable(t *testing.T) {
 		}
 	})
 }
+
+// registering the name again replaces the entry, so the displaced instance is
+// only reachable if this call tears it down
+func TestServiceRegistry_ReplacingServiceTearsDownPrevious(t *testing.T) {
+	r := newServiceRegistryForTest(&fakeDHT{})
+	ctx := context.Background()
+
+	first := newFakeSvc("demo", api.ServiceType_SERVICE_TYPE_MCP)
+	if err := r.Register(ctx, first); err != nil {
+		t.Fatalf("first Register: %v", err)
+	}
+
+	second := newFakeSvc("demo", api.ServiceType_SERVICE_TYPE_MCP)
+	if err := r.Register(ctx, second); err != nil {
+		t.Fatalf("second Register: %v", err)
+	}
+
+	if first.teardownCalls != 1 {
+		t.Errorf("replaced service Teardown called %d times, want 1: "+
+			"the replaced instance is no longer reachable from the map, so nothing else can ever tear it down", first.teardownCalls)
+	}
+	if second.teardownCalls != 0 {
+		t.Errorf("replacement service Teardown called %d times, want 0", second.teardownCalls)
+	}
+	if got, ok := r.Get("demo"); !ok || got != Service(second) {
+		t.Error("registry should hold the replacement instance")
+	}
+}
