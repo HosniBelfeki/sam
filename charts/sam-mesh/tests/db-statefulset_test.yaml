@@ -36,6 +36,12 @@ tests:
       - contains:
           path: spec.template.spec.containers[0].securityContext.capabilities.drop
           content: ALL
+      # Non-root initdb needs a data directory it owns, below the PVC root.
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: PGDATA
+            value: /var/lib/postgresql/data/pgdata
 
   - it: scheduling knobs pass through to the pod spec
     set:
