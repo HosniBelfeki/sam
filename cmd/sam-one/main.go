@@ -17,17 +17,20 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
 
 	"github.com/google/sam/api"
 	"github.com/google/sam/internal/standalone"
+	"github.com/google/sam/internal/tunnel"
 	golog "github.com/ipfs/go-log/v2"
 	"github.com/spf13/cobra"
 )
@@ -50,6 +53,11 @@ func main() {
 		oidcClientID         string
 		allowedAudiencesFlag string
 		logLevel             string
+		tunnelProvider       string
+		tunnelInstall        bool
+		cloudflaredPath      string
+		enrollQR             bool
+		enrollQRMaxUsages    int
 		cpTunables           standalone.ControlPlaneTunables
 		routerTunables       standalone.RouterTunables
 		routerAllowLoopback  bool
@@ -88,6 +96,35 @@ func main() {
 				}
 			}
 
+			// The router advertises the external URL from its first lease, so
+			// a tunnel must exist before it starts; that in turn needs the
+			// port settled now rather than at bind time.
+			var tun tunnel.Tunnel
+			if tunnelProvider != "" {
+				if externalURL != "" {
+					logger.Fatal("--tunnel and --external-url are mutually exclusive: the tunnel provides the external URL")
+				}
+				if port == 0 {
+					var err error
+					if port, err = freePort(bindAddress); err != nil {
+						logger.Fatalf("Failed to pick a port for the tunnel target: %v", err)
+					}
+				}
+				var err error
+				if tun, err = openTunnel(cmd.Context(), tunnelOptions{
+					provider:        tunnelProvider,
+					bindAddress:     bindAddress,
+					port:            port,
+					dataDir:         dataDir,
+					cloudflaredPath: cloudflaredPath,
+					install:         tunnelInstall,
+				}); err != nil {
+					logger.Fatalf("Failed to open tunnel: %v", err)
+				}
+				defer func() { _ = tun.Close() }()
+				externalURL = tun.URL()
+			}
+
 			routerTunables.DisallowLoopback = !routerAllowLoopback
 			srv, err := standalone.New(standalone.Options{
 				BindAddress:      net.JoinHostPort(bindAddress, strconv.Itoa(port)),
@@ -117,7 +154,20 @@ func main() {
 				}
 			}()
 
-			printBanner(srv, externalURL)
+			printBanner(srv, tun)
+			if enrollQR {
+				if err := printBootEnrollQR(cmd.Context(), srv, enrollQRMaxUsages); err != nil {
+					logger.Errorf("Device enrollment QR: %v", err)
+				}
+			}
+			if tun != nil {
+				go func() {
+					<-tun.Done()
+					if err := tun.Err(); err != nil {
+						logger.Errorf("Tunnel %s closed: %v; remote devices can no longer reach %s", tunnelProvider, err, tun.URL())
+					}
+				}()
+			}
 			<-cmd.Context().Done()
 		},
 	}
@@ -136,6 +186,11 @@ func main() {
 	rootCmd.Flags().StringVar(&oidcClientID, "oidc-client-id", "", "OAuth client id advertised via /info (defaults to the first allowed audience)")
 	rootCmd.Flags().StringVar(&allowedAudiencesFlag, "allowed-audiences", api.DefaultAudience, "Comma-separated list of allowed OIDC audiences")
 	rootCmd.Flags().StringVar(&logLevel, "log-level", "", "Log level: debug, info, warn, error")
+	rootCmd.Flags().StringVar(&tunnelProvider, "tunnel", "", "Publish the listener on a public URL through a tunnel provider ("+strings.Join(tunnel.Names(), ", ")+"); sets the external URL")
+	rootCmd.Flags().BoolVar(&tunnelInstall, "tunnel-install", false, "Download the pinned connector binary (cloudflared "+tunnel.CloudflaredVersion+", digest-verified) into <data-dir>/bin without asking; implies accepting its license")
+	rootCmd.Flags().StringVar(&cloudflaredPath, "cloudflared-path", "", "Explicit cloudflared executable for --tunnel cloudflare (default: PATH, then <data-dir>/bin)")
+	rootCmd.Flags().BoolVar(&enrollQR, "enroll-qr", stdoutIsTerminal(), "Print a device enrollment QR code at startup (default: when stdout is a terminal)")
+	rootCmd.Flags().IntVar(&enrollQRMaxUsages, "enroll-qr-max-usages", 1, "How many devices the startup QR code admits (1 = single use; raise it to project one code to a room)")
 
 	// Embedded control plane tunables.
 	rootCmd.Flags().DurationVar(&cpTunables.LeaseDuration, "control-plane-lease-duration", 0, "Router lease validity (0 keeps the component default)")
@@ -164,15 +219,15 @@ func main() {
 	}
 }
 
-func printBanner(srv *standalone.Server, externalURL string) {
-	base := externalURL
-	if base == "" {
-		base = "http://" + srv.Addr()
-	}
+func printBanner(srv *standalone.Server, tun tunnel.Tunnel) {
+	base := srv.PublicURL()
 	fmt.Println("══════════════════════════════════════════════════════════════════")
 	fmt.Println("SAM standalone mesh is ready!")
 	fmt.Println()
 	fmt.Printf("API URL:      %s\n", base)
+	if tun != nil {
+		fmt.Printf("Tunnel:       %s -> http://%s\n", tun.URL(), srv.Addr())
+	}
 	fmt.Printf("Web Console:  %s/console\n", base)
 	fmt.Printf("Router Peer:  %s\n", srv.PeerID())
 	fmt.Printf("Admin Token:  %s\n", srv.AdminToken())
@@ -181,4 +236,94 @@ func printBanner(srv *standalone.Server, externalURL string) {
 	fmt.Println("To enroll a node:")
 	fmt.Printf("  sam-node join %s --bootstrap-token %s\n", base, srv.JoinToken())
 	fmt.Println("══════════════════════════════════════════════════════════════════")
+}
+
+// printBootEnrollQR mints the per-boot device token and draws it under the
+// banner; `sam-one token qr` produces further ones on demand. Without a
+// public https URL there is nothing a device could trust, so no token is
+// spent and a hint is printed instead.
+func printBootEnrollQR(ctx context.Context, srv *standalone.Server, maxUsages int) error {
+	if err := api.ValidateControlPlaneTransport(srv.PublicURL(), false); err != nil {
+		fmt.Printf("\nDevice enrollment QR skipped: devices only trust an https control plane.\n"+
+			"Run with --tunnel %s or --external-url https://... to enroll phones.\n", strings.Join(tunnel.Names(), "|"))
+		return nil
+	}
+	tok, err := srv.MintDeviceEnrollmentToken(ctx, standalone.DeviceTokenTTL, maxUsages)
+	if err != nil {
+		return err
+	}
+	fmt.Println()
+	return printEnrollQR(os.Stdout, srv.PublicURL(), tok, standalone.DeviceTokenTTL, maxUsages)
+}
+
+// tunnelOptions collects what openTunnel needs from the flags.
+type tunnelOptions struct {
+	provider        string
+	bindAddress     string
+	port            int
+	dataDir         string
+	cloudflaredPath string
+	install         bool
+}
+
+// openTunnel publishes the listener that Start is about to bind. The
+// connector dials the bind host, or loopback when binding all interfaces.
+func openTunnel(ctx context.Context, o tunnelOptions) (tunnel.Tunnel, error) {
+	p, err := tunnel.Lookup(o.provider)
+	if err != nil {
+		return nil, err
+	}
+	if cf, ok := p.(*tunnel.Cloudflare); ok {
+		cf.Binary = o.cloudflaredPath
+		cf.InstallDir = filepath.Join(o.dataDir, "bin")
+		cf.Consent = installConsent(o.install)
+	}
+	host := o.bindAddress
+	if ip := net.ParseIP(host); host == "" || (ip != nil && ip.IsUnspecified()) {
+		host = "127.0.0.1"
+	}
+	target := "http://" + net.JoinHostPort(host, strconv.Itoa(o.port))
+	logger.Infof("Opening %s tunnel to %s", p.Name(), target)
+	return p.Open(ctx, target)
+}
+
+// installConsent decides whether a missing connector may be downloaded:
+// --tunnel-install says yes up front; otherwise an interactive terminal is
+// asked, and a non-interactive run is refused (a container or service must
+// opt in explicitly rather than fetch binaries on its own).
+func installConsent(preApproved bool) func(version, url string) bool {
+	return func(version, url string) bool {
+		fmt.Printf("cloudflared is not installed. sam-one can download release %s (SHA-256 verified) from\n  %s\ninto its data directory. Installing cloudflared means accepting Cloudflare's license:\n  %s\n",
+			version, url, tunnel.CloudflaredLicenseURL)
+		if preApproved {
+			fmt.Println("Proceeding (--tunnel-install).")
+			return true
+		}
+		if !stdinIsTerminal() {
+			fmt.Println("Not a terminal: pass --tunnel-install to accept, or install cloudflared yourself.")
+			return false
+		}
+		fmt.Print("Download and accept? [y/N] ")
+		line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+		switch strings.ToLower(strings.TrimSpace(line)) {
+		case "y", "yes":
+			return true
+		}
+		if err != nil {
+			// /dev/null is a char device too; EOF is the tell.
+			fmt.Println("\nNo answer: pass --tunnel-install to accept, or install cloudflared yourself.")
+		}
+		return false
+	}
+}
+
+// freePort asks the kernel for an unused port on host; the listener is
+// released immediately, so the port is only reserved by convention.
+func freePort(host string) (int, error) {
+	l, err := net.Listen("tcp", net.JoinHostPort(host, "0"))
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = l.Close() }()
+	return l.Addr().(*net.TCPAddr).Port, nil
 }

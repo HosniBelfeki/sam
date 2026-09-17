@@ -65,6 +65,17 @@ func newFakeAdminAPI(t *testing.T) *httptest.Server {
 			http.Error(w, "method", http.StatusMethodNotAllowed)
 		}
 	})
+	mux.HandleFunc("/admin/bootstrap-tokens/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer adm-tok" {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if r.Method != http.MethodDelete || r.URL.Path != "/admin/bootstrap-tokens/abcdef123456" {
+			http.Error(w, "wrong revoke request "+r.Method+" "+r.URL.Path, http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
 	mux.HandleFunc("/admin/revoke", func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer adm-tok" {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
@@ -105,6 +116,15 @@ func TestAdminClient(t *testing.T) {
 
 	if err := c.banPeer("12D3KooTestPeer"); err != nil {
 		t.Fatalf("banPeer failed: %v", err)
+	}
+
+	// Revocation accepts the id prefix `token list` prints and sends the
+	// full id; an unknown prefix never reaches the DELETE route.
+	if id, err := c.revokeToken("abcdef"); err != nil || id != "abcdef123456" {
+		t.Fatalf("revokeToken by prefix = (%q, %v)", id, err)
+	}
+	if _, err := c.revokeToken("zzz"); err == nil || !strings.Contains(err.Error(), "no bootstrap token") {
+		t.Fatalf("revokeToken unknown prefix: err = %v", err)
 	}
 
 	bad := &adminClient{client: ts.Client(), server: ts.URL, token: "wrong"}

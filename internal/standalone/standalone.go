@@ -47,8 +47,9 @@ import (
 var logger = golog.Logger("sam-one")
 
 const (
-	joinTokenPrefix  = "sam_tok_"
-	adminTokenPrefix = "sam_adm_"
+	joinTokenPrefix   = "sam_tok_"
+	adminTokenPrefix  = "sam_adm_"
+	deviceTokenPrefix = "sam_dev_"
 
 	joinTokenFile  = "join-token"
 	adminTokenFile = "admin-token"
@@ -64,6 +65,11 @@ const (
 	// routerTokenTTL bounds the per-boot single-use token the embedded router
 	// enrolls with; it never leaves the process.
 	routerTokenTTL = time.Hour
+
+	// DeviceTokenTTL bounds a device enrollment token: long enough to walk
+	// over and scan the QR code, short enough that a screenshot of it goes
+	// stale.
+	DeviceTokenTTL = time.Hour
 )
 
 // Options configures the standalone all-in-one server.
@@ -375,6 +381,15 @@ func (s *Server) Close() error {
 // Addr returns the public host:port actually bound (useful with port 0).
 func (s *Server) Addr() string { return s.publicAddr }
 
+// PublicURL is the base URL clients should reach this server on: the
+// configured external URL, else the bound listener over plain HTTP.
+func (s *Server) PublicURL() string {
+	if s.opts.ExternalURL != "" {
+		return strings.TrimRight(s.opts.ExternalURL, "/")
+	}
+	return "http://" + s.publicAddr
+}
+
 // AdminToken returns the resolved admin API token.
 func (s *Server) AdminToken() string { return s.adminToken }
 
@@ -383,6 +398,28 @@ func (s *Server) JoinToken() string { return s.joinToken }
 
 // PeerID returns the embedded router's peer ID.
 func (s *Server) PeerID() string { return s.router.Host.ID().String() }
+
+// MintDeviceEnrollmentToken registers a fresh node bootstrap token good for
+// maxUsages enrollments (1 = burned by the first device; more lets one code
+// on a projector enroll a room) and returns its plaintext once. Unlike the
+// join token it is never persisted; a device that missed the window simply
+// gets a new one, and `sam-one token revoke` ends a shared one early.
+func (s *Server) MintDeviceEnrollmentToken(ctx context.Context, ttl time.Duration, maxUsages int) (string, error) {
+	if ttl <= 0 {
+		ttl = DeviceTokenTTL
+	}
+	if maxUsages <= 0 {
+		maxUsages = 1
+	}
+	tok, err := generateToken(deviceTokenPrefix)
+	if err != nil {
+		return "", err
+	}
+	if err := s.ensureBootstrapToken(ctx, tok, api.RoleNode, maxUsages, ttl, "sam-one device enrollment via "+s.PublicURL()); err != nil {
+		return "", fmt.Errorf("failed to register device enrollment token: %w", err)
+	}
+	return tok, nil
+}
 
 // seedPolicyOnFirstBoot installs the mesh policy only when none exists; the
 // database stays authoritative afterwards.

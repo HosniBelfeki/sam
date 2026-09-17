@@ -21,6 +21,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -128,6 +129,41 @@ func (c *adminClient) banPeer(peerID string) error {
 	return err
 }
 
+// revokeToken soft-revokes a bootstrap token. idOrPrefix may be the full
+// SHA-256 id or the unique prefix `token list` and `token qr` print.
+func (c *adminClient) revokeToken(idOrPrefix string) (string, error) {
+	id, err := c.resolveTokenID(idOrPrefix)
+	if err != nil {
+		return "", err
+	}
+	_, err = c.do(http.MethodDelete, "/admin/bootstrap-tokens/"+id, "", nil)
+	return id, err
+}
+
+func (c *adminClient) resolveTokenID(idOrPrefix string) (string, error) {
+	if idOrPrefix == "" {
+		return "", fmt.Errorf("token id is required")
+	}
+	list, err := c.listTokens()
+	if err != nil {
+		return "", err
+	}
+	var matches []string
+	for _, tok := range list {
+		if strings.HasPrefix(tok.ID, idOrPrefix) {
+			matches = append(matches, tok.ID)
+		}
+	}
+	switch len(matches) {
+	case 1:
+		return matches[0], nil
+	case 0:
+		return "", fmt.Errorf("no bootstrap token with id %q", idOrPrefix)
+	default:
+		return "", fmt.Errorf("token id %q is ambiguous (%d matches); pass more characters", idOrPrefix, len(matches))
+	}
+}
+
 // newAdminSubcommands wires the token and admin command trees onto root.
 func newAdminSubcommands() []*cobra.Command {
 	var (
@@ -185,7 +221,7 @@ func newAdminSubcommands() []*cobra.Command {
 
 	tokenList := &cobra.Command{
 		Use:   "list",
-		Short: "List active bootstrap tokens",
+		Short: "List bootstrap tokens and their status",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, err := clientFactory()
 			if err != nil {
@@ -195,24 +231,46 @@ func newAdminSubcommands() []*cobra.Command {
 			if err != nil {
 				return err
 			}
+			now := time.Now()
 			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 2, 4, 2, ' ', 0)
-			_, _ = fmt.Fprintln(tw, "ID\tROLE\tUSAGES\tEXPIRES\tDESCRIPTION")
+			_, _ = fmt.Fprintln(tw, "ID\tROLE\tUSAGES\tSTATUS\tEXPIRES\tDESCRIPTION")
 			for _, tok := range list {
 				id := tok.ID
 				if len(id) > 12 {
 					id = id[:12]
 				}
-				_, _ = fmt.Fprintf(tw, "%s\t%s\t%d/%d\t%s\t%s\n",
-					id, tok.Role, tok.UsagesCount, tok.MaxUsages,
+				_, _ = fmt.Fprintf(tw, "%s\t%s\t%d/%d\t%s\t%s\t%s\n",
+					id, tok.Role, tok.UsagesCount, tok.MaxUsages, tokenStatus(&tok, now),
 					tok.ExpiresAt.Format(time.RFC3339), tok.Description)
 			}
 			return tw.Flush()
 		},
 	}
 
+	tokenRevoke := &cobra.Command{
+		Use:   "revoke <token-id>",
+		Short: "Revoke a bootstrap token so no further device can enroll with it",
+		Long: "Soft-revokes a bootstrap token by its id or the id prefix shown by " +
+			"`token list` and `token qr`. Devices already enrolled keep their identity; " +
+			"use `admin ban` for those.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := clientFactory()
+			if err != nil {
+				return err
+			}
+			id, err := c.revokeToken(args[0])
+			if err != nil {
+				return err
+			}
+			cmd.Printf("Token %s revoked\n", id[:12])
+			return nil
+		},
+	}
+
 	tokenCmd := &cobra.Command{Use: "token", Short: "Manage bootstrap tokens on a running sam-one"}
 	addSharedFlags(tokenCmd)
-	tokenCmd.AddCommand(tokenCreate, tokenList)
+	tokenCmd.AddCommand(tokenCreate, tokenList, tokenRevoke, newTokenQRCommand(clientFactory, &server))
 
 	adminBan := &cobra.Command{
 		Use:   "ban <peer-id>",
@@ -236,4 +294,72 @@ func newAdminSubcommands() []*cobra.Command {
 	adminCmd.AddCommand(adminBan)
 
 	return []*cobra.Command{tokenCmd, adminCmd}
+}
+
+// tokenStatus mirrors the control plane's usability check (/enroll and
+// ConsumeBootstrapTokenUsage) for display.
+func tokenStatus(tok *storage.BootstrapToken, now time.Time) string {
+	switch {
+	case tok.IsRevoked():
+		return "revoked"
+	case !tok.ExpiresAt.IsZero() && now.After(tok.ExpiresAt):
+		return "expired"
+	case tok.UsagesCount >= tok.MaxUsages:
+		return "exhausted"
+	default:
+		return "active"
+	}
+}
+
+// newTokenQRCommand mints a node token and renders it, with the URL devices
+// must enroll against, as a terminal QR code. server points at the shared
+// --server flag so the QR defaults to the URL the admin used.
+func newTokenQRCommand(clientFactory func() (*adminClient, error), server *string) *cobra.Command {
+	var (
+		enrollURL   string
+		ttlHours    int
+		maxUsages   int
+		description string
+	)
+	cmd := &cobra.Command{
+		Use:   "qr",
+		Short: "Mint a device enrollment token and print it as a QR code",
+		Long: "Mints a bootstrap token for the node role and renders " +
+			"sam://enroll?server=<url>&token=<token> as a QR code for the SAM mobile app. " +
+			"Single use by default; --max-usages lets one code, projected in a room, enroll " +
+			"many devices until it is exhausted, expires or is revoked. " +
+			"The embedded URL defaults to --server; pass --enroll-url when devices reach " +
+			"the mesh on a different address (a tunnel hostname, a reverse proxy). Devices " +
+			"only trust https control planes (plaintext http is accepted for loopback only).",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			target := enrollURL
+			if target == "" {
+				target = *server
+			}
+			target = strings.TrimRight(target, "/")
+			if _, _, err := api.ParseEnrollURI(api.EnrollURI(target, "probe")); err != nil {
+				return fmt.Errorf("enrollment URL %q: %w", target, err)
+			}
+			if maxUsages < 1 {
+				return fmt.Errorf("--max-usages must be at least 1")
+			}
+			c, err := clientFactory()
+			if err != nil {
+				return err
+			}
+			if description == "" {
+				description = "device enrollment via " + target
+			}
+			created, err := c.createToken(api.RoleNode, ttlHours, maxUsages, description)
+			if err != nil {
+				return err
+			}
+			return printEnrollQR(cmd.OutOrStdout(), target, created.Token, time.Duration(ttlHours)*time.Hour, maxUsages)
+		},
+	}
+	cmd.Flags().StringVar(&enrollURL, "enroll-url", "", "https URL embedded in the QR code when it differs from --server")
+	cmd.Flags().IntVar(&ttlHours, "ttl-hours", 1, "Token validity in hours")
+	cmd.Flags().IntVar(&maxUsages, "max-usages", 1, "How many devices may enroll with this code")
+	cmd.Flags().StringVar(&description, "description", "", "Free-form note stored with the token")
+	return cmd
 }
