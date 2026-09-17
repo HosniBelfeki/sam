@@ -31,6 +31,7 @@ import (
 	"github.com/biscuit-auth/biscuit-go/v2/parser"
 	"github.com/google/sam/api"
 	"github.com/google/sam/internal/identity"
+	"github.com/google/sam/internal/ratelimit"
 	lru "github.com/hashicorp/golang-lru/v2"
 	golog "github.com/ipfs/go-log/v2"
 	"github.com/libp2p/go-libp2p/core/crypto"
@@ -657,7 +658,7 @@ func TestRevocation(t *testing.T) {
 	}
 
 	cache, _ := lru.New[string, int64](10000)
-	rl, _ := NewPeerRateLimiter(100)
+	rl, _ := ratelimit.NewPeerRateLimiter(100)
 	node := &SamNode{
 		trustedKeys:    []TrustedKey{{Key: pub, ReceivedAt: time.Now()}},
 		revokedPeers:   cache,
@@ -746,7 +747,7 @@ func TestWithBiscuitAuth_MutualBiscuit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rl, _ := NewPeerRateLimiter(100)
+	rl, _ := ratelimit.NewPeerRateLimiter(100)
 	node := &SamNode{
 		trustedKeys:    []TrustedKey{{Key: pub, ReceivedAt: time.Now()}},
 		rateLimiter:    rl,

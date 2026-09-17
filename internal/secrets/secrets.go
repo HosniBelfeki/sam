@@ -31,7 +31,13 @@ import (
 // the environment variable is the fallback. File and env contents are
 // whitespace-trimmed; a configured but empty file is an error. An empty
 // result means the secret was not configured at all.
+//
+// The environment variable is removed from this process's environment in
+// either case, so subprocesses (MCP command backends, re-executed daemons)
+// do not inherit it.
 func FromPathOrEnv(name, path, envVar string) (string, error) {
+	fromEnv := strings.TrimSpace(os.Getenv(envVar))
+	_ = os.Unsetenv(envVar)
 	if path != "" {
 		data, err := os.ReadFile(path)
 		if err != nil {
@@ -43,7 +49,7 @@ func FromPathOrEnv(name, path, envVar string) (string, error) {
 		}
 		return secret, nil
 	}
-	return strings.TrimSpace(os.Getenv(envVar)), nil
+	return fromEnv, nil
 }
 
 // Resolve returns a one-shot secret configured either directly (value) or

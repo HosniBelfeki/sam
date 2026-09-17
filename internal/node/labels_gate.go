@@ -24,6 +24,7 @@ import (
 
 	"github.com/google/sam/api"
 	"github.com/google/sam/internal/identity"
+	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-msgio"
 	"google.golang.org/protobuf/proto"
@@ -144,9 +145,9 @@ func (n *SamNode) egressFloor() map[string]string {
 // constrained does not get to opt out of it by saying nothing.
 func (n *SamNode) VerifyPeerLabels(ctx context.Context, peerID peer.ID, required map[string]string) error {
 	floor := n.egressFloor()
-	if len(required) == 0 && len(floor) == 0 {
-		return nil
-	}
+	// No early return for an empty requirement: with nothing to attest this
+	// still verifies that the peer holds a control-plane-signed biscuit bound
+	// to it, which is what makes a discovered peer a provider at all.
 	key := labelGateKey(peerID, required, floor)
 	if until, ok := n.peerLabelGate.Get(key); ok && time.Now().Before(until) {
 		return nil
@@ -170,7 +171,7 @@ func (n *SamNode) VerifyPeerLabels(ctx context.Context, peerID peer.ID, required
 func (n *SamNode) checkPeerLabels(providerBiscuit []byte, peerID peer.ID, required map[string]string) error {
 	floor := n.egressFloor()
 	if len(providerBiscuit) == 0 {
-		return fmt.Errorf("provider %s returned no identity biscuit; cannot attest required labels %v (egress floor %v)", peerID, required, floor)
+		return fmt.Errorf("provider %s returned no identity biscuit; not an enrolled peer (required labels %v, egress floor %v)", peerID, required, floor)
 	}
 
 	n.keysMu.RLock()
@@ -186,6 +187,11 @@ func (n *SamNode) checkPeerLabels(providerBiscuit []byte, peerID peer.ID, requir
 	b, key, err := identity.VerifyBiscuitAndGetKey(providerBiscuit, peerID, trustedKeys, n.BiscuitTimeout)
 	if err != nil {
 		return fmt.Errorf("provider %s biscuit verification failed: %w", peerID, err)
+	}
+	// Only nodes host services. A router's or an admin's biscuit is a valid
+	// mesh identity but not a provider, and must not be dialled as one.
+	if err := identity.RequireRole(b, key, api.RoleNode, n.BiscuitTimeout); err != nil {
+		return fmt.Errorf("provider %s is not enrolled as a node: %w", peerID, err)
 	}
 
 	authorizer, err := b.Authorizer(key, identity.AuthorizerOptions(n.BiscuitTimeout)...)
@@ -235,6 +241,13 @@ type peerBiscuitObservation struct {
 	ConnectionPeer peer.ID
 }
 
+// labelGateDialContext allows the auth stream to open over a relayed
+// (limited) connection. Without it libp2p insists on a direct dial, which
+// peers behind a relay have no addresses for.
+func labelGateDialContext(ctx context.Context) context.Context {
+	return network.WithAllowLimitedConn(ctx, "label-gate")
+}
+
 // fetchPeerBiscuitEvidence is the uncached form used by the local evidence API.
 // It preserves the PeerID authenticated by the libp2p stream separately from
 // the requested target so callers can fail closed on any binding mismatch.
@@ -244,7 +257,11 @@ func (n *SamNode) fetchPeerBiscuitEvidence(ctx context.Context, peerID peer.ID) 
 		return peerBiscuitObservation{}, fmt.Errorf("missing node identity")
 	}
 
-	dialCtx, cancel := context.WithTimeout(ctx, labelGateDialTimeout)
+	// Reach the peer the way the call this gate guards would: the egress
+	// proxy resolves addresses lazily and rides relayed connections, so the
+	// check runs before either has happened and must do both itself.
+	n.preparePeerAddrs(ctx, peerID)
+	dialCtx, cancel := context.WithTimeout(labelGateDialContext(ctx), labelGateDialTimeout)
 	defer cancel()
 	s, err := n.Host.NewStream(dialCtx, peerID, api.AuthProtocolID)
 	if err != nil {

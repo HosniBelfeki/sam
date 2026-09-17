@@ -103,6 +103,22 @@ func RefreshChallenge(peerID string, ts int64) []byte {
 	return []byte("sam:refresh:" + peerID + ":" + strconv.FormatInt(ts, 10))
 }
 
+// RegisterChallenge is the payload an OIDC enrollee signs to prove possession
+// of EnrollRequest.public_key at POST /register, carried in that message's
+// timestamp/challenge_signature fields. The JWT says who is asking; this says
+// they hold the key they are binding.
+func RegisterChallenge(peerID string, ts int64) []byte {
+	return []byte("sam:register:" + peerID + ":" + strconv.FormatInt(ts, 10))
+}
+
+// RouterLeaseChallenge is the payload a router signs with its enrolled key at
+// POST /routers/lease, carried in RouterLeaseRequest's
+// timestamp/challenge_signature fields. The router's biscuit is not proof on
+// its own: routers send it to every peer they authenticate.
+func RouterLeaseChallenge(peerID string, ts int64) []byte {
+	return []byte("sam:routers-lease:" + peerID + ":" + strconv.FormatInt(ts, 10))
+}
+
 // ============================================================================
 // SAM Custom HTTP Headers
 // ============================================================================

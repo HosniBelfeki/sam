@@ -408,33 +408,31 @@ func (f *openAIFacade) handleCompletions(w http.ResponseWriter, r *http.Request)
 		if p.peerID == "" {
 			f.serveLocal(aw, attempt, p.service)
 		} else {
-			// Labels ranked this provider; the label gate is the enforcement
-			// point: the provider's biscuit must attest the requirement before
-			// the request body leaves this node. The gate also runs when only
-			// the operator's floor requires it — a caller that asked for
-			// nothing is still held to the floor (VerifyPeerLabels ANDs both).
-			if len(requiredLabels) > 0 || len(f.floor()) > 0 {
-				if f.verifyPeerLabels == nil {
+			// Every provider is verified before the request body leaves this
+			// node: a discovered peer is only a provider once it has shown a
+			// control-plane-signed biscuit bound to it. The caller's label
+			// requirement and the operator's floor are extra checks on that
+			// same token (VerifyPeerLabels ANDs both).
+			if f.verifyPeerLabels == nil {
+				recordFacadeRejection(reasonLabelUnattested)
+				writeOpenAIError(w, http.StatusServiceUnavailable, "label_unattested",
+					"provider verification is unavailable on this node")
+				return
+			}
+			// No backoff on failure: the verdict is requirement-scoped,
+			// the provider stays eligible for unconstrained requests.
+			if err := f.verifyPeerLabels(r.Context(), p.peerID, requiredLabels); err != nil {
+				// With no caller requirement what failed is the floor or the
+				// peer's own identity; attribute it so the operator can tell
+				// their floor apart from a caller's requirement.
+				if len(requiredLabels) == 0 {
+					recordFacadeRejection(reasonEgressFloorMismatch)
+				} else {
 					recordFacadeRejection(reasonLabelUnattested)
-					writeOpenAIError(w, http.StatusServiceUnavailable, "label_unattested",
-						"label enforcement is unavailable on this node")
-					return
 				}
-				// No backoff on failure: the verdict is requirement-scoped,
-				// the provider stays eligible for unconstrained requests.
-				if err := f.verifyPeerLabels(r.Context(), p.peerID, requiredLabels); err != nil {
-					// With no caller requirement the only thing that can have
-					// failed is the floor; attribute it so the operator can
-					// tell their floor apart from a caller's requirement.
-					if len(requiredLabels) == 0 {
-						recordFacadeRejection(reasonEgressFloorMismatch)
-					} else {
-						recordFacadeRejection(reasonLabelUnattested)
-					}
-					logger.Warnf("[OpenAIFacade] provider peer=%q service=%q failed label attestation for %v (egress floor %v): %v; trying next",
-						p.peerID, p.service, requiredLabels, f.floor(), err)
-					continue
-				}
+				logger.Warnf("[OpenAIFacade] provider peer=%q service=%q failed verification for %v (egress floor %v): %v; trying next",
+					p.peerID, p.service, requiredLabels, f.floor(), err)
+				continue
 			}
 			attempt.URL.Path = fmt.Sprintf("/sam/%s/%s/%s%s", p.peerID, api.ServiceTypeStringInference, p.service, r.URL.Path)
 			attempt.URL.RawPath = ""

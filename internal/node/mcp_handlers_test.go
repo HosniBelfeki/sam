@@ -38,7 +38,8 @@ import (
 )
 
 // buildAndSaveBiscuit builds a biscuit signed with rootPriv that identifies
-// node as caller, grants allow_mcp_server("*"), and saves it to node's store.
+// node as caller, grants allow_mcp_server("*"), carries the node role as a
+// real enrollment does, and saves it to node's store.
 func buildAndSaveBiscuit(node *SamNode, rootPriv ed25519.PrivateKey) error {
 	callerID := node.Host.ID().String()
 	builder := biscuit.NewBuilder(rootPriv)
@@ -46,6 +47,12 @@ func buildAndSaveBiscuit(node *SamNode, rootPriv ed25519.PrivateKey) error {
 	if err := builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{
 		Name: "node",
 		IDs:  []biscuit.Term{biscuit.String(callerID)},
+	}}); err != nil {
+		return err
+	}
+	if err := builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{
+		Name: api.FactRole,
+		IDs:  []biscuit.Term{biscuit.String(api.RoleNode)},
 	}}); err != nil {
 		return err
 	}
@@ -76,6 +83,28 @@ func buildAndSaveBiscuit(node *SamNode, rootPriv ed25519.PrivateKey) error {
 		return err
 	}
 	return node.Store.SaveIdentity(biscBytes)
+}
+
+// enrollUnderRoot makes every node a member of the same mesh: each gets an
+// identity biscuit signed by a fresh root and trusts that root, so both ends
+// of any pair verify each other (the caller through WithBiscuitAuth, the
+// provider through the label gate). Returns the root key pair for tests that
+// need to mint extra tokens.
+func enrollUnderRoot(t *testing.T, nodes ...*SamNode) (ed25519.PublicKey, ed25519.PrivateKey) {
+	t.Helper()
+	rootPub, rootPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("gen root key: %v", err)
+	}
+	for _, n := range nodes {
+		if err := buildAndSaveBiscuit(n, rootPriv); err != nil {
+			t.Fatalf("buildAndSaveBiscuit for %s: %v", n.Host.ID(), err)
+		}
+		n.keysMu.Lock()
+		n.trustedKeys = append(n.trustedKeys, TrustedKey{Key: rootPub, ReceivedAt: time.Now()})
+		n.keysMu.Unlock()
+	}
+	return rootPub, rootPriv
 }
 
 func TestHandleFindRemoteTools_EmptyMesh_ReturnsEmptyArray(t *testing.T) {
@@ -146,18 +175,7 @@ func TestHandleFindRemoteTools_SinglePeer(t *testing.T) {
 		t.Fatalf("connect: %v", err)
 	}
 
-	rootPub, rootPriv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatalf("gen root key: %v", err)
-	}
-	if err := buildAndSaveBiscuit(nodeA, rootPriv); err != nil {
-		t.Fatalf("buildAndSaveBiscuit: %v", err)
-	}
-
-	// B trusts the same root key used to sign A's biscuit.
-	nodeB.keysMu.Lock()
-	nodeB.trustedKeys = append(nodeB.trustedKeys, TrustedKey{Key: rootPub, ReceivedAt: time.Now()})
-	nodeB.keysMu.Unlock()
+	enrollUnderRoot(t, nodeA, nodeB)
 
 	// Register an MCP service on B with two tools.
 	regReq := &api.RegisterServiceRequest{
@@ -231,16 +249,7 @@ func TestHandleFindRemoteTools_BackendPredatesDiscover(t *testing.T) {
 		t.Fatalf("connect: %v", err)
 	}
 
-	rootPub, rootPriv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatalf("gen root key: %v", err)
-	}
-	if err := buildAndSaveBiscuit(nodeA, rootPriv); err != nil {
-		t.Fatalf("buildAndSaveBiscuit: %v", err)
-	}
-	nodeB.keysMu.Lock()
-	nodeB.trustedKeys = append(nodeB.trustedKeys, TrustedKey{Key: rootPub, ReceivedAt: time.Now()})
-	nodeB.keysMu.Unlock()
+	enrollUnderRoot(t, nodeA, nodeB)
 
 	regReq := &api.RegisterServiceRequest{
 		Service: &api.ServiceInfo{Type: api.ServiceType_SERVICE_TYPE_MCP, Name: "calculator"},
@@ -309,21 +318,13 @@ func TestHandleFindRemoteTools_MeshWide(t *testing.T) {
 	nodeD, cleanupD := startBareNode(t, ctx)
 	defer cleanupD()
 
-	// Connect A to B, C, and D, and set up biscuit auth so A's stream passes WithBiscuitAuth.
-	rootPub, rootPriv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatalf("gen root: %v", err)
-	}
-	if err := buildAndSaveBiscuit(nodeA, rootPriv); err != nil {
-		t.Fatalf("buildAndSaveBiscuit: %v", err)
-	}
+	// Connect A to B, C, and D; every node is enrolled under one root so A's
+	// stream passes WithBiscuitAuth and each target passes A's provider gate.
+	enrollUnderRoot(t, nodeA, nodeB, nodeC, nodeD)
 	for _, target := range []*SamNode{nodeB, nodeC, nodeD} {
 		if err := nodeA.Host.Connect(ctx, peer.AddrInfo{ID: target.Host.ID(), Addrs: target.Host.Addrs()}); err != nil {
 			t.Fatalf("connect to %s: %v", target.Host.ID(), err)
 		}
-		target.keysMu.Lock()
-		target.trustedKeys = append(target.trustedKeys, TrustedKey{Key: rootPub, ReceivedAt: time.Now()})
-		target.keysMu.Unlock()
 	}
 
 	if err := nodeB.RegisterService(ctx, &api.RegisterServiceRequest{
@@ -333,16 +334,26 @@ func TestHandleFindRemoteTools_MeshWide(t *testing.T) {
 		t.Fatalf("RegisterService B: %v", err)
 	}
 	if err := nodeC.RegisterService(ctx, &api.RegisterServiceRequest{
-		Service: &api.ServiceInfo{Type: api.ServiceType_SERVICE_TYPE_MCP, Name: "mcp://summarizer"},
+		Service: &api.ServiceInfo{Type: api.ServiceType_SERVICE_TYPE_MCP, Name: "summarizer"},
 		Backend: &api.RegisterServiceRequest_TargetUrl{TargetUrl: cSrv.URL},
 	}); err != nil {
 		t.Fatalf("RegisterService C: %v", err)
 	}
 	if err := nodeD.RegisterService(ctx, &api.RegisterServiceRequest{
-		Service: &api.ServiceInfo{Type: api.ServiceType_SERVICE_TYPE_MCP, Name: "plugin://linter"},
+		Service: &api.ServiceInfo{Type: api.ServiceType_SERVICE_TYPE_MCP, Name: "linter"},
 		Backend: &api.RegisterServiceRequest_TargetUrl{TargetUrl: dSrv.URL},
 	}); err != nil {
 		t.Fatalf("RegisterService D: %v", err)
+	}
+	// A name that carries its own scheme used to be accepted and reached via
+	// a name-only fallback that ignored the type the policy was evaluated on.
+	for _, legacy := range []string{"mcp://summarizer", "plugin://linter"} {
+		if err := nodeD.RegisterService(ctx, &api.RegisterServiceRequest{
+			Service: &api.ServiceInfo{Type: api.ServiceType_SERVICE_TYPE_MCP, Name: legacy},
+			Backend: &api.RegisterServiceRequest_TargetUrl{TargetUrl: dSrv.URL},
+		}); err == nil {
+			t.Errorf("service name %q was accepted", legacy)
+		}
 	}
 
 	// Direct fan-out test: invoke fetchRemoteToolCatalogue for peers,
@@ -365,17 +376,10 @@ func TestHandleFindRemoteTools_MeshWide(t *testing.T) {
 		gotNames[tool.ToolName] = true
 	}
 
-	// Test permutation 1: no prefix gets "mcp://" automatically prepended.
-	if !gotNames["mcp://code-reviewer/review_pr"] {
-		t.Errorf("missing mcp://code-reviewer/review_pr; got %v", gotNames)
-	}
-	// Test permutation 2: "mcp://" prefix is preserved.
-	if !gotNames["mcp://summarizer/summarize"] {
-		t.Errorf("missing mcp://summarizer/summarize; got %v", gotNames)
-	}
-	// Test permutation 3: custom namespace prefix is preserved.
-	if !gotNames["plugin://linter/lint"] {
-		t.Errorf("missing plugin://linter/lint; got %v", gotNames)
+	for _, want := range []string{"mcp://code-reviewer/review_pr", "mcp://summarizer/summarize", "mcp://linter/lint"} {
+		if !gotNames[want] {
+			t.Errorf("missing %s; got %v", want, gotNames)
+		}
 	}
 }
 
@@ -396,21 +400,12 @@ func TestHandleFindRemoteTools_PartialFailure(t *testing.T) {
 	nodeC, cleanupC := startBareNode(t, ctx)
 	defer cleanupC()
 
-	rootPub, rootPriv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := buildAndSaveBiscuit(nodeA, rootPriv); err != nil {
-		t.Fatalf("buildAndSaveBiscuit: %v", err)
-	}
+	enrollUnderRoot(t, nodeA, nodeC)
 
 	// A connects to C only; B is a fictional peer ID that won't resolve.
 	if err := nodeA.Host.Connect(ctx, peer.AddrInfo{ID: nodeC.Host.ID(), Addrs: nodeC.Host.Addrs()}); err != nil {
 		t.Fatal(err)
 	}
-	nodeC.keysMu.Lock()
-	nodeC.trustedKeys = append(nodeC.trustedKeys, TrustedKey{Key: rootPub, ReceivedAt: time.Now()})
-	nodeC.keysMu.Unlock()
 
 	if err := nodeC.RegisterService(ctx, &api.RegisterServiceRequest{
 		Service: &api.ServiceInfo{Type: api.ServiceType_SERVICE_TYPE_MCP, Name: "summarizer"},
@@ -452,6 +447,12 @@ func buildAndSaveCustomBiscuit(node *SamNode, rootPriv ed25519.PrivateKey, allow
 	if err := builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{
 		Name: "node",
 		IDs:  []biscuit.Term{biscuit.String(callerID)},
+	}}); err != nil {
+		return err
+	}
+	if err := builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{
+		Name: api.FactRole,
+		IDs:  []biscuit.Term{biscuit.String(api.RoleNode)},
 	}}); err != nil {
 		return err
 	}
@@ -504,20 +505,13 @@ func TestFetchRemoteToolCatalogue_AuthRejectedHidden(t *testing.T) {
 	nodeC, cleanupC := startBareNode(t, ctx)
 	defer cleanupC()
 
-	rootPubEd, rootPrivEd, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Create a biscuit that DOES NOT allow "summarizer", only "some_other_service" and "system://sam.catalog".
+	// Both enrolled under one root; A's identity is then narrowed to a
+	// biscuit that DOES NOT allow "summarizer", only "some_other_service"
+	// and "system://sam.catalog".
+	_, rootPrivEd := enrollUnderRoot(t, nodeA, nodeC)
 	if err := buildAndSaveCustomBiscuit(nodeA, rootPrivEd, []string{"mcp://some_other_service", "system://sam.catalog"}); err != nil {
 		t.Fatalf("buildAndSaveCustomBiscuit: %v", err)
 	}
-
-	// Trust the key in Node C
-	nodeC.keysMu.Lock()
-	nodeC.trustedKeys = append(nodeC.trustedKeys, TrustedKey{Key: rootPubEd, ReceivedAt: time.Now()})
-	nodeC.keysMu.Unlock()
 
 	if err := nodeA.Host.Connect(ctx, peer.AddrInfo{ID: nodeC.Host.ID(), Addrs: nodeC.Host.Addrs()}); err != nil {
 		t.Fatal(err)
@@ -561,16 +555,10 @@ func TestVerifyGossipToolRows_AuthenticatesEachServiceOnSamePeer(t *testing.T) {
 	nodeB, cleanupB := startBareNode(t, ctx)
 	defer cleanupB()
 
-	rootPub, rootPriv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
+	_, rootPriv := enrollUnderRoot(t, nodeA, nodeB)
 	if err := buildAndSaveCustomBiscuit(nodeA, rootPriv, []string{"mcp://allowed-reviewer"}); err != nil {
 		t.Fatalf("buildAndSaveCustomBiscuit: %v", err)
 	}
-	nodeB.keysMu.Lock()
-	nodeB.trustedKeys = append(nodeB.trustedKeys, TrustedKey{Key: rootPub, ReceivedAt: time.Now()})
-	nodeB.keysMu.Unlock()
 	if err := nodeA.Host.Connect(ctx, peer.AddrInfo{ID: nodeB.Host.ID(), Addrs: nodeB.Host.Addrs()}); err != nil {
 		t.Fatal(err)
 	}
@@ -939,16 +927,7 @@ func TestHandleDescribeRemoteTool_RoundTrip(t *testing.T) {
 		t.Fatalf("connect: %v", err)
 	}
 
-	rootPub, rootPriv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatalf("gen root key: %v", err)
-	}
-	if err := buildAndSaveBiscuit(nodeA, rootPriv); err != nil {
-		t.Fatalf("buildAndSaveBiscuit: %v", err)
-	}
-	nodeB.keysMu.Lock()
-	nodeB.trustedKeys = append(nodeB.trustedKeys, TrustedKey{Key: rootPub, ReceivedAt: time.Now()})
-	nodeB.keysMu.Unlock()
+	enrollUnderRoot(t, nodeA, nodeB)
 
 	tools := []*mcp.Tool{
 		{
@@ -1035,16 +1014,7 @@ func TestHandleDescribeRemoteTool_RoundTrip_UnknownTool(t *testing.T) {
 		t.Fatalf("connect: %v", err)
 	}
 
-	rootPub, rootPriv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatalf("gen root key: %v", err)
-	}
-	if err := buildAndSaveBiscuit(nodeA, rootPriv); err != nil {
-		t.Fatalf("buildAndSaveBiscuit: %v", err)
-	}
-	nodeB.keysMu.Lock()
-	nodeB.trustedKeys = append(nodeB.trustedKeys, TrustedKey{Key: rootPub, ReceivedAt: time.Now()})
-	nodeB.keysMu.Unlock()
+	enrollUnderRoot(t, nodeA, nodeB)
 
 	tools := []*mcp.Tool{
 		{Name: "review_pr", Description: "x", InputSchema: map[string]any{"type": "object"}},
@@ -1059,7 +1029,7 @@ func TestHandleDescribeRemoteTool_RoundTrip_UnknownTool(t *testing.T) {
 	}
 	defer func() { _ = nodeB.UnregisterService(ctx, "code-reviewer") }()
 
-	_, _, err = nodeA.handleDescribeRemoteTool(ctx, &mcp.CallToolRequest{}, DescribeRemoteToolParams{
+	_, _, err := nodeA.handleDescribeRemoteTool(ctx, &mcp.CallToolRequest{}, DescribeRemoteToolParams{
 		PeerID:   nodeB.Host.ID().String(),
 		ToolName: "mcp://code-reviewer/does-not-exist",
 	})

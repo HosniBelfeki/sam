@@ -42,9 +42,10 @@ const backendProbeTTL = 30 * time.Second
 // and token usage tracking for OpenAI-compatible endpoints.
 type InferenceService struct {
 	baseService
-	backendURL *url.URL
-	engine     InferenceEngine
-	active     atomic.Int64
+	backendURL  *url.URL
+	backendAuth backendTarget
+	engine      InferenceEngine
+	active      atomic.Int64
 
 	modelsMu      sync.Mutex
 	cachedModels  []string
@@ -54,12 +55,13 @@ type InferenceService struct {
 func (s *InferenceService) Init(ctx context.Context) error {
 	switch x := s.backend.(type) {
 	case *api.RegisterServiceRequest_TargetUrl:
-		u, err := url.Parse(x.TargetUrl)
+		target, err := parseBackendTarget(x.TargetUrl)
 		if err != nil {
-			return fmt.Errorf("invalid inference backend URL %q: %w", x.TargetUrl, err)
+			return fmt.Errorf("invalid inference backend URL: %w", err)
 		}
-		s.backendURL = u
-		s.engine = newOpenAIEngine(u, nil)
+		s.backendURL = target.url
+		s.backendAuth = target
+		s.engine = newOpenAIEngine(target.url, target.client())
 		s.handler = s.trackActive(s.newInferenceProxy())
 	case *api.RegisterServiceRequest_Command:
 		return fmt.Errorf("command-based backends are not supported for InferenceService")
@@ -115,6 +117,7 @@ func (s *InferenceService) newInferenceProxy() http.Handler {
 		},
 		Transport: &inferenceTransport{
 			backend: s.backendURL,
+			auth:    s.backendAuth,
 			base:    http.DefaultTransport,
 		},
 	}
@@ -122,12 +125,19 @@ func (s *InferenceService) newInferenceProxy() http.Handler {
 
 type inferenceTransport struct {
 	backend *url.URL
+	auth    backendTarget
 	base    http.RoundTripper
 }
 
 func (t *inferenceTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	attemptReq := req.Clone(req.Context())
 	attemptReq.Header.Del("Accept-Encoding") // Prevent gzipped response from breaking token tracking
+	// A Director proxy does not manage X-Forwarded-For, and RemoteAddr here is
+	// a peer id, so an inbound value would reach the backend as-is.
+	attemptReq.Header.Del("X-Forwarded-For")
+	attemptReq.Header.Del("X-Forwarded-Host")
+	attemptReq.Header.Del("X-Forwarded-Proto")
+	t.auth.apply(attemptReq.Header)
 
 	attemptReq.URL.Scheme = t.backend.Scheme
 	attemptReq.URL.Host = t.backend.Host

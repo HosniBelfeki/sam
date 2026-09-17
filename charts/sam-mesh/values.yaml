@@ -83,6 +83,24 @@ database:
     port: 5432
     sslmode: disable
     storageSize: 1Gi
+    # postgres:16-alpine runs as uid 70 (postgres); the data directory is
+    # the pgdata/ subdirectory of the PVC (initdb must own what it chmods,
+    # and the PVC root belongs to root). fsGroup gives uid 70 group access
+    # to create it. Upgrading a release whose postgres ran as root with
+    # data at the PVC root: move that data into pgdata/ first, or the new
+    # pod initialises an empty cluster beside it.
+    podSecurityContext:
+      runAsNonRoot: true
+      runAsUser: 70
+      runAsGroup: 70
+      fsGroup: 70
+      fsGroupChangePolicy: "OnRootMismatch"
+      seccompProfile:
+        type: RuntimeDefault
+    securityContext:
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop: ["ALL"]
     nodeSelector: {}
     tolerations: []
     affinity: {}

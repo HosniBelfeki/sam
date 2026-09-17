@@ -64,8 +64,7 @@ func GetOrGenerateKey(s *Store) crypto.PrivKey {
 }
 
 func (n *SamNode) Enroll(ctx context.Context, controlPlaneURL string, jwt string) error {
-	pubKey := n.Host.Peerstore().PubKey(n.Host.ID())
-	enrollResp, err := n.enrollHTTP(ctx, controlPlaneURL, jwt, n.Host.ID(), pubKey)
+	enrollResp, err := n.enrollHTTP(ctx, controlPlaneURL, jwt, n.Host.ID(), n.config.PrivKey)
 	if err != nil {
 		return err
 	}
@@ -75,18 +74,26 @@ func (n *SamNode) Enroll(ctx context.Context, controlPlaneURL string, jwt string
 
 // enrollHTTP performs the HTTP half of enrollment for an explicit peer
 // identity, so it can run before the libp2p host exists (startup recovery).
-func (n *SamNode) enrollHTTP(ctx context.Context, controlPlaneURL, jwt string, peerID peer.ID, pubKey crypto.PubKey) (*api.EnrollResponse, error) {
-	pubBytes, err := crypto.MarshalPublicKey(pubKey)
+// privKey signs the proof-of-possession challenge; peerID must be its own.
+func (n *SamNode) enrollHTTP(ctx context.Context, controlPlaneURL, jwt string, peerID peer.ID, privKey crypto.PrivKey) (*api.EnrollResponse, error) {
+	pubBytes, err := crypto.MarshalPublicKey(privKey.GetPublic())
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal public key: %w", err)
 	}
+	ts := time.Now().UnixMilli()
+	sig, err := privKey.Sign(api.RegisterChallenge(peerID.String(), ts))
+	if err != nil {
+		return nil, fmt.Errorf("failed to sign registration challenge: %w", err)
+	}
 
 	req := &api.EnrollRequest{
-		Jwt:           jwt,
-		PeerId:        peerID.String(),
-		PublicKey:     pubBytes,
-		RequestedRole: n.config.RequiredRole,
-		Labels:        n.labels(),
+		Jwt:                jwt,
+		PeerId:             peerID.String(),
+		PublicKey:          pubBytes,
+		RequestedRole:      n.config.RequiredRole,
+		Labels:             n.labels(),
+		Timestamp:          ts,
+		ChallengeSignature: sig,
 	}
 	data, err := proto.Marshal(req)
 	if err != nil {
@@ -105,7 +112,7 @@ func (n *SamNode) enrollHTTP(ctx context.Context, controlPlaneURL, jwt string, p
 	}
 	httpReq.Header.Set("Content-Type", "application/x-protobuf")
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := controlPlaneHTTPClient(30 * time.Second)
 	resp, err := client.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("HTTP request failed: %v", err)
@@ -136,17 +143,17 @@ func (n *SamNode) ReEnrollWithRefreshToken(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to derive peer ID from stored key: %w", err)
 	}
-	_, err = n.enrollHTTP(ctx, controlPlaneURL, jwt, peerID, privKey.GetPublic())
+	_, err = n.enrollHTTP(ctx, controlPlaneURL, jwt, peerID, privKey)
 	return err
 }
 
 func (n *SamNode) processEnrollResponse(resp *http.Response) (*api.EnrollResponse, error) {
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxControlPlaneBodyBytes))
 		return nil, fmt.Errorf("enrollment failed with status %s: %s", resp.Status, string(body))
 	}
 
-	respData, err := io.ReadAll(resp.Body)
+	respData, err := io.ReadAll(io.LimitReader(resp.Body, maxControlPlaneBodyBytes))
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %v", err)
 	}
@@ -248,7 +255,7 @@ func (n *SamNode) EnrollBootstrap(ctx context.Context, controlPlaneURL string, b
 	enrollURL := controlPlaneURL + "/enroll"
 	logger.Infof("Enrolling via Bootstrap token at %s", enrollURL)
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := controlPlaneHTTPClient(30 * time.Second)
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", enrollURL, bytes.NewReader(data))
 	if err != nil {
 		return fmt.Errorf("failed to create HTTP request: %w", err)
@@ -262,11 +269,11 @@ func (n *SamNode) EnrollBootstrap(ctx context.Context, controlPlaneURL string, b
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxControlPlaneBodyBytes))
 		return fmt.Errorf("enrollment failed with status %s: %s", resp.Status, string(body))
 	}
 
-	respData, err := io.ReadAll(resp.Body)
+	respData, err := io.ReadAll(io.LimitReader(resp.Body, maxControlPlaneBodyBytes))
 	if err != nil {
 		return fmt.Errorf("failed to read response body: %w", err)
 	}
@@ -322,13 +329,13 @@ func (n *SamNode) EnrollBootstrap(ctx context.Context, controlPlaneURL string, b
 				}
 
 				if hResp.StatusCode != http.StatusOK {
-					body, _ := io.ReadAll(hResp.Body)
+					body, _ := io.ReadAll(io.LimitReader(hResp.Body, maxControlPlaneBodyBytes))
 					_ = hResp.Body.Close()
 					logger.Warnf("Status check returned status %s: %s", hResp.Status, string(body))
 					continue
 				}
 
-				hRespData, err := io.ReadAll(hResp.Body)
+				hRespData, err := io.ReadAll(io.LimitReader(hResp.Body, maxControlPlaneBodyBytes))
 				_ = hResp.Body.Close()
 				if err != nil {
 					logger.Warnf("Failed to read status response body: %v", err)

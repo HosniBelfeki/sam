@@ -36,6 +36,7 @@ import (
 	"github.com/google/sam/api"
 	"github.com/google/sam/internal/controlplane"
 	"github.com/google/sam/internal/identity"
+	"github.com/google/sam/internal/ratelimit"
 	"github.com/google/sam/internal/storage"
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/crypto"
@@ -233,11 +234,18 @@ func TestRouterIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	regTS := time.Now().UnixMilli()
+	regSig, err := nodePrivKey.Sign(api.RegisterChallenge(nodePeerID.String(), regTS))
+	if err != nil {
+		t.Fatal(err)
+	}
 	enrollNodeReq := &api.EnrollRequest{
-		Jwt:           nodeJWT,
-		PeerId:        nodePeerID.String(),
-		PublicKey:     nodePubKeyBytes,
-		RequestedRole: api.RoleNode,
+		Jwt:                nodeJWT,
+		PeerId:             nodePeerID.String(),
+		PublicKey:          nodePubKeyBytes,
+		RequestedRole:      api.RoleNode,
+		Timestamp:          regTS,
+		ChallengeSignature: regSig,
 	}
 	reqData, _ := proto.Marshal(enrollNodeReq)
 	resp, err := client.Post(cpURL+"/register", "application/x-protobuf", bytes.NewReader(reqData))
@@ -538,6 +546,7 @@ func TestRouterLeaseRenewalRepeated401Terminates(t *testing.T) {
 
 	r := &Router{
 		Host:         h,
+		privKey:      h.Peerstore().PrivKey(h.ID()),
 		biscuitToken: []byte("dummy-biscuit"),
 		config: Options{
 			ControlPlaneURL: ts.URL,
@@ -899,6 +908,95 @@ func TestPerformMutualAuth(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The router's /sam/auth handler is reachable by any internet peer. An idle
+// stream must be closed on the router's schedule, and a peer handshaking in a
+// tight loop must be cut off before every frame is verified.
+func TestHandleAuthHandshakeBoundsUnauthenticatedPeers(t *testing.T) {
+	cpPub, cpPriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	serverHost, err := libp2p.New(libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = serverHost.Close() }()
+	clientHost, err := libp2p.New(libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = clientHost.Close() }()
+
+	r, err := NewRouter(ctx, Options{BiscuitTimeout: time.Second, RequiredRole: api.RoleRouter})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Host = serverHost
+	r.biscuitToken = []byte("router-biscuit")
+	r.trustedPublicKeys = []ed25519.PublicKey{cpPub}
+	serverHost.SetStreamHandler(api.AuthProtocolID, r.HandleAuthHandshake)
+	if err := clientHost.Connect(ctx, peer.AddrInfo{ID: serverHost.ID(), Addrs: serverHost.Addrs()}); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("idle stream is closed by the deadline", func(t *testing.T) {
+		old := authHandshakeTimeout
+		authHandshakeTimeout = 200 * time.Millisecond
+		t.Cleanup(func() { authHandshakeTimeout = old })
+
+		s, err := clientHost.NewStream(ctx, serverHost.ID(), api.AuthProtocolID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = s.Close() }()
+		if err := s.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		start := time.Now()
+		if _, err := msgio.NewVarintReaderSize(s, 1024*64).ReadMsg(); err == nil {
+			t.Fatal("idle handshake stream answered")
+		}
+		if took := time.Since(start); took > 4*time.Second {
+			t.Fatalf("idle stream was held for %v; the router did not apply its own deadline", took)
+		}
+	})
+
+	t.Run("tight loop is rate limited", func(t *testing.T) {
+		token, err := identity.MintBootstrapBiscuitToken(cpPriv, clientHost.ID(), api.RoleNode, time.Now().Add(time.Hour), nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		frame, err := proto.Marshal(&api.AuthFrame{Biscuit: token})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		attempts := 3 * ratelimit.PeerBurst
+		answered := 0
+		for i := 0; i < attempts; i++ {
+			s, err := clientHost.NewStream(ctx, serverHost.ID(), api.AuthProtocolID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = s.SetDeadline(time.Now().Add(5 * time.Second))
+			if err := msgio.NewVarintWriter(s).WriteMsg(frame); err == nil {
+				if _, err := msgio.NewVarintReaderSize(s, 1024*64).ReadMsg(); err == nil {
+					answered++
+				}
+			}
+			_ = s.Close()
+		}
+		if answered < ratelimit.PeerBurst {
+			t.Errorf("only %d of the first %d handshakes answered; limiter is too strict", answered, ratelimit.PeerBurst)
+		}
+		if answered == attempts {
+			t.Errorf("all %d back-to-back handshakes were verified; no per-peer limit applied", attempts)
+		}
+	})
 }
 
 // reconcileBannedPeers replaces the blocklist with the control plane's ban

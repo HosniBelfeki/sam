@@ -16,6 +16,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/signal"
 	"strings"
@@ -27,6 +28,7 @@ import (
 	"github.com/google/sam/internal/secrets"
 	"github.com/google/sam/internal/storage"
 	golog "github.com/ipfs/go-log/v2"
+	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/spf13/cobra"
 )
 
@@ -170,16 +172,31 @@ func main() {
 	}
 
 	var peerIDFlag string
+	// setBan is the CLI counterpart of POST /admin/revoke and
+	// POST /admin/nodes/{peer}/unban: same canonicalization, same node and
+	// identity halves. A raw --peer used to match zero rows and still print
+	// "Successfully banned".
+	setBan := func(ctx context.Context, rawPeer string, banned bool) error {
+		pID, err := peer.Decode(rawPeer)
+		if err != nil {
+			return fmt.Errorf("invalid peer ID %q: %w", rawPeer, err)
+		}
+		store, err := storage.NewSQLStore(dbDriver, dbDSN)
+		if err != nil {
+			return fmt.Errorf("failed to initialize database store: %w", err)
+		}
+		defer store.Close() //nolint:errcheck
+		node, err := store.GetNode(ctx, pID.String())
+		if err != nil {
+			return fmt.Errorf("node %s: %w", pID, err)
+		}
+		return controlplane.SetNodeBan(ctx, store, node, banned)
+	}
 	banCmd := &cobra.Command{
 		Use:   "ban",
-		Short: "Ban a node peer ID",
+		Short: "Ban a node peer ID and the identity that enrolled it",
 		Run: func(cmd *cobra.Command, args []string) {
-			store, err := storage.NewSQLStore(dbDriver, dbDSN)
-			if err != nil {
-				logger.Fatalf("Failed to initialize database store: %v", err)
-			}
-			defer store.Close() //nolint:errcheck
-			if err := store.SetNodeBanned(cmd.Context(), peerIDFlag, true); err != nil {
+			if err := setBan(cmd.Context(), peerIDFlag, true); err != nil {
 				logger.Fatalf("Failed to ban node: %v", err)
 			}
 			logger.Infof("Successfully banned node %s", peerIDFlag)
@@ -190,14 +207,9 @@ func main() {
 
 	unbanCmd := &cobra.Command{
 		Use:   "unban",
-		Short: "Unban a node peer ID",
+		Short: "Unban a node peer ID and the identity that enrolled it",
 		Run: func(cmd *cobra.Command, args []string) {
-			store, err := storage.NewSQLStore(dbDriver, dbDSN)
-			if err != nil {
-				logger.Fatalf("Failed to initialize database store: %v", err)
-			}
-			defer store.Close() //nolint:errcheck
-			if err := store.SetNodeBanned(cmd.Context(), peerIDFlag, false); err != nil {
+			if err := setBan(cmd.Context(), peerIDFlag, false); err != nil {
 				logger.Fatalf("Failed to unban node: %v", err)
 			}
 			logger.Infof("Successfully unbanned node %s", peerIDFlag)

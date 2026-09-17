@@ -39,6 +39,7 @@ import (
 	"github.com/google/sam/api"
 	"github.com/google/sam/internal/identity"
 	samdiscovery "github.com/google/sam/internal/node/discovery"
+	"github.com/google/sam/internal/ratelimit"
 	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/ipfs/go-cid"
 	golog "github.com/ipfs/go-log/v2"
@@ -120,7 +121,9 @@ func (a *nodeRelayACL) AllowReserve(p peer.ID, addr multiaddr.Multiaddr) bool {
 }
 
 func (a *nodeRelayACL) AllowConnect(src peer.ID, srcAddr multiaddr.Multiaddr, dest peer.ID) bool {
-	return a.node.isAdmitted(dest)
+	// Both ends: an unauthenticated source could otherwise open circuits to
+	// every admitted peer through this node.
+	return a.node.isAdmitted(src) && a.node.isAdmitted(dest)
 }
 
 // isAdmitted reports whether a peer completed the auth handshake and its token
@@ -149,8 +152,6 @@ type SamNode struct {
 	RouterPeerID         peer.ID
 	authenticatedRouters map[peer.ID]bool
 	peerLastEventTime    map[string]int64
-	receivedMsgs         map[string][]string
-	topics               map[string]*pubsub.Topic
 	mu                   sync.Mutex
 	nodeConfig           *NodeConfigComplete
 	revokedPeers         *lru.Cache[string, int64]
@@ -160,11 +161,15 @@ type SamNode struct {
 	keysMu               sync.RWMutex
 	MeshPolicyRules      []biscuit.Rule
 	MeshPolicyMu         sync.RWMutex
-	rateLimiter          *PeerRateLimiter
-	services             *ServiceRegistry
-	BoundHTTPAddr        string
-	BoundSocketPath      string
-	AllowLoopback        bool
+	rateLimiter          *ratelimit.PeerRateLimiter
+	// handshakeLimiter bounds /sam/auth attempts per peer separately from
+	// rateLimiter, so a peer's authenticated traffic cannot starve its own
+	// re-authentication and vice versa.
+	handshakeLimiter *ratelimit.PeerRateLimiter
+	services         *ServiceRegistry
+	BoundHTTPAddr    string
+	BoundSocketPath  string
+	AllowLoopback    bool
 
 	authSuccess      chan struct{}
 	authOnce         sync.Once
@@ -279,8 +284,6 @@ func NewSamNode(cfg Options) (*SamNode, error) {
 		Store:                cfg.Store,
 		trustedKeys:          trustedKeys,
 		peerLastEventTime:    make(map[string]int64),
-		receivedMsgs:         make(map[string][]string),
-		topics:               make(map[string]*pubsub.Topic),
 		authenticatedRouters: make(map[peer.ID]bool),
 		nodeConfig:           cfg.NodeConfig,
 		AllowLoopback:        cfg.AllowLoopback,
@@ -291,9 +294,13 @@ func NewSamNode(cfg Options) (*SamNode, error) {
 	}
 
 	var err error
-	node.rateLimiter, err = NewPeerRateLimiter(RateLimiterSize)
+	node.rateLimiter, err = ratelimit.NewPeerRateLimiter(RateLimiterSize)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create rate limiter: %w", err)
+	}
+	node.handshakeLimiter, err = ratelimit.NewPeerRateLimiter(RateLimiterSize)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create handshake rate limiter: %w", err)
 	}
 	node.revokedPeers, err = lru.New[string, int64](RevocationCacheSize)
 	if err != nil {
@@ -558,12 +565,24 @@ func (n *SamNode) Start(ctx context.Context) error {
 		}
 	}
 
-	// Initialize Gossipsub for control plane events
-	ps, err := pubsub.NewGossipSub(ctx, h)
+	// Initialize Gossipsub for control plane events. StrictSign is the
+	// library default; it is pinned because the event validator and the
+	// per-author rate limit key on msg.GetFrom(), which only the signature
+	// makes trustworthy.
+	ps, err := pubsub.NewGossipSub(ctx, h, pubsub.WithMessageSignaturePolicy(pubsub.StrictSign))
 	if err != nil {
 		return err
 	}
 	n.PubSub = ps
+	// Validate control-plane events before GossipSub accepts or re-forwards
+	// them: one ed25519 verify per message, so a peer flooding the topic with
+	// junk costs itself the verify and never reaches the subscriber or the
+	// next hop. Without this the rate limit ran first, keyed on the
+	// forwarding peer, and a flood via the router exhausted the router's
+	// budget so real ban and rotation events were dropped.
+	if err := ps.RegisterTopicValidator(api.GossipEvents, n.validateMeshEvent); err != nil {
+		return fmt.Errorf("register mesh event validator: %w", err)
+	}
 
 	// Interest-scoped service announcements (provider + consumer roles).
 	n.Discovery = samdiscovery.New(ps, h.ID())
@@ -1108,7 +1127,7 @@ func (n *SamNode) RefreshEnrollment(ctx context.Context) error {
 	b64Biscuit := base64.StdEncoding.EncodeToString(currentBiscuit)
 	httpReq.Header.Set("Authorization", "Bearer "+b64Biscuit)
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := controlPlaneHTTPClient(30 * time.Second)
 	resp, err := client.Do(httpReq)
 	if err != nil {
 		return fmt.Errorf("http request failed: %w", err)
@@ -1116,22 +1135,25 @@ func (n *SamNode) RefreshEnrollment(ctx context.Context) error {
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusForbidden {
-		logger.Errorf("Refresh rejected: Node is banned (403 Forbidden). Initiating hard-kill.")
-		if n.Host != nil {
-			_ = n.Host.Close()
+		// Not fatal on its own: a 403 is a claim by whoever answered, and
+		// only a verified MeshEvent_BANNED is the control plane's word. The
+		// node keeps serving on its current biscuit until that expires.
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxControlPlaneBodyBytes))
+		return &RefreshError{
+			StatusCode: resp.StatusCode,
+			Message:    fmt.Sprintf("refresh refused (403 Forbidden): %s", string(body)),
 		}
-		os.Exit(1)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxControlPlaneBodyBytes))
 		return &RefreshError{
 			StatusCode: resp.StatusCode,
 			Message:    fmt.Sprintf("refresh failed with status %s: %s", resp.Status, string(body)),
 		}
 	}
 
-	respData, err := io.ReadAll(resp.Body)
+	respData, err := io.ReadAll(io.LimitReader(resp.Body, maxControlPlaneBodyBytes))
 	if err != nil {
 		return fmt.Errorf("failed to read response: %w", err)
 	}
@@ -1145,6 +1167,13 @@ func (n *SamNode) RefreshEnrollment(ctx context.Context) error {
 		return fmt.Errorf("refresh error: %s", refreshResp.ErrorMessage)
 	}
 
+	// Same checks as enrollment: the token must be signed by a key this node
+	// already trusts and carry the role it runs as, or a response from the
+	// wrong party would replace a good identity with a useless one.
+	if err := n.verifyOwnBiscuit(refreshResp.BiscuitToken); err != nil {
+		return fmt.Errorf("refreshed biscuit rejected: %w", err)
+	}
+
 	// Save new biscuit and its expiration
 	if err := n.Store.SaveIdentity(refreshResp.BiscuitToken); err != nil {
 		return fmt.Errorf("failed to save refreshed identity: %w", err)
@@ -1155,6 +1184,44 @@ func (n *SamNode) RefreshEnrollment(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// verifyOwnBiscuit checks a token the control plane handed this node: signed
+// by a trusted key, bound to this peer, and carrying the configured role.
+func (n *SamNode) verifyOwnBiscuit(token []byte) error {
+	if len(token) == 0 {
+		return errors.New("empty biscuit token")
+	}
+	n.keysMu.RLock()
+	trusted := publicKeysOf(n.trustedKeys)
+	n.keysMu.RUnlock()
+	if len(trusted) == 0 {
+		return errors.New("no trusted control plane keys loaded")
+	}
+	var peerID peer.ID
+	if n.Host != nil {
+		peerID = n.Host.ID()
+	} else {
+		privBytes, err := n.Store.LoadKey()
+		if err != nil {
+			return fmt.Errorf("load node key: %w", err)
+		}
+		priv, err := crypto.UnmarshalPrivateKey(privBytes)
+		if err != nil {
+			return fmt.Errorf("corrupted node key: %w", err)
+		}
+		if peerID, err = peer.IDFromPrivateKey(priv); err != nil {
+			return err
+		}
+	}
+	_, key, err := identity.VerifyBiscuitAndGetKey(token, peerID, trusted, n.BiscuitTimeout)
+	if err != nil {
+		return err
+	}
+	if n.config.RequiredRole == "" {
+		return nil
+	}
+	return identity.VerifyBiscuitRole(token, key, n.config.RequiredRole, n.BiscuitTimeout)
 }
 
 func (n *SamNode) renewWithRefreshToken(ctx context.Context, clientSecret string) (string, error) {
@@ -1223,32 +1290,18 @@ func (n *SamNode) listenForControlPlaneEvents(ctx context.Context) {
 			return
 		}
 
-		if !n.rateLimiter.Allow(msg.ReceivedFrom.String()) {
-			logger.Warnw("[Mesh Event] rate limit exceeded, dropping message", "event", meshEventRateLimitDrop, "peer", msg.ReceivedFrom.String())
+		// validateMeshEvent already rejected anything unsigned, misspelled or
+		// stale; what arrives here is a genuine control-plane event. The limit
+		// is on the author, so a burst from one control plane cannot be
+		// blamed on the router that relayed it.
+		if !n.rateLimiter.Allow(msg.GetFrom().String()) {
+			logger.Warnw("[Mesh Event] rate limit exceeded, dropping message", "event", meshEventRateLimitDrop, "peer", msg.GetFrom().String())
 			continue
 		}
 
 		var event api.MeshEvent
 		if err := proto.Unmarshal(msg.Data, &event); err != nil {
 			logger.Errorf("[Mesh Event] Failed to unmarshal event from %s: %v", msg.ReceivedFrom, err)
-			continue
-		}
-
-		// Since the signature is verified against our list of trusted control plane public keys
-		// in verifyEvent below, any message with a valid signature is cryptographically
-		// proven to have been authored by one of the control planes. We do not restrict msg.GetFrom()
-		// to a single RouterPeerID because there can be multiple control plane replicas in a cluster,
-		// each with its own PeerID.
-
-		if !n.verifyEvent(&event) {
-			logger.Warnw("[Mesh Event] potential spoofing attempt: invalid event signature", "event", meshEventSpoofingAttempt, "peer", msg.ReceivedFrom.String())
-			continue
-		}
-
-		// Freshness check: reject events older than the threshold to prevent replay attacks
-		eventTime := time.UnixMilli(event.Timestamp)
-		if time.Since(eventTime) > FreshnessThreshold || time.Until(eventTime) > FreshnessThreshold {
-			logger.Warnw("[Mesh Event] dropping stale or future event", "event", meshEventStaleEvent, "peer", msg.ReceivedFrom.String(), "timestamp", event.Timestamp)
 			continue
 		}
 
@@ -1431,45 +1484,28 @@ func (n *SamNode) verifyEvent(event *api.MeshEvent) bool {
 	return false
 }
 
-func (n *SamNode) subscribeToTopic(ctx context.Context, topicName string) error {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	if _, ok := n.topics[topicName]; ok {
-		return nil
+// validateMeshEvent is the GossipSub validator for api.GossipEvents. Reject
+// means the message is dropped and not re-forwarded; the signature is checked
+// against the trusted control-plane keys, so any peer whose libp2p key
+// signed the pubsub envelope still cannot get an unsigned event past here. A
+// stale event is ignored rather than rejected: it may be a genuine event
+// that arrived late, and there is no reason to penalize its forwarder.
+func (n *SamNode) validateMeshEvent(_ context.Context, from peer.ID, msg *pubsub.Message) pubsub.ValidationResult {
+	var event api.MeshEvent
+	if err := proto.Unmarshal(msg.Data, &event); err != nil {
+		logger.Warnw("[Mesh Event] rejecting undecodable event", "event", meshEventSpoofingAttempt, "peer", from.String())
+		return pubsub.ValidationReject
 	}
-
-	topic, err := n.PubSub.Join(topicName)
-	if err != nil {
-		return err
+	if !n.verifyEvent(&event) {
+		logger.Warnw("[Mesh Event] potential spoofing attempt: invalid event signature", "event", meshEventSpoofingAttempt, "peer", from.String())
+		return pubsub.ValidationReject
 	}
-
-	sub, err := topic.Subscribe()
-	if err != nil {
-		return err
+	eventTime := time.UnixMilli(event.Timestamp)
+	if time.Since(eventTime) > FreshnessThreshold || time.Until(eventTime) > FreshnessThreshold {
+		logger.Warnw("[Mesh Event] dropping stale or future event", "event", meshEventStaleEvent, "peer", from.String(), "timestamp", event.Timestamp)
+		return pubsub.ValidationIgnore
 	}
-
-	n.topics[topicName] = topic
-
-	logger.Infof("[PubSub] Started subscription background loop for topic: %s", topicName)
-	go func() {
-		defer func() {
-			sub.Cancel()
-			logger.Infof("[PubSub] Exited subscription background loop for topic: %s", topicName)
-		}()
-		for {
-			msg, err := sub.Next(context.Background())
-			if err != nil {
-				logger.Errorf("[PubSub] subscription Next() error for topic %s: %v", topicName, err)
-				return
-			}
-			logger.Debugf("[PubSub] Received message on topic %s from %s: %s", topicName, msg.ReceivedFrom, string(msg.Data))
-			n.mu.Lock()
-			n.receivedMsgs[topicName] = append(n.receivedMsgs[topicName], string(msg.Data))
-			n.mu.Unlock()
-		}
-	}()
-	return nil
+	return pubsub.ValidationAccept
 }
 
 func (n *SamNode) startDiscovery(ctx context.Context, meshID string, interval time.Duration) {
@@ -1547,6 +1583,13 @@ func (n *SamNode) getTrustedPublicKeys() []ed25519.PublicKey {
 	return keys
 }
 
+// authHandshakeTimeout bounds how long an unauthenticated peer may hold a
+// /sam/auth stream open: it has to send its frame and read the reply within
+// it. Any internet peer can open these streams, so without a deadline each
+// one is a goroutine held for as long as the peer likes. A var so tests can
+// shorten it.
+var authHandshakeTimeout = 10 * time.Second
+
 // HandleAuthHandshake is the core libp2p stream handler for /sam/auth/1.0.0.
 // This is the "Admission Office" of the mesh node.
 func (n *SamNode) HandleAuthHandshake(s network.Stream) {
@@ -1562,6 +1605,15 @@ func (n *SamNode) HandleAuthHandshake(s network.Stream) {
 			logger.Warnf("[AuthN] Peer %s is revoked", remotePeer)
 			return
 		}
+	}
+
+	if n.handshakeLimiter != nil && !n.handshakeLimiter.Allow(remotePeer.String()) {
+		logger.Warnf("[AuthN] Handshake rate limit exceeded for %s", remotePeer)
+		_ = s.Reset()
+		return
+	}
+	if err := s.SetDeadline(time.Now().Add(authHandshakeTimeout)); err != nil {
+		logger.Debugf("[AuthN] Failed to set handshake deadline for %s: %v", remotePeer, err)
 	}
 
 	reader := msgio.NewVarintReaderSize(s, 1024*64)
@@ -1983,8 +2035,15 @@ func (n *SamNode) StartIngressServer(ctx context.Context) error {
 				)
 			}()
 
-			logger.Infof("[Ingress] Received request: %s %s", r.Method, r.URL.Path)
+			// The path is remote-controlled and the peer is not yet authorized:
+			// it is logged only after VerifyBiscuitToken passes.
 			path := r.URL.Path
+			// Policy is decided on the /{type}/{name} prefix; a ".." segment in
+			// what follows could resolve to a sibling service on a shared backend.
+			if hasDotSegment(path) {
+				http.Error(w, "Invalid path", http.StatusBadRequest)
+				return
+			}
 			parts := strings.SplitN(strings.TrimPrefix(path, "/"), "/", 3)
 			if len(parts) < 2 {
 				http.Error(w, "Invalid path", http.StatusBadRequest)
@@ -2048,9 +2107,11 @@ func (n *SamNode) StartIngressServer(ctx context.Context) error {
 			r.Header.Del(api.HeaderSamNoTrailingSlash)
 			r.Header.Set(api.HeaderPeerID, remotePeer.String())
 
-			svc, ok := n.services.Get(serviceName)
+			// Under the type the policy was evaluated on: a same-named service
+			// of another type is not what the caller was granted.
+			svc, ok := n.services.GetTyped(serviceType, serviceName)
 			if !ok {
-				logger.Errorf("[Ingress] Service not found: %s", serviceName)
+				logger.Errorf("[Ingress] Service not found: %s", truncateForLog(target))
 				http.Error(w, "Service not found", http.StatusNotFound)
 				return
 			}
@@ -2059,7 +2120,7 @@ func (n *SamNode) StartIngressServer(ctx context.Context) error {
 				http.Error(w, "Service not found", http.StatusNotFound)
 				return
 			}
-			logger.Infof("[Ingress] Forwarding to service %s, upstreamPath: %q", serviceName, upstreamPath)
+			logger.Infof("[Ingress] %s from %s: forwarding to service %s, upstreamPath: %q", r.Method, remotePeer, serviceName, truncateForLog(upstreamPath))
 
 			if upstreamPath == "" {
 				r.URL.Path = "/"

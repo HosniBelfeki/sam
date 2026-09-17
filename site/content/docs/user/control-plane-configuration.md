@@ -39,13 +39,14 @@ The Router is a dedicated GossipSub helper that maintains stable network address
 
 | CLI Flag | Default Value | Description |
 | :--- | :--- | :--- |
-| `--control-plane` | `http://127.0.0.1:8080` | Control Plane web service URL. |
+| `--control-plane` | `http://127.0.0.1:8080` | Control Plane web service URL. Plaintext `http://` is accepted only for a loopback host. |
+| `--insecure-control-plane` | `false` | Accept a plaintext `http://` control-plane URL to a non-loopback host (e.g. an in-cluster Service). Whoever answers that URL becomes the router's trust root, so leave this off outside a network you already trust. The same flag exists on `sam-node`. |
 | `--listen` | `/ip4/0.0.0.0/tcp/5001`, `/ip6/::/tcp/5001` | Comma-separated libp2p multiaddrs to listen on. |
 | `--external-addr` | *None* | External multiaddrs to announce to control plane. |
 | `--keys-path` | `router.key` | Path to save/load persistent private key (determines Peer ID). |
 | `--jwt-path` | *None* | Path to file containing OIDC JWT token for enrollment. |
 | `--oidc-token` | *None* | Direct OIDC ID token or bootstrap secret token for enrollment. |
-| `--keys-sync-interval` | `5m` | Key synchronization polling interval. |
+| `--keys-sync-interval` | `5m` | Key synchronization polling interval. `GET /keys` returns the valid key set signed by every key in it; the router (and nodes, at start-up) accept the set only if one of those signatures verifies under a key they already trust, so the first key always comes from enrollment and a rotation is learned from the retiring key. |
 | `--lease-renew-interval` | `300s` | Lease renewal registration interval. |
 | `--allow-loopback` | `false` | Allow loopback and link-local addresses for discovery (development only). |
 
@@ -56,7 +57,7 @@ The Router is a dedicated GossipSub helper that maintains stable network address
 The Control Plane dynamically issues permissions inside the Biscuit token based on identity claims (users or groups) mapped to specific roles in the database.
 
 The policy defines what endpoints and services agents are permitted to use:
-* **`allowed_targets`**: Restricts which logical endpoints the agent can route connections to. Use resolved Biscuit facts: `group:<name>`, `user:<sub-id>`, `email:<email>`, `role:<role-name>`, or `node:<peer-id>`.
+* **`allowed_targets`**: Restricts which logical endpoints the agent can route connections to. Use resolved Biscuit facts: `group:<name>`, `user:<sub-id>`, `email:<email>`, `idp_role:<role-name>` (the issuer's `roles` claim), or `node:<peer-id>`. Mesh roles (`role(...)`) are never a target or a binding member: they are what bindings grant, and an issuer must not be able to hand one out by emitting it as a claim.
 * **`allowed_services`**: Restricts the application-level services the agent can invoke. Services are prefixed by their protocol type and URI scheme (e.g., `mcp://local-shell-tools` or `inference://openrouter`). Wildcards are supported (e.g., `mcp://*`). The service is deliberately the unit of authorization: a grant offers the service's whole tool surface, so publish different privilege tiers as different services (e.g. `mcp://db-reader` vs `mcp://db-writer`) rather than expecting the mesh to filter tools inside one backend.
 * **`allowed_agents`**: The agent namespaces a node with this role can use. When a node forwards a request for a sandboxed agent, it sends the agent's name with it. The receiving node accepts that name only if it falls inside one of these namespaces. A node with no `allowed_agents` grant cannot name any agent. Accepted patterns are `*.prod.acme.example`, `acme.*`, an exact ID such as `reviewer-7.prod.acme.example`, or `*` for any agent.
 * **`allowed_labels`**: The labels a node with this role may declare when it enrolls, as `*`, `key=*` or `key=value`. A node sends its own labels in its enrollment request, so this is what decides which of them the control plane is willing to sign into `label()` facts. A role granting none means a node holding it can declare none. Peers gate on those facts with `required_labels`, so a node that could declare anything could satisfy any such requirement.
@@ -85,7 +86,7 @@ Admins manage policies by sending a JSON payload to the `/policies` endpoint.
     },
     {
       "name": "admin-role",
-      "allowed_targets": ["group:all-nodes", "role:admin"],
+      "allowed_targets": ["group:all-nodes", "idp_role:admin"],
       "allowed_services": ["mcp://*", "inference://*", "system://*"]
     }
   ],
@@ -186,7 +187,9 @@ Nodes and Routers run a background task that periodically checks the remaining B
 
 The bootstrap surface requires the same proof of possession end to end. `POST /enroll` carries a signed timestamp challenge in the request body (`timestamp`/`challenge_signature`, and `peer_id` must be derived from the submitted `public_key`), so a bootstrap token alone can never mint — or re-fetch — another peer's Biscuit. `GET /enroll/status` answers only when the caller signs the peer-bound challenge with that same key, sent in the `X-Sam-Challenge-Ts` and `X-Sam-Challenge-Sig` headers (headers rather than query parameters, so signatures stay out of access logs). Anything else — no signature, a stale timestamp, another key, an unknown peer — receives a uniform `401`, so an approved enrollment's Biscuit is only ever released to the enrollee itself.
 
-All three challenges share one shape — the UTF-8 bytes of `sam:<endpoint>:<peer_id>:<unix-millis>` (`sam:enroll:…`, `sam:enroll-status:…`, `sam:refresh:…`), signed by the peer's identity key and accepted within a ±5-minute freshness window. Binding the peer and the endpoint into the signed payload means a signature captured from any one request verifies nowhere else.
+The OIDC surface and the router surface follow suit. `POST /register` carries the same `timestamp`/`challenge_signature` pair over `sam:register:…`, with `peer_id` derived from `public_key`: the ID token says who is asking, the signature says they hold the key they are binding, so an identity with a node binding cannot register — and overwrite — another node's `peer_id`. `POST /routers/lease` requires a challenge over `sam:routers-lease:…` signed with the key the router enrolled with; its Biscuit alone is not proof, because routers hand it to every peer they authenticate during the mutual handshake.
+
+All five challenges share one shape — the UTF-8 bytes of `sam:<endpoint>:<peer_id>:<unix-millis>` (`sam:register:…`, `sam:enroll:…`, `sam:enroll-status:…`, `sam:refresh:…`, `sam:routers-lease:…`), signed by the peer's identity key and accepted within a ±5-minute freshness window. Binding the peer and the endpoint into the signed payload means a signature captured from any one request verifies nowhere else. Libp2p's secure channel already proves key possession on every peer-to-peer stream; these challenges exist because the Control Plane API is plain HTTP, where a `peer_id` in a request body is otherwise just a claim.
 
 ### Signing-Key Retirement and Recovery
 
@@ -237,7 +240,10 @@ Administrators can immediately revoke any active session to disable a node's abi
     "peer_id": "12D3KooW..."
   }
   ```
-* **Enforcement**: Revoked nodes are marked as banned in the database. When the node next attempts a proactive `/refresh` handshake, the request is denied with a `403 Forbidden` status, and the node's local daemon immediately terminates.
+* **Enforcement**: Revoked nodes are marked as banned in the database. When the node next attempts a proactive `/refresh` handshake, the request is denied with a `403 Forbidden` status, and the node's local daemon immediately terminates. When the node was enrolled through OIDC, the identity behind it (`issuer|subject`) is banned as well: it can no longer `/register` a fresh keypair, use the `/user/*` API, or enroll anything with bootstrap tokens it minted earlier, and a queued enrollment on such a token is refused at approval.
+* **Lifting a ban**: `POST /admin/nodes/{peer_id}/unban` reverses both halves (node and identity). The `sam-control-plane admin ban|unban --peer` commands do the same directly against the database.
+
+Bootstrap tokens are spent atomically: a token's `max_usages` holds under concurrent enrollments, an approval re-checks that the token is still valid and unspent, and a pending request can be resolved exactly once. A Control Plane with no mesh policy mints Biscuits that carry the role and no grants at all; nothing is reachable until an administrator posts a policy.
 
 ---
 

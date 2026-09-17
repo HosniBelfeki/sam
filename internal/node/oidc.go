@@ -614,7 +614,7 @@ func parseTokenResponse(resp *http.Response) (jwt string, refreshToken string, e
 		}
 	}()
 
-	body, readErr := io.ReadAll(resp.Body)
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxControlPlaneBodyBytes))
 	if readErr != nil {
 		return "", "", readErr
 	}

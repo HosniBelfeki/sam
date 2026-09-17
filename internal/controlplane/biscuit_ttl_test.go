@@ -87,11 +87,14 @@ func registerNode(t *testing.T, cpURL, jwtToken string) (crypto.PrivKey, peer.ID
 		t.Fatal(err)
 	}
 
+	ts, sig := registerPoP(t, priv, peerID.String())
 	reqData, err := proto.Marshal(&api.EnrollRequest{
-		Jwt:           jwtToken,
-		PeerId:        peerID.String(),
-		PublicKey:     pubBytes,
-		RequestedRole: api.RoleNode,
+		Jwt:                jwtToken,
+		PeerId:             peerID.String(),
+		PublicKey:          pubBytes,
+		RequestedRole:      api.RoleNode,
+		Timestamp:          ts,
+		ChallengeSignature: sig,
 	})
 	if err != nil {
 		t.Fatal(err)

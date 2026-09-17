@@ -30,6 +30,16 @@ var (
 	// stops being servable. See EnrolledNode.CheckAdmission.
 	ErrNodeBanned         = errors.New("node is banned")
 	ErrNodeSessionExpired = errors.New("node session expired")
+
+	// ErrBootstrapTokenUnusable is returned by ConsumeBootstrapTokenUsage when
+	// the token is expired, revoked or has no usages left. One error for the
+	// three so a caller cannot tell them apart after the fact and race one.
+	ErrBootstrapTokenUnusable = errors.New("bootstrap token is expired, revoked or exhausted")
+
+	// ErrEnrollmentAlreadyResolved is returned by ResolveEnrollmentRequest
+	// when the request is no longer pending: someone else approved or
+	// rejected it first.
+	ErrEnrollmentAlreadyResolved = errors.New("enrollment request is already resolved")
 )
 
 // KeyPair holds cryptographic key information.
@@ -51,10 +61,19 @@ type RouterLease struct {
 
 // User represents a human identity in the mesh.
 type User struct {
+	// ID is the OIDC subject. Issuer is the OIDC issuer it came from: the
+	// pair is what an identity ban is keyed on (see SetIdentityBanned), and
+	// two issuers may hand out the same subject to different people.
 	ID        string
+	Issuer    string
 	Email     string
 	Role      string
 	CreatedAt time.Time
+}
+
+// IdentityKey is the "issuer|subject" form identity bans are keyed on.
+func (u *User) IdentityKey() string {
+	return u.Issuer + "|" + u.ID
 }
 
 // EnrolledNode represents a node enrolled in the mesh.
@@ -150,6 +169,10 @@ type Store interface {
 	// GetAllValidKeys retrieves the active key pair and any non-expired historical key pairs.
 	GetAllValidKeys(ctx context.Context) ([]KeyPair, error)
 
+	// GetAllValidPublicKeys is GetAllValidKeys for verifiers: the same key
+	// set without the private halves.
+	GetAllValidPublicKeys(ctx context.Context) ([]ed25519.PublicKey, error)
+
 	// RotateKeys rotates the current key to a new key pair and sets the expiration of the old key.
 	RotateKeys(ctx context.Context, newPriv ed25519.PrivateKey, newPub ed25519.PublicKey, gracePeriod time.Duration) error
 
@@ -184,7 +207,8 @@ type Store interface {
 	// GetNode retrieves node enrollment details.
 	GetNode(ctx context.Context, peerID string) (*EnrolledNode, error)
 
-	// SetNodeBanned updates the banned status of a node.
+	// SetNodeBanned updates the banned status of a node. ErrNotFound if no
+	// node has that peer ID.
 	SetNodeBanned(ctx context.Context, peerID string, banned bool) error
 
 	// IsNodeBanned checks if a node is currently banned.
@@ -226,8 +250,12 @@ type Store interface {
 	// GetBootstrapToken retrieves a bootstrap token by its ID (sha256 hash).
 	GetBootstrapToken(ctx context.Context, id string) (*BootstrapToken, error)
 
-	// IncrementBootstrapTokenUsage increments the usage count of a token.
-	IncrementBootstrapTokenUsage(ctx context.Context, id string) error
+	// ConsumeBootstrapTokenUsage spends one usage of a token, atomically
+	// with the check that a usage is left and that the token is neither
+	// expired (as of now) nor revoked. ErrBootstrapTokenUnusable when it is
+	// not: a read-then-increment would let concurrent enrollments overshoot
+	// max_usages.
+	ConsumeBootstrapTokenUsage(ctx context.Context, id string, now time.Time) error
 
 	// RevokeBootstrapToken soft-revokes a token by setting its RevokedAt, so
 	// HandleEnroll refuses it even though it may still be within its TTL and
@@ -250,6 +278,11 @@ type Store interface {
 
 	// UpdateEnrollmentRequest updates status, resolved details, and stored Biscuit of a request.
 	UpdateEnrollmentRequest(ctx context.Context, id string, status api.EnrollmentStatus, biscuit []byte, resolvedBy string) error
+
+	// ResolveEnrollmentRequest is UpdateEnrollmentRequest for a request that
+	// must still be pending: two admins acting on the same request cannot
+	// both succeed. ErrEnrollmentAlreadyResolved if it was not pending.
+	ResolveEnrollmentRequest(ctx context.Context, id string, status api.EnrollmentStatus, biscuit []byte, resolvedBy string) error
 
 	// ListNodes retrieves all enrolled nodes.
 	ListNodes(ctx context.Context) ([]EnrolledNode, error)

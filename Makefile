@@ -210,12 +210,13 @@ lint: fmt helm-lint
 # fast chart template checks; no cluster needed
 .PHONY: helm-test
 helm-test:
-	@helm plugin list 2>/dev/null | grep -q '^unittest' || helm plugin install https://github.com/helm-unittest/helm-unittest
+	@helm plugin list 2>/dev/null | grep -q '^unittest' || helm plugin install https://github.com/helm-unittest/helm-unittest --version 0.8.2
 	helm unittest charts/sam-mesh charts/sam-node
 
 .PHONY: verify
 verify:
 	./hack/verify-generated.sh
+	./hack/verify-secrets.sh
 
 update:
 	go mod tidy

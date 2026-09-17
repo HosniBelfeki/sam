@@ -74,6 +74,7 @@ var (
 	dataDirFlag               string
 	headlessFlag              bool
 	authModeFlag              string
+	insecureControlPlaneFlag  bool
 	daemonizeFlag             bool
 	resetAllFlag              bool
 	assumeYesFlag             bool
@@ -263,6 +264,15 @@ func main() {
 	rootCmd := &cobra.Command{
 		Use:   "sam-node",
 		Short: "Sovereign Agent Mesh Node",
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			node.SetAllowInsecureControlPlane(insecureControlPlaneFlag)
+			// The stored URL is checked at request time by the same policy;
+			// this only turns a flag-supplied URL into an immediate error.
+			if controlPlaneAddr != "" {
+				return api.ValidateControlPlaneTransport(normalizeControlPlaneURL(controlPlaneAddr), insecureControlPlaneFlag)
+			}
+			return nil
+		},
 	}
 
 	// RUN COMMAND: Start the Mesh
@@ -622,8 +632,6 @@ func main() {
 			// Start renewal loop
 			meshNode.StartRenewalLoop(ctx, oidcIssuerFlag, clientIDFlag, clientSecretFlag, jwtPathFlag)
 
-			meshNode.Host.SetStreamHandler(api.AuthProtocolID, meshNode.HandleAuthHandshake)
-
 			// Start Sidecar API Server (multiplexed with MCP)
 			sidecarSrv, err := node.StartSidecarServer(meshNode, bindAddrFlag, resolveSocketPath(cmd), apiTokenFlag, tlsCertFlag, tlsKeyFlag, tlsCAFlag)
 			if err != nil {
@@ -860,6 +868,7 @@ func main() {
 	runCmd.Flags().DurationVar(&policySyncIntervalFlag, "policy-sync-interval", 1*time.Hour, "Interval for syncing mesh policy from the control plane")
 	runCmd.Flags().DurationVar(&backendProbeTimeoutFlag, "backend-probe-timeout", 0, "Timeout for probing a command-spawned service backend before advertising it (0 uses default 2s); raise this for backends with slower cold-start times")
 	rootCmd.PersistentFlags().StringVar(&controlPlaneAddr, "control-plane", "", "Control plane URL")
+	rootCmd.PersistentFlags().BoolVar(&insecureControlPlaneFlag, "insecure-control-plane", false, "Accept a plaintext http:// control plane URL to a non-loopback host (whoever answers it becomes this node's trust root; only for networks you already trust)")
 	rootCmd.PersistentFlags().StringVar(&configFile, "config", node.DefaultConfigFile, "Path to sam-node.yaml configuration file")
 	rootCmd.PersistentFlags().StringVar(&oidcIssuerFlag, "oidc-issuer", "", "OIDC Issuer URL")
 	rootCmd.PersistentFlags().StringVar(&deviceAuthURLFlag, "device-auth-url", "", "OIDC Device Authorization URL")

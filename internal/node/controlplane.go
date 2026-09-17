@@ -30,6 +30,11 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// maxControlPlaneBodyBytes caps every response body read from the control
+// plane or an IdP: a misbehaving or impersonated server must not be able to
+// make the node buffer arbitrary amounts of memory.
+const maxControlPlaneBodyBytes = 1 << 20
+
 // FetchControlPlaneInfo retrieves the latest configuration from the control plane's /info endpoint.
 func FetchControlPlaneInfo(ctx context.Context, controlPlaneURL string) (*api.ControlPlaneInfoResponse, error) {
 	if !strings.HasPrefix(controlPlaneURL, "http://") && !strings.HasPrefix(controlPlaneURL, "https://") {
@@ -43,16 +48,14 @@ func FetchControlPlaneInfo(ctx context.Context, controlPlaneURL string) (*api.Co
 		return nil, fmt.Errorf("failed to create HTTP request: %w", err)
 	}
 
-	client := &http.Client{
-		Timeout: 10 * time.Second,
-	}
+	client := controlPlaneHTTPClient(10 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("HTTP request failed: %w", err)
 	}
 	defer resp.Body.Close() //nolint:errcheck
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxControlPlaneBodyBytes))
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
@@ -73,8 +76,9 @@ func FetchControlPlaneInfo(ctx context.Context, controlPlaneURL string) (*api.Co
 // plane public keys from the /keys endpoint — the same catch-up path routers
 // use. Enrollment only hands out the newest key, so this is how a node
 // learns keys still in their rotation grace period, or rotations it missed
-// while offline.
-func FetchControlPlaneKeys(ctx context.Context, controlPlaneURL string) ([]ed25519.PublicKey, error) {
+// while offline. The set is accepted only if signed by a key in trusted:
+// whoever answers /keys must already be the control plane, not become it.
+func FetchControlPlaneKeys(ctx context.Context, controlPlaneURL string, trusted []ed25519.PublicKey) ([]ed25519.PublicKey, error) {
 	if !strings.HasPrefix(controlPlaneURL, "http://") && !strings.HasPrefix(controlPlaneURL, "https://") {
 		controlPlaneURL = "https://" + controlPlaneURL
 	}
@@ -85,14 +89,14 @@ func FetchControlPlaneKeys(ctx context.Context, controlPlaneURL string) ([]ed255
 		return nil, fmt.Errorf("failed to create HTTP request: %w", err)
 	}
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := controlPlaneHTTPClient(10 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("HTTP request failed: %w", err)
 	}
 	defer resp.Body.Close() //nolint:errcheck
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxControlPlaneBodyBytes))
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
@@ -105,11 +109,9 @@ func FetchControlPlaneKeys(ctx context.Context, controlPlaneURL string) ([]ed255
 		return nil, fmt.Errorf("failed to decode /keys response: %w", err)
 	}
 
-	var keys []ed25519.PublicKey
-	for _, kb := range keysResp.PublicKeys {
-		if len(kb) == ed25519.PublicKeySize {
-			keys = append(keys, ed25519.PublicKey(kb))
-		}
+	keys, err := api.VerifyKeysResponse(&keysResp, trusted, time.Now())
+	if err != nil {
+		return nil, fmt.Errorf("/keys response rejected: %w", err)
 	}
 	return keys, nil
 }
@@ -193,15 +195,18 @@ func SyncMeshConfig(ctx context.Context, s *Store) ([]byte, []multiaddr.Multiadd
 			}
 		}
 
-		// Catch up on the valid key set: an empty result would wipe the trust
-		// set, so it is ignored like any fetch failure.
-		if keys, keysErr := FetchControlPlaneKeys(ctx, controlPlaneURL); keysErr != nil {
+		// Catch up on the valid key set. Verified against what is already
+		// trusted, so with nothing stored yet there is nothing to do: the
+		// first key comes from enrollment. An empty result would wipe the
+		// trust set, so it is ignored like any fetch failure.
+		existing, loadErr := s.LoadTrustedKeys()
+		if loadErr != nil {
+			logger.Warnf("Failed to load stored trusted keys, skipping key sync: %v", loadErr)
+		} else if len(existing) == 0 {
+			logger.Debugf("No trusted control plane keys stored yet; skipping /keys sync until enrolled")
+		} else if keys, keysErr := FetchControlPlaneKeys(ctx, controlPlaneURL, publicKeysOf(existing)); keysErr != nil {
 			logger.Warnf("Failed to fetch control plane keys via HTTP (using cached): %v", keysErr)
 		} else if len(keys) > 0 {
-			existing, loadErr := s.LoadTrustedKeys()
-			if loadErr != nil {
-				logger.Warnf("Failed to load stored trusted keys, replacing: %v", loadErr)
-			}
 			if saveErr := s.SaveTrustedKeys(mergeTrustedKeys(existing, keys, time.Now())); saveErr != nil {
 				logger.Errorf("Failed to save trusted keys to store: %v", saveErr)
 			}
@@ -209,6 +214,14 @@ func SyncMeshConfig(ctx context.Context, s *Store) ([]byte, []multiaddr.Multiadd
 	}
 
 	return pubKey, routerAddrs, bannedPeerIDs, nil
+}
+
+func publicKeysOf(keys []TrustedKey) []ed25519.PublicKey {
+	out := make([]ed25519.PublicKey, 0, len(keys))
+	for _, tk := range keys {
+		out = append(out, tk.Key)
+	}
+	return out
 }
 
 // FetchMeshPolicy retrieves the latest mesh policy from the control plane's /policies endpoint using a biscuit token.
@@ -226,16 +239,14 @@ func FetchMeshPolicy(ctx context.Context, controlPlaneURL string, biscuitToken [
 
 	req.Header.Set("Authorization", "Bearer "+base64.StdEncoding.EncodeToString(biscuitToken))
 
-	client := &http.Client{
-		Timeout: 10 * time.Second,
-	}
+	client := controlPlaneHTTPClient(10 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("HTTP request failed: %w", err)
 	}
 	defer resp.Body.Close() //nolint:errcheck
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxControlPlaneBodyBytes))
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
@@ -275,7 +286,7 @@ func ReportNodeCatalog(ctx context.Context, controlPlaneURL string, biscuitToken
 	req.Header.Set("Content-Type", "application/x-protobuf")
 	req.Header.Set("Authorization", "Bearer "+base64.StdEncoding.EncodeToString(biscuitToken))
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := controlPlaneHTTPClient(10 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("HTTP request failed: %w", err)

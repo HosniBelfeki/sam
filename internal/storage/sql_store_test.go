@@ -49,6 +49,54 @@ func newTestStore(t *testing.T) Store {
 	return store
 }
 
+// TestSQLiteFilesAreOwnerOnly pins the on-disk mode of the database and its
+// WAL side files: the keyring table holds the mesh signing private keys.
+func TestSQLiteFilesAreOwnerOnly(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "keys.db")
+	// A pre-existing world-readable file (e.g. created by an older release)
+	// must be tightened on open, not just newly created ones.
+	if err := os.WriteFile(dbPath, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewSQLStore("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLStore: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	// A write forces the WAL and SHM files into existence.
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+	if err := store.SaveInitialKey(context.Background(), priv, pub); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{dbPath, dbPath + "-wal", dbPath + "-shm"} {
+		fi, err := os.Stat(p)
+		if err != nil {
+			t.Fatalf("stat %s: %v", p, err)
+		}
+		if mode := fi.Mode().Perm(); mode != 0o600 {
+			t.Errorf("%s mode = %o, want 0600", p, mode)
+		}
+	}
+}
+
+func TestSQLiteFilePath(t *testing.T) {
+	cases := map[string]string{
+		"keys.db":                               "keys.db",
+		"/data/keys.db?_pragma=busy_timeout(5)": "/data/keys.db",
+		"file:/data/keys.db?mode=rwc":           "/data/keys.db",
+		":memory:":                              "",
+		"file::memory:?cache=shared":            "",
+		"":                                      "",
+	}
+	for dsn, want := range cases {
+		if got := sqliteFilePath(dsn); got != want {
+			t.Errorf("sqliteFilePath(%q) = %q, want %q", dsn, got, want)
+		}
+	}
+}
+
 func TestKeyRingOps(t *testing.T) {
 	store := newTestStore(t)
 	defer func() { _ = store.Close() }()
@@ -539,10 +587,13 @@ func TestBootstrapTokensAndEnrollmentRequestsOps(t *testing.T) {
 		t.Errorf("retrieved token mismatch: %+v", ret)
 	}
 
-	if err := store.IncrementBootstrapTokenUsage(ctx, tok.ID); err != nil {
-		t.Fatalf("failed to increment usage: %v", err)
+	if err := store.ConsumeBootstrapTokenUsage(ctx, tok.ID, time.Now()); err != nil {
+		t.Fatalf("failed to consume usage: %v", err)
 	}
-	ret2, _ := store.GetBootstrapToken(ctx, tok.ID)
+	ret2, err := store.GetBootstrapToken(ctx, tok.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if ret2.UsagesCount != 1 {
 		t.Errorf("expected usage count 1, got %d", ret2.UsagesCount)
 	}
@@ -600,5 +651,115 @@ func TestBootstrapTokensAndEnrollmentRequestsOps(t *testing.T) {
 	updatedReq, _ := store.GetEnrollmentRequestByID(ctx, req.ID)
 	if updatedReq.Status != api.EnrollmentStatus_ENROLLMENT_STATUS_APPROVED || !bytes.Equal(updatedReq.BiscuitToken, biscuitToken) || updatedReq.ResolvedBy != "admin-oidc" || updatedReq.ResolvedAt == nil {
 		t.Errorf("updated request details mismatch: %+v", updatedReq)
+	}
+}
+
+// The usage cap used to be read-then-increment, so N concurrent enrollments
+// on a 1-use token could all pass the read. The consume is now one statement
+// that also refuses expired and revoked tokens.
+func TestConsumeBootstrapTokenUsageIsAtomicAndGated(t *testing.T) {
+	store := newTestStore(t)
+	defer func() { _ = store.Close() }()
+	ctx := context.Background()
+	now := time.Now()
+
+	save := func(id string, max int, expiresAt time.Time) {
+		t.Helper()
+		if err := store.SaveBootstrapToken(ctx, &BootstrapToken{
+			ID: id, TokenHash: "h-" + id, Role: "sam:role:node", MaxUsages: max,
+			CreatedAt: now, ExpiresAt: expiresAt,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Run("cap under concurrency", func(t *testing.T) {
+		save("cap", 3, now.Add(time.Hour))
+		const attempts = 20
+		var wg sync.WaitGroup
+		var ok atomic.Int32
+		for i := 0; i < attempts; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				err := store.ConsumeBootstrapTokenUsage(ctx, "cap", now)
+				switch err {
+				case nil:
+					ok.Add(1)
+				case ErrBootstrapTokenUnusable:
+				default:
+					t.Errorf("unexpected error: %v", err)
+				}
+			}()
+		}
+		wg.Wait()
+		if ok.Load() != 3 {
+			t.Errorf("%d of %d concurrent consumes succeeded on a 3-use token, want exactly 3", ok.Load(), attempts)
+		}
+		tok, err := store.GetBootstrapToken(ctx, "cap")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tok.UsagesCount != 3 {
+			t.Errorf("usages_count = %d, want 3", tok.UsagesCount)
+		}
+	})
+
+	t.Run("expired", func(t *testing.T) {
+		save("expired", 5, now.Add(-time.Minute))
+		if err := store.ConsumeBootstrapTokenUsage(ctx, "expired", now); err != ErrBootstrapTokenUnusable {
+			t.Errorf("err = %v, want ErrBootstrapTokenUnusable", err)
+		}
+	})
+
+	t.Run("revoked", func(t *testing.T) {
+		save("revoked", 5, now.Add(time.Hour))
+		if err := store.RevokeBootstrapToken(ctx, "revoked"); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.ConsumeBootstrapTokenUsage(ctx, "revoked", now); err != ErrBootstrapTokenUnusable {
+			t.Errorf("err = %v, want ErrBootstrapTokenUnusable", err)
+		}
+	})
+
+	t.Run("unknown", func(t *testing.T) {
+		if err := store.ConsumeBootstrapTokenUsage(ctx, "nope", now); err != ErrBootstrapTokenUnusable {
+			t.Errorf("err = %v, want ErrBootstrapTokenUnusable", err)
+		}
+	})
+}
+
+// Two admins acting on one pending request: only the first resolution lands.
+func TestResolveEnrollmentRequestOnlyWhilePending(t *testing.T) {
+	store := newTestStore(t)
+	defer func() { _ = store.Close() }()
+	ctx := context.Background()
+
+	if err := store.SaveBootstrapToken(ctx, &BootstrapToken{
+		ID: "tok", TokenHash: "h", Role: "sam:role:node", MaxUsages: 1,
+		CreatedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateEnrollmentRequest(ctx, &EnrollmentRequest{
+		ID: "req", PeerID: "peer", PublicKey: []byte("pk"), TokenID: "tok",
+		Status: api.EnrollmentStatus_ENROLLMENT_STATUS_PENDING, CreatedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.ResolveEnrollmentRequest(ctx, "req", api.EnrollmentStatus_ENROLLMENT_STATUS_APPROVED, []byte("b1"), "admin-1"); err != nil {
+		t.Fatalf("first resolution: %v", err)
+	}
+	err := store.ResolveEnrollmentRequest(ctx, "req", api.EnrollmentStatus_ENROLLMENT_STATUS_REJECTED, nil, "admin-2")
+	if err != ErrEnrollmentAlreadyResolved {
+		t.Fatalf("second resolution: err = %v, want ErrEnrollmentAlreadyResolved", err)
+	}
+	got, err := store.GetEnrollmentRequestByID(ctx, "req")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != api.EnrollmentStatus_ENROLLMENT_STATUS_APPROVED || got.ResolvedBy != "admin-1" || !bytes.Equal(got.BiscuitToken, []byte("b1")) {
+		t.Errorf("losing resolution overwrote the request: %+v", got)
 	}
 }

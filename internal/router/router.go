@@ -37,6 +37,7 @@ import (
 
 	"github.com/google/sam/api"
 	"github.com/google/sam/internal/identity"
+	"github.com/google/sam/internal/ratelimit"
 	golog "github.com/ipfs/go-log/v2"
 	"github.com/libp2p/go-libp2p"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
@@ -95,6 +96,12 @@ func (a *relayACL) AllowConnect(src peer.ID, srcAddr multiaddr.Multiaddr, dest p
 		logger.Debugf("[Relay] Rejecting connect from %s to %s: dest is banned", src, dest)
 		return false
 	}
+	// Both ends must have authenticated: every node authenticates to the
+	// router on connect, so a source that has not is not a mesh member.
+	if _, ok := a.r.authenticatedPeers.Load(src); !ok {
+		logger.Debugf("[Relay] Rejecting connect from %s to %s: src not authenticated", src, dest)
+		return false
+	}
 	_, ok := a.r.authenticatedPeers.Load(dest)
 	if !ok {
 		logger.Debugf("[Relay] Rejecting connect from %s to %s: dest not authenticated", src, dest)
@@ -111,6 +118,9 @@ type Router struct {
 	EventTopic         *pubsub.Topic
 	authenticatedPeers sync.Map
 	bannedPeers        sync.Map
+	// handshakeLimiter bounds /sam/auth attempts per peer; any internet peer
+	// can open those streams.
+	handshakeLimiter *ratelimit.PeerRateLimiter
 
 	// Keys & Identity
 	biscuitToken      []byte
@@ -137,10 +147,17 @@ func NewRouter(ctx context.Context, config Options) (*Router, error) {
 
 	ctx, cancel := context.WithCancel(ctx)
 
+	handshakeLimiter, err := ratelimit.NewPeerRateLimiter(handshakeLimiterSize)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("failed to create handshake rate limiter: %w", err)
+	}
+
 	return &Router{
-		config: config,
-		ctx:    ctx,
-		cancel: cancel,
+		config:           config,
+		ctx:              ctx,
+		cancel:           cancel,
+		handshakeLimiter: handshakeLimiter,
 	}, nil
 }
 
@@ -329,13 +346,21 @@ func (r *Router) Start() error {
 		return err
 	}
 
-	// Setup PubSub
-	ps, err := pubsub.NewGossipSub(r.ctx, hostNode)
+	// Setup PubSub. StrictSign is the default; pinned because the event
+	// validator trusts msg.GetFrom().
+	ps, err := pubsub.NewGossipSub(r.ctx, hostNode, pubsub.WithMessageSignaturePolicy(pubsub.StrictSign))
 	if err != nil {
 		_ = hostNode.Close()
 		return err
 	}
 	r.PubSub = ps
+	// The router is the hub every node gossips through. Validating here
+	// stops a junk event at the first hop instead of fanning it out to every
+	// attached node, each of which would spend a verify on it.
+	if err := ps.RegisterTopicValidator(api.GossipEvents, r.validateMeshEvent); err != nil {
+		_ = hostNode.Close()
+		return fmt.Errorf("register mesh event validator: %w", err)
+	}
 
 	topic, err := ps.Join(api.GossipEvents)
 	if err != nil {
@@ -376,19 +401,26 @@ func (r *Router) enroll(peerID peer.ID) error {
 	if err != nil {
 		return fmt.Errorf("failed to marshal public key: %w", err)
 	}
+	ts := time.Now().UnixMilli()
+	sig, err := r.privKey.Sign(api.RegisterChallenge(peerID.String(), ts))
+	if err != nil {
+		return fmt.Errorf("failed to sign registration challenge: %w", err)
+	}
 
 	req := &api.EnrollRequest{
-		Jwt:           r.config.OIDCToken,
-		PeerId:        peerID.String(),
-		PublicKey:     pubBytes,
-		RequestedRole: r.config.RequiredRole,
+		Jwt:                r.config.OIDCToken,
+		PeerId:             peerID.String(),
+		PublicKey:          pubBytes,
+		RequestedRole:      r.config.RequiredRole,
+		Timestamp:          ts,
+		ChallengeSignature: sig,
 	}
 	data, err := proto.Marshal(req)
 	if err != nil {
 		return err
 	}
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := r.controlPlaneClient(30 * time.Second)
 	resp, err := client.Post(r.config.ControlPlaneURL+"/register", "application/x-protobuf", bytes.NewReader(data))
 	if err != nil {
 		return err
@@ -449,7 +481,7 @@ func (r *Router) enrollBootstrap(peerID peer.ID) error {
 		return err
 	}
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := r.controlPlaneClient(30 * time.Second)
 	resp, err := client.Post(r.config.ControlPlaneURL+"/enroll", "application/x-protobuf", bytes.NewReader(data))
 	if err != nil {
 		return err
@@ -636,7 +668,7 @@ func (r *Router) recoverAfterLease401() error {
 }
 
 func (r *Router) syncKeys() error {
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := r.controlPlaneClient(10 * time.Second)
 	resp, err := client.Get(r.config.ControlPlaneURL + "/keys")
 	if err != nil {
 		return err
@@ -657,19 +689,38 @@ func (r *Router) syncKeys() error {
 		return err
 	}
 
-	r.keysMu.Lock()
-	var newKeys []ed25519.PublicKey
-	for _, kb := range keysResp.PublicKeys {
-		if len(kb) == ed25519.PublicKeySize {
-			newKeys = append(newKeys, ed25519.PublicKey(kb))
-		}
+	// Only a set signed by a key this router already trusts may replace
+	// the trust set; anything else is whoever answered the URL.
+	newKeys, err := api.VerifyKeysResponse(&keysResp, r.getTrustedPublicKeys(), time.Now())
+	if err != nil {
+		return fmt.Errorf("/keys response rejected: %w", err)
 	}
+
+	r.keysMu.Lock()
 	r.trustedPublicKeys = newKeys
 	r.keysMu.Unlock()
 
 	logger.Debugf("Synced %d valid public keys from control plane", len(newKeys))
 	return nil
 }
+
+// controlPlaneClient is the client for every request to the control plane;
+// its transport re-checks the plaintext policy on each hop, redirects included.
+func (r *Router) controlPlaneClient(timeout time.Duration) *http.Client {
+	return &http.Client{
+		Timeout: timeout,
+		Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			if err := api.ValidateControlPlaneTransport(req.URL.String(), r.config.AllowInsecureControlPlane); err != nil {
+				return nil, err
+			}
+			return http.DefaultTransport.RoundTrip(req)
+		}),
+	}
+}
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
 
 func (r *Router) getTrustedPublicKeys() []ed25519.PublicKey {
 	r.keysMu.RLock()
@@ -696,6 +747,31 @@ func (r *Router) verifyEvent(event *api.MeshEvent) bool {
 	return false
 }
 
+// meshEventFreshness bounds how far an event's timestamp may be from now
+// before it is treated as a replay (or a clock the router cannot trust).
+const meshEventFreshness = 5 * time.Minute
+
+// validateMeshEvent is the GossipSub validator for api.GossipEvents: reject
+// (drop and do not forward) anything undecodable or not signed by a trusted
+// control plane, ignore anything stale.
+func (r *Router) validateMeshEvent(_ context.Context, from peer.ID, msg *pubsub.Message) pubsub.ValidationResult {
+	var event api.MeshEvent
+	if err := proto.Unmarshal(msg.Data, &event); err != nil {
+		logger.Warnf("[Router Event] Rejecting undecodable event from %s", from)
+		return pubsub.ValidationReject
+	}
+	if !r.verifyEvent(&event) {
+		logger.Warnf("[Router Event] Potential spoofing attempt: invalid signature on event from %s", from)
+		return pubsub.ValidationReject
+	}
+	eventTime := time.UnixMilli(event.Timestamp)
+	if time.Since(eventTime) > meshEventFreshness || time.Until(eventTime) > meshEventFreshness {
+		logger.Warnf("[Router Event] Dropping stale or future event from %s", from)
+		return pubsub.ValidationIgnore
+	}
+	return pubsub.ValidationAccept
+}
+
 func (r *Router) listenForControlPlaneEvents(ctx context.Context) {
 	defer r.wg.Done()
 	if r.EventTopic == nil {
@@ -714,20 +790,10 @@ func (r *Router) listenForControlPlaneEvents(ctx context.Context) {
 			return
 		}
 
+		// validateMeshEvent already rejected anything unsigned or stale.
 		var event api.MeshEvent
 		if err := proto.Unmarshal(msg.Data, &event); err != nil {
 			logger.Errorf("[Router Event] Failed to unmarshal event from %s: %v", msg.ReceivedFrom, err)
-			continue
-		}
-
-		if !r.verifyEvent(&event) {
-			logger.Warnf("[Router Event] Potential spoofing attempt: invalid signature on event from %s", msg.ReceivedFrom)
-			continue
-		}
-
-		eventTime := time.UnixMilli(event.Timestamp)
-		if time.Since(eventTime) > 5*time.Minute || time.Until(eventTime) > 5*time.Minute {
-			logger.Warnf("[Router Event] Dropping stale or future event from %s", msg.ReceivedFrom)
 			continue
 		}
 
@@ -823,16 +889,27 @@ func (r *Router) renewLease() {
 			dhtSize = int32(r.DHT.RoutingTable().Size())
 		}
 
+		// The biscuit identifies us; the signature proves it is us (peers we
+		// authenticate hold a copy of the biscuit).
+		ts := time.Now().UnixMilli()
+		sig, err := r.privKey.Sign(api.RouterLeaseChallenge(r.Host.ID().String(), ts))
+		if err != nil {
+			logger.Errorf("Failed to sign lease challenge: %v", err)
+			return
+		}
+
 		req := &api.RouterLeaseRequest{
-			PeerId:         r.Host.ID().String(),
-			Addresses:      addrs,
-			Biscuit:        biscuit,
-			ConnectedPeers: connectedPeers,
-			DhtSize:        dhtSize,
+			PeerId:             r.Host.ID().String(),
+			Addresses:          addrs,
+			Biscuit:            biscuit,
+			ConnectedPeers:     connectedPeers,
+			DhtSize:            dhtSize,
+			Timestamp:          ts,
+			ChallengeSignature: sig,
 		}
 		data, _ := proto.Marshal(req)
 
-		client := &http.Client{Timeout: 10 * time.Second}
+		client := r.controlPlaneClient(10 * time.Second)
 		resp, err := client.Post(r.config.ControlPlaneURL+"/routers/lease", "application/x-protobuf", bytes.NewReader(data))
 		if err != nil {
 			logger.Errorf("Failed to renew lease with control plane: %v", err)
@@ -951,7 +1028,7 @@ func (r *Router) runFederationLoop() {
 }
 
 func (r *Router) connectBootstrapRouters() {
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := r.controlPlaneClient(10 * time.Second)
 	// Taken before the request: anything banned after this point cannot be
 	// reflected in the answer, so reconciliation must not read its absence as
 	// an unban (see reconcileBannedPeers).
@@ -1040,6 +1117,15 @@ func recoverStreamHandler(name string, next network.StreamHandler) network.Strea
 	}
 }
 
+// authHandshakeTimeout bounds how long an unauthenticated peer may hold a
+// /sam/auth stream: it has to send its frame and read the reply within it.
+// A var so tests can shorten it.
+var authHandshakeTimeout = 10 * time.Second
+
+// handshakeLimiterSize is how many distinct peers' handshake budgets are
+// tracked at once (LRU beyond that).
+const handshakeLimiterSize = 4096
+
 // HandleAuthHandshake processes incoming auth connections.
 // It is part of mutual auth:
 // 1. Receives client's Biscuit.
@@ -1053,6 +1139,15 @@ func (r *Router) HandleAuthHandshake(s network.Stream) {
 		logger.Warnf("[AuthN] Rejecting authentication for banned peer %s", remotePeer)
 		_ = s.Reset()
 		return
+	}
+
+	if r.handshakeLimiter != nil && !r.handshakeLimiter.Allow(remotePeer.String()) {
+		logger.Warnf("[AuthN] Handshake rate limit exceeded for %s", remotePeer)
+		_ = s.Reset()
+		return
+	}
+	if err := s.SetDeadline(time.Now().Add(authHandshakeTimeout)); err != nil {
+		logger.Debugf("[AuthN] Failed to set handshake deadline for %s: %v", remotePeer, err)
 	}
 
 	reader := msgio.NewVarintReaderSize(s, 1024*64)
@@ -1257,7 +1352,7 @@ func (r *Router) RefreshEnrollment(ctx context.Context) error {
 	b64Biscuit := base64.StdEncoding.EncodeToString(currentBiscuit)
 	httpReq.Header.Set("Authorization", "Bearer "+b64Biscuit)
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := r.controlPlaneClient(10 * time.Second)
 	resp, err := client.Do(httpReq)
 	if err != nil {
 		return fmt.Errorf("http request failed: %w", err)
@@ -1271,11 +1366,11 @@ func (r *Router) RefreshEnrollment(ctx context.Context) error {
 	}
 
 	if resp.StatusCode == http.StatusForbidden {
-		logger.Errorf("Refresh rejected: Router is banned (403 Forbidden). Hard-killing router.")
-		if r.Host != nil {
-			_ = r.Host.Close()
-		}
-		os.Exit(1)
+		// A 403 is a claim by whoever answered; only a verified
+		// MeshEvent_BANNED is the control plane's word. Keep serving on the
+		// current biscuit until it expires.
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("refresh refused (403 Forbidden): %s", string(body))
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -1297,6 +1392,12 @@ func (r *Router) RefreshEnrollment(ctx context.Context) error {
 		return fmt.Errorf("refresh error: %s", refreshResp.ErrorMessage)
 	}
 
+	// Same checks as enrollment: signed by a trusted key, bound to this
+	// router, carrying the router role.
+	if err := r.verifyOwnBiscuit(refreshResp.BiscuitToken, peerID); err != nil {
+		return fmt.Errorf("refreshed biscuit rejected: %w", err)
+	}
+
 	// Update local biscuit token and expiration under lock
 	r.keysMu.Lock()
 	r.biscuitToken = refreshResp.BiscuitToken
@@ -1305,6 +1406,18 @@ func (r *Router) RefreshEnrollment(ctx context.Context) error {
 
 	logger.Infof("Router biscuit token refreshed successfully.")
 	return nil
+}
+
+func (r *Router) verifyOwnBiscuit(token []byte, peerID peer.ID) error {
+	trusted := r.getTrustedPublicKeys()
+	if len(trusted) == 0 {
+		return fmt.Errorf("no trusted control plane keys loaded")
+	}
+	_, key, err := identity.VerifyBiscuitAndGetKey(token, peerID, trusted, r.config.BiscuitTimeout)
+	if err != nil {
+		return err
+	}
+	return identity.VerifyBiscuitRole(token, key, r.config.RequiredRole, r.config.BiscuitTimeout)
 }
 
 func (r *Router) runBiscuitRenewalLoop() {

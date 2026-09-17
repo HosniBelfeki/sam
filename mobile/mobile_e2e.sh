@@ -105,6 +105,7 @@ docker run --name sam-router \
   -d --rm \
   sam-router:local \
   --control-plane http://sam-control-plane:37001 \
+  --insecure-control-plane \
   --listen /ip4/0.0.0.0/tcp/37002 \
   --listen /ip4/0.0.0.0/udp/37002/quic-v1 \
   --external-addr /ip4/10.0.2.2/tcp/37002 \
@@ -250,6 +251,7 @@ docker run --name host-node \
   run \
   --data-dir /data \
   --control-plane http://sam-control-plane:37001 \
+  --insecure-control-plane \
   --jwt "$HOST_JWT" \
   --bind-addr 0.0.0.0:8081 \
   --allow-loopback \

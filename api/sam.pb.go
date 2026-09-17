@@ -398,9 +398,17 @@ type EnrollRequest struct {
 	// Validated fail-closed by the control plane and, once attested by the
 	// enrollment flow's gates, minted as signed label() facts in the
 	// biscuit. Empty means no claims.
-	Labels        map[string]string `protobuf:"bytes,5,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Labels map[string]string `protobuf:"bytes,5,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// Proof of possession of public_key's private half: timestamp is unix
+	// milliseconds and challenge_signature signs the UTF-8 bytes of
+	// "sam:register:<peer_id>:<timestamp>". Required, and peer_id must be
+	// derived from public_key. The JWT proves who is asking; this proves
+	// they hold the key they are asking to bind, so an identity cannot
+	// register (and overwrite) another node's peer_id.
+	Timestamp          int64  `protobuf:"varint,6,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
+	ChallengeSignature []byte `protobuf:"bytes,7,opt,name=challenge_signature,json=challengeSignature,proto3" json:"challenge_signature,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *EnrollRequest) Reset() {
@@ -464,6 +472,20 @@ func (x *EnrollRequest) GetRequestedRole() string {
 func (x *EnrollRequest) GetLabels() map[string]string {
 	if x != nil {
 		return x.Labels
+	}
+	return nil
+}
+
+func (x *EnrollRequest) GetTimestamp() int64 {
+	if x != nil {
+		return x.Timestamp
+	}
+	return 0
+}
+
+func (x *EnrollRequest) GetChallengeSignature() []byte {
+	if x != nil {
+		return x.ChallengeSignature
 	}
 	return nil
 }
@@ -1210,8 +1232,15 @@ type RouterLeaseRequest struct {
 	Biscuit        []byte                 `protobuf:"bytes,3,opt,name=biscuit,proto3" json:"biscuit,omitempty"`
 	ConnectedPeers []string               `protobuf:"bytes,4,rep,name=connected_peers,json=connectedPeers,proto3" json:"connected_peers,omitempty"`
 	DhtSize        int32                  `protobuf:"varint,5,opt,name=dht_size,json=dhtSize,proto3" json:"dht_size,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Proof of possession of the router's enrolled key: timestamp is unix
+	// milliseconds and challenge_signature signs the UTF-8 bytes of
+	// "sam:routers-lease:<peer_id>:<timestamp>" with the key the router
+	// enrolled with. Required. The biscuit alone is not proof: routers hand
+	// theirs to every peer they authenticate.
+	Timestamp          int64  `protobuf:"varint,6,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
+	ChallengeSignature []byte `protobuf:"bytes,7,opt,name=challenge_signature,json=challengeSignature,proto3" json:"challenge_signature,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *RouterLeaseRequest) Reset() {
@@ -1277,6 +1306,20 @@ func (x *RouterLeaseRequest) GetDhtSize() int32 {
 		return x.DhtSize
 	}
 	return 0
+}
+
+func (x *RouterLeaseRequest) GetTimestamp() int64 {
+	if x != nil {
+		return x.Timestamp
+	}
+	return 0
+}
+
+func (x *RouterLeaseRequest) GetChallengeSignature() []byte {
+	if x != nil {
+		return x.ChallengeSignature
+	}
+	return nil
 }
 
 type RouterLeaseResponse struct {
@@ -1675,8 +1718,16 @@ func (x *PolicyConfigUpdateResponse) GetError() string {
 }
 
 type KeysResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	PublicKeys    [][]byte               `protobuf:"bytes,1,rep,name=public_keys,json=publicKeys,proto3" json:"public_keys,omitempty"`
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	PublicKeys [][]byte               `protobuf:"bytes,1,rep,name=public_keys,json=publicKeys,proto3" json:"public_keys,omitempty"`
+	// Unix milliseconds at which the set was signed; receivers reject responses
+	// outside a short freshness window so a captured set cannot be replayed.
+	Timestamp int64 `protobuf:"varint,2,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
+	// One ed25519 signature per entry of public_keys, by that key, over the
+	// deterministic encoding of this message with signatures cleared. A
+	// receiver trusting any key still valid on the control plane can verify
+	// the whole set (see api.VerifyKeysResponse).
+	Signatures    [][]byte `protobuf:"bytes,3,rep,name=signatures,proto3" json:"signatures,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1714,6 +1765,20 @@ func (*KeysResponse) Descriptor() ([]byte, []int) {
 func (x *KeysResponse) GetPublicKeys() [][]byte {
 	if x != nil {
 		return x.PublicKeys
+	}
+	return nil
+}
+
+func (x *KeysResponse) GetTimestamp() int64 {
+	if x != nil {
+		return x.Timestamp
+	}
+	return 0
+}
+
+func (x *KeysResponse) GetSignatures() [][]byte {
+	if x != nil {
+		return x.Signatures
 	}
 	return nil
 }
@@ -2981,14 +3046,16 @@ const file_api_sam_proto_rawDesc = "" +
 	"\n" +
 	"\x06BANNED\x10\x00\x12\x10\n" +
 	"\fKEY_ROTATION\x10\x01\x12\x11\n" +
-	"\rPOLICY_UPDATE\x10\x02\"\xf6\x01\n" +
+	"\rPOLICY_UPDATE\x10\x02\"\xc5\x02\n" +
 	"\rEnrollRequest\x12\x10\n" +
 	"\x03jwt\x18\x01 \x01(\tR\x03jwt\x12\x17\n" +
 	"\apeer_id\x18\x02 \x01(\tR\x06peerId\x12\x1d\n" +
 	"\n" +
 	"public_key\x18\x03 \x01(\fR\tpublicKey\x12%\n" +
 	"\x0erequested_role\x18\x04 \x01(\tR\rrequestedRole\x129\n" +
-	"\x06labels\x18\x05 \x03(\v2!.sam.v1.EnrollRequest.LabelsEntryR\x06labels\x1a9\n" +
+	"\x06labels\x18\x05 \x03(\v2!.sam.v1.EnrollRequest.LabelsEntryR\x06labels\x12\x1c\n" +
+	"\ttimestamp\x18\x06 \x01(\x03R\ttimestamp\x12/\n" +
+	"\x13challenge_signature\x18\a \x01(\fR\x12challengeSignature\x1a9\n" +
 	"\vLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xde\x01\n" +
@@ -3061,13 +3128,15 @@ const file_api_sam_proto_rawDesc = "" +
 	"\tclient_id\x18\x02 \x01(\tR\bclientId\x12\x1a\n" +
 	"\baudience\x18\x03 \x01(\tR\baudience\x12)\n" +
 	"\x10router_addresses\x18\x04 \x03(\tR\x0frouterAddresses\x12&\n" +
-	"\x0fbanned_peer_ids\x18\x05 \x03(\tR\rbannedPeerIds\"\xa9\x01\n" +
+	"\x0fbanned_peer_ids\x18\x05 \x03(\tR\rbannedPeerIds\"\xf8\x01\n" +
 	"\x12RouterLeaseRequest\x12\x17\n" +
 	"\apeer_id\x18\x01 \x01(\tR\x06peerId\x12\x1c\n" +
 	"\taddresses\x18\x02 \x03(\tR\taddresses\x12\x18\n" +
 	"\abiscuit\x18\x03 \x01(\fR\abiscuit\x12'\n" +
 	"\x0fconnected_peers\x18\x04 \x03(\tR\x0econnectedPeers\x12\x19\n" +
-	"\bdht_size\x18\x05 \x01(\x05R\adhtSize\"d\n" +
+	"\bdht_size\x18\x05 \x01(\x05R\adhtSize\x12\x1c\n" +
+	"\ttimestamp\x18\x06 \x01(\x03R\ttimestamp\x12/\n" +
+	"\x13challenge_signature\x18\a \x01(\fR\x12challengeSignature\"d\n" +
 	"\x13RouterLeaseResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\x12\x1d\n" +
@@ -3093,10 +3162,14 @@ const file_api_sam_proto_rawDesc = "" +
 	"\bbindings\x18\x02 \x03(\v2\x15.sam.v1.PolicyBindingR\bbindings\"L\n" +
 	"\x1aPolicyConfigUpdateResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
-	"\x05error\x18\x02 \x01(\tR\x05error\"/\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\"m\n" +
 	"\fKeysResponse\x12\x1f\n" +
 	"\vpublic_keys\x18\x01 \x03(\fR\n" +
-	"publicKeys\"}\n" +
+	"publicKeys\x12\x1c\n" +
+	"\ttimestamp\x18\x02 \x01(\x03R\ttimestamp\x12\x1e\n" +
+	"\n" +
+	"signatures\x18\x03 \x03(\fR\n" +
+	"signatures\"}\n" +
 	"\x13TokenRefreshRequest\x12/\n" +
 	"\x13challenge_signature\x18\x01 \x01(\fR\x12challengeSignature\x12\x1c\n" +
 	"\ttimestamp\x18\x02 \x01(\x03R\ttimestamp\x12\x17\n" +

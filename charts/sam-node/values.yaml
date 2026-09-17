@@ -6,15 +6,38 @@ image:
 replicaCount: 1
 
 # Required: control plane URL the node enrolls with,
-# e.g. http://sam-mesh-control-plane:8080
+# e.g. http://sam-mesh-control-plane:8080. A plaintext http:// URL makes the
+# chart pass --insecure-control-plane: whoever answers it becomes the node's
+# trust root, so use https:// for anything beyond the cluster network.
 controlPlaneUrl: ""
 
 # Audience of the projected ServiceAccount token; must be one of the control
 # plane's allowedAudiences.
 audience: sam-mesh-audience
 
-# Bearer token protecting the node's local REST API.
-apiToken: devtoken
+# Bearer token protecting the node's local REST API. Leave empty to generate a
+# random one on first install (kept stable across upgrades) in the Secret
+# <release>-api-token; read it with
+#   kubectl get secret <release>-api-token -o jsonpath='{.data.api-token}' | base64 -d
+# Set explicitly (e.g. via --set) to pin a known value. The generated form
+# relies on Helm's lookup, which sees no cluster under `helm template`,
+# `--dry-run` or a GitOps diff: those render a fresh value each time. Pin the
+# token, or pre-create the Secret, when the manifests are rendered outside
+# `helm install`/`upgrade`.
+apiToken: ""
+
+# Pod and container security contexts. The image is distroless nonroot;
+# runAsNonRoot needs the numeric uid.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: ["ALL"]
 
 # Address the node API binds inside the pod. Loopback keeps the API
 # pod-private; set 0.0.0.0:8080 to expose it on the pod IP.

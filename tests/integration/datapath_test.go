@@ -16,12 +16,14 @@ package integration_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -124,9 +126,18 @@ func TestIntegrationStdioDatapath(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	receivedMessage := strings.TrimSpace(string(bodyBytes))
-	if receivedMessage != testMessage {
-		t.Fatalf("Expected to receive %q in POST response, got %q", testMessage, receivedMessage)
+	// The bridge rewrites the JSON-RPC id on the way to the backend and
+	// restores it on the way back, so the echo is the same message
+	// re-serialized, not the same bytes.
+	var want, got map[string]any
+	if err := json.Unmarshal([]byte(testMessage), &want); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(bodyBytes, &got); err != nil {
+		t.Fatalf("POST response is not JSON: %v (%q)", err, bodyBytes)
+	}
+	if !reflect.DeepEqual(want, got) {
+		t.Fatalf("Expected to receive %v in POST response, got %v", want, got)
 	}
 }
 

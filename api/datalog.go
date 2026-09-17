@@ -88,7 +88,19 @@ const (
 	// FactRole defines a custom SAM role assigned to the user or node.
 	// Contains: biscuit.String(roleName)
 	// Example Datalog: allow if role("mesh-member")
+	//
+	// Only the control plane mints it, from mesh policy bindings. It must
+	// never be derived from an OIDC claim: role("sam:role:router") is what
+	// makes a router, and an issuer's "roles" claim is the issuer's word, not
+	// the mesh operator's. See FactIdpRole.
 	FactRole = "role"
+
+	// FactIdpRole carries the OIDC "roles" claim as the issuer emitted it.
+	// Contains: biscuit.String(roleName)
+	// Example Datalog: allow if idp_role("platform-team")
+	// Bind it to a mesh role in policy (member "idp_role:platform-team"),
+	// or target it ("idp_role:platform-team"); it grants nothing by itself.
+	FactIdpRole = "idp_role"
 
 	// FactRight defines the cryptographically signed capability/right.
 	// Contains: biscuit.String(rightName)
@@ -264,7 +276,20 @@ var oidcClaimToFact = map[string]string{
 	"sub":    FactUser,
 	"email":  FactEmail,
 	"groups": FactGroup,
-	"roles":  FactRole,
+	"roles":  FactIdpRole,
+}
+
+// BindingMemberPrefixes are the fact names a policy binding member or an
+// allowed_targets entry may name: the peer itself plus every OIDC claim the
+// control plane mints. FactRole is deliberately absent: a binding on it would
+// grant a mesh role from a mesh role.
+func BindingMemberPrefixes() []string {
+	names := []string{FactNode}
+	for _, fact := range OIDCClaimToFact() {
+		names = append(names, fact)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // OIDCClaimToFact returns a copy of the OIDC claims to Biscuit facts map.

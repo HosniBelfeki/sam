@@ -71,6 +71,9 @@ func TestFromPathOrEnv(t *testing.T) {
 		if err != nil || got != "file-secret" {
 			t.Errorf("got %q, %v; want file-secret", got, err)
 		}
+		if _, still := os.LookupEnv("SAM_TEST_SECRET"); still {
+			t.Error("env var must be removed from the process environment")
+		}
 	})
 
 	t.Run("env fallback trimmed", func(t *testing.T) {
@@ -78,6 +81,9 @@ func TestFromPathOrEnv(t *testing.T) {
 		got, err := FromPathOrEnv("api-token", "", "SAM_TEST_SECRET")
 		if err != nil || got != "env-secret" {
 			t.Errorf("got %q, %v; want env-secret", got, err)
+		}
+		if _, still := os.LookupEnv("SAM_TEST_SECRET"); still {
+			t.Error("env var must be removed from the process environment")
 		}
 	})
 

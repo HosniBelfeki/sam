@@ -15,7 +15,10 @@
 version: 2
 updates:
   - package-ecosystem: "gomod"
-    directory: "/"
+    directories:
+      - "/"
+      - "/cmd/nano-init"
+      - "/cmd/sam-a2a-bridge"
     schedule:
       interval: "weekly"
     cooldown:
@@ -27,6 +30,43 @@ updates:
 
   - package-ecosystem: "github-actions"
     directory: "/"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+
+  - package-ecosystem: "npm"
+    directories:
+      - "/tests/ui"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+
+  - package-ecosystem: "pip"
+    directories:
+      - "/sam-mcp-python"
+      - "/cmd/chaos-agent"
+      - "/tests/e2e/docker/*"
+      - "/development/examples/*"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+    groups:
+      python-deps:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "pub"
+    directory: "/mobile/sam-node-app"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+
+  - package-ecosystem: "gradle"
+    directory: "/mobile/sam-node-app/android"
     schedule:
       interval: "weekly"
     cooldown:

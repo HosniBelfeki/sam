@@ -34,9 +34,19 @@ import (
 // DefaultAuthorizerTimeout bounds Datalog evaluation when no timeout is configured.
 // biscuit-go defaults to 2ms of wall-clock time, of which a single authorization of
 // a realistic token already spends ~0.14ms (~1.1ms under -race), so ordinary
-// scheduling noise turns into a spurious denial. The amount of work is bounded by
-// the fact and iteration limits; this deadline only caps how long the caller waits.
+// scheduling noise turns into a spurious denial.
 const DefaultAuthorizerTimeout = 1 * time.Second
+
+// Datalog world limits, biscuit-go's defaults made explicit. They bound the
+// number of derived facts and fixpoint iterations, but neither preempts a
+// single rule: one self-join over a few hundred facts runs to completion
+// whatever these say, and on timeout biscuit-go's worker goroutine keeps
+// computing. The only bound on attacker-authored rules is therefore that SAM
+// never evaluates any: see UnmarshalInbound.
+const (
+	maxDatalogFacts      = 1000
+	maxDatalogIterations = 100
+)
 
 // AuthorizerOptions returns the authorizer options enforcing a Datalog evaluation
 // budget. A non-positive timeout falls back to DefaultAuthorizerTimeout.
@@ -44,7 +54,36 @@ func AuthorizerOptions(timeout time.Duration) []biscuit.AuthorizerOption {
 	if timeout <= 0 {
 		timeout = DefaultAuthorizerTimeout
 	}
-	return []biscuit.AuthorizerOption{biscuit.WithWorldOptions(datalog.WithMaxDuration(timeout))}
+	return []biscuit.AuthorizerOption{biscuit.WithWorldOptions(
+		datalog.WithMaxDuration(timeout),
+		datalog.WithMaxFacts(maxDatalogFacts),
+		datalog.WithMaxIterations(maxDatalogIterations),
+	)}
+}
+
+// ErrAppendedBlocks is returned for a token that carries attenuation blocks.
+var ErrAppendedBlocks = errors.New("biscuit carries appended blocks; SAM tokens are authority-block only")
+
+// UnmarshalInbound parses a token received from a peer or a client and
+// refuses one with appended blocks.
+//
+// Appending needs no root key, so appended blocks are the one place a token
+// holder can put Datalog of their own. SAM reads nothing from them: facts
+// there are invisible to the authorizer and RequireAuthorityBinding ignores
+// them. What they can still do is cost CPU: a block with a self-join rule
+// over a few hundred facts pins a core for the whole evaluation budget on
+// every verifier that evaluates it, and leaks the worker goroutine (see the
+// limits above). The control plane never mints such blocks, so a token that
+// has any is not one SAM issued in its current form.
+func UnmarshalInbound(biscuitData []byte) (*biscuit.Biscuit, error) {
+	b, err := biscuit.Unmarshal(biscuitData)
+	if err != nil {
+		return nil, fmt.Errorf("malformed biscuit: %w", err)
+	}
+	if n := b.BlockCount(); n > 0 {
+		return nil, fmt.Errorf("%w (%d)", ErrAppendedBlocks, n)
+	}
+	return b, nil
 }
 
 // EnforceExpiration injects the current time and the expiration check into an
@@ -192,8 +231,6 @@ func mintBiscuit(signingKey ed25519.PrivateKey, remotePeer peer.ID, roles []stri
 		}
 	}
 
-	hasTargets := false
-	hasServices := false
 	sort.Strings(roles)
 	var errs []error
 	// Collected across every matched role and merged into Set facts once below: a token's
@@ -227,22 +264,12 @@ func mintBiscuit(signingKey ed25519.PrivateKey, remotePeer peer.ID, roles []stri
 			}}); err != nil {
 				errs = append(errs, fmt.Errorf("failed to add target unrestricted: %w", err))
 			}
-			hasTargets = true
-			hasServices = true
 			continue
 		}
 
 		if pr, ok := rolesMap[role]; ok {
-			if len(pr.AllowedServices) > 0 {
-				hasServices = true
-				allServices = append(allServices, pr.AllowedServices...)
-			}
-
-			if len(pr.AllowedTargets) > 0 {
-				hasTargets = true
-				allTargets = append(allTargets, pr.AllowedTargets...)
-			}
-
+			allServices = append(allServices, pr.AllowedServices...)
+			allTargets = append(allTargets, pr.AllowedTargets...)
 			allAgents = append(allAgents, pr.AllowedAgents...)
 
 			for _, customEntry := range pr.CustomDatalog {
@@ -284,22 +311,10 @@ func mintBiscuit(signingKey ed25519.PrivateKey, remotePeer peer.ID, roles []stri
 		}
 	}
 
-	if !hasServices && len(policyRoles) == 0 {
-		if err := addFact(biscuit.Fact{Predicate: biscuit.Predicate{
-			Name: api.FactGrantedServiceAllTypes,
-			IDs:  []biscuit.Term{},
-		}}); err != nil {
-			errs = append(errs, fmt.Errorf("failed to add fallback service fact: %w", err))
-		}
-	}
-	if !hasTargets && len(policyRoles) == 0 {
-		if err := addFact(biscuit.Fact{Predicate: biscuit.Predicate{
-			Name: api.FactTargetUnrestricted,
-			IDs:  []biscuit.Term{},
-		}}); err != nil {
-			errs = append(errs, fmt.Errorf("failed to add fallback target fact: %w", err))
-		}
-	}
+	// No policy means no grants. A mesh with no roles defined used to mint
+	// every non-router an unrestricted token; a fresh control plane, or one
+	// whose policy was wiped, was the most permissive configuration there
+	// is. Deny by default: the operator posts a policy, then nodes can talk.
 
 	if len(errs) > 0 {
 		return nil, fmt.Errorf("biscuit policy validation failed: %w", errors.Join(errs...))
@@ -343,9 +358,9 @@ func VerifyBiscuitAndGetExpiry(biscuitData []byte, expectedPeer peer.ID, trusted
 }
 
 func verifyBiscuit(biscuitData []byte, expectedPeer peer.ID, trustedPublicKeys []ed25519.PublicKey, timeout time.Duration) (*biscuit.Biscuit, ed25519.PublicKey, time.Time, error) {
-	b, err := biscuit.Unmarshal(biscuitData)
+	b, err := UnmarshalInbound(biscuitData)
 	if err != nil {
-		return nil, nil, time.Time{}, fmt.Errorf("malformed biscuit: %w", err)
+		return nil, nil, time.Time{}, err
 	}
 
 	authOpts := AuthorizerOptions(timeout)
@@ -470,9 +485,9 @@ func VerifyAndExtractPeerID(trustedPublicKeys []ed25519.PublicKey, biscuitData [
 }
 
 func extractPeerID(trustedPublicKeys []ed25519.PublicKey, biscuitData []byte, timeout time.Duration, enforceExpiry bool) (peer.ID, error) {
-	b, err := biscuit.Unmarshal(biscuitData)
+	b, err := UnmarshalInbound(biscuitData)
 	if err != nil {
-		return "", fmt.Errorf("malformed biscuit: %w", err)
+		return "", err
 	}
 
 	authOpts := AuthorizerOptions(timeout)
@@ -545,9 +560,9 @@ func extractPeerID(trustedPublicKeys []ed25519.PublicKey, biscuitData []byte, ti
 // should trigger a refresh rather than refuse to boot. Do not use it to admit a token
 // received from a peer.
 func VerifyBiscuitRole(biscuitData []byte, controlPlanePubKey ed25519.PublicKey, expectedRole string, timeout time.Duration) error {
-	b, err := biscuit.Unmarshal(biscuitData)
+	b, err := UnmarshalInbound(biscuitData)
 	if err != nil {
-		return fmt.Errorf("malformed biscuit: %w", err)
+		return err
 	}
 	return RequireRole(b, controlPlanePubKey, expectedRole, timeout)
 }

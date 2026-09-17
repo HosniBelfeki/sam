@@ -128,66 +128,49 @@ with urllib.request.urlopen(req) as response:
 
   # 4. Test Stdio Datapath: Node 1 calls Node 2's Stdio service
   echo "[$(date +%T)] Testing Stdio Datapath from Node 1 to Node 2"
-  
-  # Start SSE client in background on Node 1 targeting Node 2's service
-  docker run -d \
-    --name sse-client \
-    --network "${MESH_NETWORK}" \
-    python:3.12 python3 -c "
-import urllib.request
+
+  # One backend process serves every caller, so the bridge owns the JSON-RPC
+  # id space: a reply comes back on the POST that asked for it, carrying the
+  # caller's own id, and never on a shared stream. There is no GET/SSE side —
+  # the old broadcast handed every caller's tool output to every other
+  # reader — so a GET is refused, which MCP Streamable HTTP permits (405).
+  run docker run --rm --network "${MESH_NETWORK}" python:3.12 python3 -c "
+import urllib.request, urllib.error
 req = urllib.request.Request(
     \"http://${node1_name}:8080/sam/${node2_peer_id}/mcp/stdio-tool/\",
     headers={\"X-Sam-Authentication\": \"Bearer secret-token\"}
 )
 try:
     with urllib.request.urlopen(req) as response:
-        print(\"SSE Client Connected\", flush=True)
-        for line in response:
-            print(line.decode(\"utf-8\").strip(), flush=True)
-except Exception as e:
-    print(f\"Error: {e}\", flush=True)
+        print(f\"unexpected {response.status}\")
+except urllib.error.HTTPError as e:
+    print(f\"GET status {e.code}\")
 "
-  MESH_CONTAINERS+=("sse-client")
+  echo "GET output: $output"
+  [[ "$output" == *"GET status 405"* ]]
 
-  # Wait a bit for SSE stream container to start up
-  local i
-  for ((i=0; i<15; i++)); do
-    if docker logs sse-client 2>&1 | grep -q "SSE Client Connected"; then
-        break
-    fi
-    sleep 1
-  done
-
-  # Send message via POST from Node 1 to Node 2's service
-  test_message="{\"jsonrpc\":\"2.0\",\"method\":\"ping\",\"id\":1}"
-  run docker run --rm --network "${MESH_NETWORK}" -e MSG="${test_message}" python:3.12 python3 -c "
-import urllib.request
-import os
-req = urllib.request.Request(
-    \"http://${node1_name}:8080/sam/${node2_peer_id}/mcp/stdio-tool/\",
-    data=os.environ['MSG'].encode('utf-8'),
-    headers={
+  # The backend is `cat`: it echoes the request line, so the reply is the
+  # request with the caller's id restored. A second caller using the same id
+  # in flight at the same time must get its own line back, not the first's.
+  local reply_a reply_b
+  run docker run --rm --network "${MESH_NETWORK}" python:3.12 python3 -c "
+import json, urllib.request, concurrent.futures
+url = \"http://${node1_name}:8080/sam/${node2_peer_id}/mcp/stdio-tool/\"
+def call(method):
+    body = json.dumps({\"jsonrpc\": \"2.0\", \"method\": method, \"id\": 1}).encode()
+    req = urllib.request.Request(url, data=body, headers={
         \"X-Sam-Authentication\": \"Bearer secret-token\",
-        \"Content-Type\": \"application/json\"
-    }
-)
-with urllib.request.urlopen(req) as response:
-    print(response.status)
+        \"Content-Type\": \"application/json\"})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        return r.status, json.loads(r.read())
+with concurrent.futures.ThreadPoolExecutor(2) as ex:
+    a, b = ex.submit(call, \"ping-a\"), ex.submit(call, \"ping-b\")
+    (sa, ra), (sb, rb) = a.result(), b.result()
+print(f\"A {sa} {json.dumps(ra, sort_keys=True)}\")
+print(f\"B {sb} {json.dumps(rb, sort_keys=True)}\")
 "
-  echo "POST status: $output"
+  echo "POST output: $output"
   [[ "$status" -eq 0 ]]
-  [[ "$output" == *"200"* ]]
-
-  # Check SSE client logs for the echoed message
-  local success=0
-  for ((i=0; i<15; i++)); do
-    run docker logs sse-client
-    if [[ "$output" == *"data: ${test_message}"* ]]; then
-      success=1
-      break
-    fi
-    sleep 1
-  done
-  echo "SSE client logs: $output"
-  [[ "$success" -eq 1 ]]
+  [[ "$output" == *'A 200 {"id": 1, "jsonrpc": "2.0", "method": "ping-a"}'* ]]
+  [[ "$output" == *'B 200 {"id": 1, "jsonrpc": "2.0", "method": "ping-b"}'* ]]
 }

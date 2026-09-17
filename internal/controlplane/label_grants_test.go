@@ -77,12 +77,15 @@ func TestRegisterRefusesLabelsTheRoleDoesNotGrant(t *testing.T) {
 			t.Fatal(err)
 		}
 
+		ts, sig := registerPoP(t, priv, pID.String())
 		body, err := proto.Marshal(&api.EnrollRequest{
-			Jwt:           mintToken(map[string]interface{}{"sub": "node-alice"}),
-			PeerId:        pID.String(),
-			PublicKey:     pubBytes,
-			RequestedRole: api.RoleNode,
-			Labels:        labels,
+			Jwt:                mintToken(map[string]interface{}{"sub": "node-alice"}),
+			PeerId:             pID.String(),
+			PublicKey:          pubBytes,
+			RequestedRole:      api.RoleNode,
+			Labels:             labels,
+			Timestamp:          ts,
+			ChallengeSignature: sig,
 		})
 		if err != nil {
 			t.Fatal(err)

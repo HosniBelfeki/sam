@@ -26,6 +26,7 @@ import (
 	"github.com/biscuit-auth/biscuit-go/v2"
 	"github.com/google/sam/api"
 	"github.com/google/sam/internal/identity"
+	"github.com/google/sam/internal/ratelimit"
 	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/crypto"
@@ -426,6 +427,115 @@ func TestHandleAuthHandshake(t *testing.T) {
 			t.Errorf("%s: peer admitted", name)
 		}
 	}
+}
+
+// Any internet peer can open /sam/auth streams. An idle one must be closed on
+// the node's schedule, not the peer's, and a peer opening them in a tight loop
+// must be cut off before the node verifies every frame it sends.
+func TestHandleAuthHandshakeBoundsUnauthenticatedPeers(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	serverHost, err := libp2p.New(libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = serverHost.Close() }()
+	clientHost, err := libp2p.New(libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = clientHost.Close() }()
+
+	limiter, err := ratelimit.NewPeerRateLimiter(16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	node := &SamNode{
+		trustedKeys:      []TrustedKey{{Key: pub, ReceivedAt: time.Now()}},
+		BiscuitTimeout:   time.Second,
+		handshakeLimiter: limiter,
+	}
+	serverHost.SetStreamHandler(api.AuthProtocolID, node.HandleAuthHandshake)
+	if err := clientHost.Connect(ctx, peer.AddrInfo{ID: serverHost.ID(), Addrs: serverHost.Addrs()}); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("idle stream is closed by the deadline", func(t *testing.T) {
+		old := authHandshakeTimeout
+		authHandshakeTimeout = 200 * time.Millisecond
+		t.Cleanup(func() { authHandshakeTimeout = old })
+
+		s, err := clientHost.NewStream(ctx, serverHost.ID(), api.AuthProtocolID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = s.Close() }()
+		// Send nothing. The node must give up on us, which the client sees as
+		// its read failing; without the deadline this read blocks forever.
+		if err := s.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		start := time.Now()
+		_, err = msgio.NewVarintReaderSize(s, 1024*64).ReadMsg()
+		if err == nil {
+			t.Fatal("idle handshake stream answered")
+		}
+		if took := time.Since(start); took > 4*time.Second {
+			t.Fatalf("idle stream was held for %v; the node did not apply its own deadline", took)
+		}
+	})
+
+	t.Run("tight loop is rate limited", func(t *testing.T) {
+		builder := biscuit.NewBuilder(priv)
+		for _, f := range []biscuit.Fact{
+			{Predicate: biscuit.Predicate{Name: api.FactNode, IDs: []biscuit.Term{biscuit.String(clientHost.ID().String())}}},
+			{Predicate: biscuit.Predicate{Name: api.FactExpiration, IDs: []biscuit.Term{biscuit.Date(time.Now().Add(time.Hour))}}},
+		} {
+			if err := builder.AddAuthorityFact(f); err != nil {
+				t.Fatal(err)
+			}
+		}
+		b, err := builder.Build()
+		if err != nil {
+			t.Fatal(err)
+		}
+		token, err := b.Serialize()
+		if err != nil {
+			t.Fatal(err)
+		}
+		frame, err := proto.Marshal(&api.AuthFrame{Biscuit: token})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		attempts := 3 * ratelimit.PeerBurst
+		answered := 0
+		for i := 0; i < attempts; i++ {
+			s, err := clientHost.NewStream(ctx, serverHost.ID(), api.AuthProtocolID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = s.SetDeadline(time.Now().Add(5 * time.Second))
+			if err := msgio.NewVarintWriter(s).WriteMsg(frame); err == nil {
+				if _, err := msgio.NewVarintReaderSize(s, 1024*64).ReadMsg(); err == nil {
+					answered++
+				}
+			}
+			_ = s.Close()
+		}
+		// The token is valid, so every answer is a success: the only reason
+		// some go unanswered is the limiter.
+		if answered < ratelimit.PeerBurst {
+			t.Errorf("only %d of the first %d handshakes answered; limiter is too strict", answered, ratelimit.PeerBurst)
+		}
+		if answered == attempts {
+			t.Errorf("all %d back-to-back handshakes were verified; no per-peer limit applied", attempts)
+		}
+	})
 }
 
 // TestPerformRouterAuthHandshakeRequiresRouterRole: a router whose biscuit

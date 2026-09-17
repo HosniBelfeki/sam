@@ -83,7 +83,13 @@ class _NodeControlPageState extends State<NodeControlPage> {
   final _jwtController = TextEditingController();
   // Saved by the FFI at enrollment so Re-enroll can skip the browser.
   String _refreshToken = '';
-  final _tokenController = TextEditingController(text: 'secret-token');
+  // Bearer token for the sidecar API on 127.0.0.1:5005. Android loopback is
+  // shared by every installed app, so a fixed value would let any of them
+  // act as this node. Generated once and kept in the app-private data dir
+  // next to the identity it protects; shown on the Config tab.
+  static const _apiTokenFile = 'api-token';
+  String _apiToken = '';
+  bool _apiTokenVisible = false;
   // Labels are attested at enrollment; changing them requires re-enrolling.
   // The field is saved here after a successful enrollment and read back at
   // launch, like attenuation.json.
@@ -141,7 +147,6 @@ class _NodeControlPageState extends State<NodeControlPage> {
     _pollingTimer?.cancel();
     _controlPlaneController.dispose();
     _jwtController.dispose();
-    _tokenController.dispose();
     _labelsController.dispose();
     _externalMcpUrlController.dispose();
     _externalMcpNameController.dispose();
@@ -157,6 +162,7 @@ class _NodeControlPageState extends State<NodeControlPage> {
     final dataDir = '${appDir.path}/sam_data';
     final enrolled = _samLib.isEnrolled(dataDir);
     await _loadAttenuation(dataDir);
+    await _loadOrCreateApiToken(dataDir);
     final labelsFile = File('$dataDir/$_labelsFile');
     if (await labelsFile.exists()) {
       _labelsController.text = await labelsFile.readAsString();
@@ -191,6 +197,31 @@ class _NodeControlPageState extends State<NodeControlPage> {
     } catch (e) {
       debugPrint('DEBUG: Failed to read attenuation config: $e');
     }
+  }
+
+  Future<void> _loadOrCreateApiToken(String dataDir) async {
+    final file = File('$dataDir/$_apiTokenFile');
+    if (await file.exists()) {
+      final saved = (await file.readAsString()).trim();
+      if (saved.isNotEmpty) {
+        _apiToken = saved;
+        return;
+      }
+    }
+    await _writeApiToken(file, SamDartMcpServer.newToken());
+  }
+
+  Future<void> _writeApiToken(File file, String token) async {
+    await file.parent.create(recursive: true);
+    await file.writeAsString(token, flush: true);
+    _apiToken = token;
+  }
+
+  Future<void> _regenerateApiToken() async {
+    final appDir = await getApplicationDocumentsDirectory();
+    await _writeApiToken(
+        File('${appDir.path}/sam_data/$_apiTokenFile'), SamDartMcpServer.newToken());
+    if (mounted) setState(() {});
   }
 
   // The field keeps the CLI's old --labels wire format. Only the split lives
@@ -792,7 +823,7 @@ class _NodeControlPageState extends State<NodeControlPage> {
     // services are declared in the start configuration and probed at startup,
     // there is no runtime registration.
     try {
-      await _embeddedMcpServer.start(port: 9090);
+      await _embeddedMcpServer.start();
     } catch (e) {
       setState(() {
         _status = 'Start failed: embedded MCP server: $e';
@@ -806,7 +837,7 @@ class _NodeControlPageState extends State<NodeControlPage> {
         'name': 'phone-sensors',
         'description':
             'Exposes phone sensors like battery and location to the SAM mesh',
-        'targetUrl': 'http://127.0.0.1:9090',
+        'targetUrl': _embeddedMcpServer.targetUrl,
       },
       if (_externalMcpUrlController.text.isNotEmpty &&
           _externalMcpNameController.text.isNotEmpty)
@@ -830,7 +861,7 @@ class _NodeControlPageState extends State<NodeControlPage> {
       'controlPlaneURL': _controlPlaneController.text,
       'meshID': 'public-mesh',
       'bindAddr': '127.0.0.1:5005', // sidecar port inside phone
-      'apiToken': _tokenController.text,
+      'apiToken': _apiToken,
       'allowLoopback': true,
       'enableRelay': false,
       'labels': labels,
@@ -1015,7 +1046,7 @@ class _NodeControlPageState extends State<NodeControlPage> {
                     ),
                     SwitchListTile(
                       title: const Text('Location'),
-                      subtitle: const Text('Share coarse location with mesh peers'),
+                      subtitle: const Text('Share approximate location (about 1 km) with mesh peers'),
                       value: _exposeLocation,
                       onChanged: (bool value) async {
                         setState(() {
@@ -1103,6 +1134,68 @@ class _NodeControlPageState extends State<NodeControlPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Local API Token',
+                      style:
+                          TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                  const SizedBox(height: 6),
+                  const Text(
+                    'Bearer token for the sidecar API on 127.0.0.1:5005. Any '
+                    'app on this phone that holds it can act as this node, '
+                    'so it is generated here and never a fixed value. '
+                    'Regenerating takes effect on the next Start.',
+                    style: TextStyle(fontSize: 12, color: Colors.grey),
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: SelectableText(
+                          _apiTokenVisible
+                              ? _apiToken
+                              : '\u2022' * 24,
+                          style: const TextStyle(
+                              fontFamily: 'monospace', fontSize: 13),
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: _apiTokenVisible ? 'Hide' : 'Show',
+                        icon: Icon(_apiTokenVisible
+                            ? Icons.visibility_off
+                            : Icons.visibility),
+                        onPressed: () => setState(
+                            () => _apiTokenVisible = !_apiTokenVisible),
+                      ),
+                      IconButton(
+                        tooltip: 'Copy',
+                        icon: const Icon(Icons.copy),
+                        onPressed: () async {
+                          await Clipboard.setData(
+                              ClipboardData(text: _apiToken));
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                    content: Text('Token copied')));
+                          }
+                        },
+                      ),
+                      IconButton(
+                        tooltip: 'Regenerate',
+                        icon: const Icon(Icons.refresh),
+                        onPressed: isRunning ? null : _regenerateApiToken,
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 20),
           Card(
             child: Padding(
               padding: const EdgeInsets.all(16.0),

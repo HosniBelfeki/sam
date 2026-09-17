@@ -15,18 +15,17 @@
 package node
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
 	"net/url"
-	"strings"
 	"testing"
 	"time"
 
@@ -124,17 +123,9 @@ func TestDatapathIntegration(t *testing.T) {
 		}
 	}()
 
-	// Setup identity for Node B (the caller proxy) and trust it on Node A
-	rootPub, rootPriv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatalf("gen root: %v", err)
-	}
-	if err := buildAndSaveBiscuit(nodeB, rootPriv); err != nil {
-		t.Fatalf("buildAndSaveBiscuit: %v", err)
-	}
-	nodeA.keysMu.Lock()
-	nodeA.trustedKeys = append(nodeA.trustedKeys, TrustedKey{Key: rootPub, ReceivedAt: time.Now()})
-	nodeA.keysMu.Unlock()
+	// Both nodes enrolled under one root: B (the caller proxy) authenticates
+	// to A, and A must show B a verifiable identity before B forwards to it.
+	enrollUnderRoot(t, nodeA, nodeB)
 
 	// Connect Node B to Node A directly
 	err = nodeB.Host.Connect(ctx, peer.AddrInfo{ID: nodeA.Host.ID(), Addrs: nodeA.Host.Addrs()})
@@ -469,17 +460,8 @@ func TestStdioDatapathIntegration(t *testing.T) {
 	}
 	defer func() { _ = nodeB.Host.Close() }()
 
-	// Setup identity for Node B (the caller proxy) and trust it on Node A
-	rootPub, rootPriv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatalf("gen root: %v", err)
-	}
-	if err := buildAndSaveBiscuit(nodeB, rootPriv); err != nil {
-		t.Fatalf("buildAndSaveBiscuit: %v", err)
-	}
-	nodeA.keysMu.Lock()
-	nodeA.trustedKeys = append(nodeA.trustedKeys, TrustedKey{Key: rootPub, ReceivedAt: time.Now()})
-	nodeA.keysMu.Unlock()
+	// Both nodes enrolled under one root (see TestDatapathIntegration).
+	enrollUnderRoot(t, nodeA, nodeB)
 
 	// Connect Node B to Node A directly
 	err = nodeB.Host.Connect(ctx, peer.AddrInfo{ID: nodeA.Host.ID(), Addrs: nodeA.Host.Addrs()})
@@ -531,63 +513,53 @@ func TestStdioDatapathIntegration(t *testing.T) {
 
 	// Construct URLs
 	// http://localhost:<port>/sam/{peer_id}/{service_type}/{service_name}/{upstream_path}
-	sseURL := fmt.Sprintf("%s/sam/%s/mcp/%s/", proxyServer.URL, nodeA.Host.ID().String(), serviceName)
 	postURL := fmt.Sprintf("%s/sam/%s/mcp/%s/", proxyServer.URL, nodeA.Host.ID().String(), serviceName)
 
 	client := &http.Client{}
 
-	// Wait for DHT/routing to settle (retry mechanism)
-	var sseResp *http.Response
-	for i := 0; i < 3; i++ {
-		sseResp, err = client.Get(sseURL)
-		if err == nil && sseResp.StatusCode == http.StatusOK {
-			break
-		}
-		t.Logf("SSE Connect Attempt %d failed: %v, status: %v", i+1, err, sseResp)
-		time.Sleep(1 * time.Second)
-	}
-
+	// The bridge has no GET side any more: the legacy SSE stream broadcast
+	// every backend line to every caller.
+	getResp, err := client.Get(postURL)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = sseResp.Body.Close() }()
-
-	if sseResp.StatusCode != http.StatusOK {
-		t.Fatalf("Expected SSE status OK, got %d", sseResp.StatusCode)
+	_ = getResp.Body.Close()
+	if getResp.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("GET on a command-backed service: got %d, want 405", getResp.StatusCode)
 	}
 
-	// Send a message via POST
+	// The backend is `cat`, so the request comes straight back as the reply;
+	// the bridge rewrote the id on the way in and must restore it on the way
+	// out. Retried while DHT/routing settles.
 	testMessage := `{"jsonrpc":"2.0","method":"ping","id":1}`
-	postResp, err := client.Post(postURL, "application/json", bytes.NewBufferString(testMessage))
+	var postResp *http.Response
+	for i := 0; i < 3; i++ {
+		postResp, err = client.Post(postURL, "application/json", bytes.NewBufferString(testMessage))
+		if err == nil && postResp.StatusCode == http.StatusOK {
+			break
+		}
+		t.Logf("POST attempt %d failed: %v, status: %v", i+1, err, postResp)
+		time.Sleep(1 * time.Second)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = postResp.Body.Close() }()
-
 	if postResp.StatusCode != http.StatusOK {
 		t.Fatalf("Expected POST status OK, got %d", postResp.StatusCode)
 	}
 
-	// Read from SSE stream
-	reader := bufio.NewReader(sseResp.Body)
-	line, err := reader.ReadString('\n')
-	if err != nil {
+	var echoed map[string]any
+	if err := json.NewDecoder(postResp.Body).Decode(&echoed); err != nil {
 		t.Fatal(err)
 	}
-
-	expectedPrefix := "data: "
-	if !strings.HasPrefix(line, expectedPrefix) {
-		t.Fatalf("Expected line to start with %q, got %q", expectedPrefix, line)
+	if echoed["method"] != "ping" || echoed["jsonrpc"] != "2.0" {
+		t.Fatalf("echoed message = %v, want the ping request", echoed)
+	}
+	if id, _ := echoed["id"].(float64); id != 1 {
+		t.Fatalf("echoed id = %v, want the caller's 1 (bridge id not restored)", echoed["id"])
 	}
 
-	receivedMessage := strings.TrimPrefix(line, expectedPrefix)
-	receivedMessage = strings.TrimSpace(receivedMessage)
-
-	if receivedMessage != testMessage {
-		t.Fatalf("Expected to receive %q, got %q", testMessage, receivedMessage)
-	}
-
-	// Cancel context to close the SSE stream and allow server to close gracefully
 	cancel()
 }
 
@@ -667,16 +639,7 @@ func TestDatapathHeadersAndRoutingTable(t *testing.T) {
 		}
 	}()
 
-	rootPub, rootPriv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatalf("gen root: %v", err)
-	}
-	if err := buildAndSaveBiscuit(nodeB, rootPriv); err != nil {
-		t.Fatalf("buildAndSaveBiscuit: %v", err)
-	}
-	nodeA.keysMu.Lock()
-	nodeA.trustedKeys = append(nodeA.trustedKeys, TrustedKey{Key: rootPub, ReceivedAt: time.Now()})
-	nodeA.keysMu.Unlock()
+	enrollUnderRoot(t, nodeA, nodeB)
 
 	err = nodeB.Host.Connect(ctx, peer.AddrInfo{ID: nodeA.Host.ID(), Addrs: nodeA.Host.Addrs()})
 	if err != nil {

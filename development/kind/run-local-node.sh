@@ -49,8 +49,11 @@ cleanup() { [[ -n "${NODE_PID:-}" ]] && kill "${NODE_PID}" 2>/dev/null || true; 
 trap cleanup EXIT INT TERM
 
 export SAM_API_TOKEN=devtoken
+# Plaintext to the kind LoadBalancer IP: the docker bridge on this machine is
+# the trust boundary here, and the admin token above travelled the same hop.
 ./bin/sam-node run \
   --control-plane "${CONTROL_PLANE_URL}" \
+  --insecure-control-plane \
   --bootstrap-token "${BOOTSTRAP_TOKEN}" \
   --listen /ip4/0.0.0.0/tcp/0 \
   --bind-addr 127.0.0.1:9099 \

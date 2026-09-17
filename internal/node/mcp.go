@@ -54,7 +54,7 @@ Inference services ('inference://...') are NOT called via call_remote_tool — t
 
 To authenticate such an HTTP request to this node, try these in order:
   1. If get_mesh_info reports a local_api_socket, send the request over that Unix socket and skip authentication entirely: it serves this same HTTP API, and only the user who owns the socket can connect to it, so no token is involved and no secret lands in a command line. e.g. 'curl --unix-socket <local_api_socket> <local_proxy_url>/chat/completions'.
-  2. Otherwise use the TCP endpoint with header 'X-Sam-Authentication: Bearer <node API token>'. You already have that token: it is the header you were configured with to reach this MCP server, so read it back from your own MCP client configuration (the entry for this server in e.g. ~/.gemini/config/mcp_config.json or ~/.claude.json) instead of asking the user for it or hunting for the node's token file.
+  2. Otherwise use the TCP endpoint with header 'X-Sam-Authentication: Bearer <node API token>'. Do not read your MCP client configuration files to recover that token: they hold every other server's headers too, and reading them puts all of those secrets into the transcript. A daemonized node writes its token to ~/.config/sam-mesh/api-token; have curl read the file itself (e.g. -H @<(printf 'X-Sam-Authentication: Bearer %s' "$(cat ~/.config/sam-mesh/api-token)")) so the value never lands in an argument. If the node was started with --api-token-path or SAM_API_TOKEN, ask the user where the token lives.
 
 Never print that token or echo it into the transcript. 'Authorization: Bearer <upstream-credential>' is a different thing: send it only when the destination service requires its own credential — it passes straight through untouched and is never used to authenticate to this node.`
 
@@ -76,24 +76,6 @@ func NewMCPServer(node *SamNode) *mcp.Server {
 		Name:        "discover_remote_services",
 		Description: "Discover remote services in the mesh. Provide only `type` to browse every reachable service of that type (returns name + description for each); add `name` to target a specific service. For `type: inference`, each result's `local_proxy_url` is called directly over HTTP (NOT via call_remote_tool) — the response includes a usage hint with the exact headers required.",
 	}, node.handleDiscoverRemoteServices)
-
-	// Add the mesh_pubsub_broadcast tool.
-	mcp.AddTool(mcpServer, &mcp.Tool{
-		Name:        "mesh_pubsub_broadcast",
-		Description: "Publish an event payload to a custom GossipSub topic",
-	}, node.handleMeshPubsubBroadcast)
-
-	// Add the poll_messages tool.
-	mcp.AddTool(mcpServer, &mcp.Tool{
-		Name:        "poll_messages",
-		Description: "Poll for incoming messages on custom GossipSub topics",
-	}, node.handlePollMessages)
-
-	// Add the subscribe_topic tool.
-	mcp.AddTool(mcpServer, &mcp.Tool{
-		Name:        "subscribe_topic",
-		Description: "Subscribe to a custom GossipSub topic",
-	}, node.handleSubscribeTopic)
 
 	// Add the get_mesh_info tool.
 	mcp.AddTool(mcpServer, &mcp.Tool{
@@ -378,14 +360,13 @@ func (n *SamNode) ConnectMCPSession(ctx context.Context, targetPeer peer.ID, tar
 		return nil, nil, fmt.Errorf("%w by %s: %s", ErrAuthRejected, targetPeer, resp.Error)
 	}
 
-	// The gate runs when the caller requires labels or when the operator's
-	// egress floor does: a caller that requires nothing is still held to the
-	// floor (checkPeerLabels ANDs both).
-	if len(requiredLabels) > 0 || len(n.egressFloor()) > 0 {
-		if err := n.checkPeerLabels(resp.Biscuit, targetPeer, requiredLabels); err != nil {
-			cleanup()
-			return nil, nil, err
-		}
+	// The provider's biscuit is verified unconditionally: signature, expiry and
+	// binding to targetPeer. Discovery (DHT, gossip) names whoever announced
+	// the service; only this says the peer is enrolled. Caller-required labels
+	// and the operator's egress floor are additional checks on the same token.
+	if err := n.checkPeerLabels(resp.Biscuit, targetPeer, requiredLabels); err != nil {
+		cleanup()
+		return nil, nil, err
 	}
 
 	// Handoff to SDK using custom transport
@@ -463,7 +444,7 @@ func (n *SamNode) fetchRemoteServiceCatalog(ctx context.Context, peerID peer.ID,
 	}
 	var services []*api.ServiceInfo
 	if err := json.Unmarshal([]byte(text.Text), &services); err != nil {
-		logger.Warnf("[Discovery] catalog unmarshal failed; raw text from %s: %q", peerID, text.Text)
+		logger.Warnf("[Discovery] catalog unmarshal failed; raw text from %s: %q", peerID, truncateForLog(text.Text))
 		return nil, fmt.Errorf("unmarshal: %w", err)
 	}
 	return services, nil

@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package node
+// Package ratelimit bounds how often an individual peer may make a node or
+// router do pre-authentication work.
+package ratelimit
 
 import (
 	"sync"

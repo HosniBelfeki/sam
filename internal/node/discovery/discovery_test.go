@@ -235,6 +235,38 @@ func TestProviderTableIsBounded(t *testing.T) {
 	}
 }
 
+// One peer announcing many distinct service names must not be able to push
+// everyone else out of a full table: the global cap evicts the oldest entry,
+// which is whoever announced least recently, not whoever announced most.
+func TestProviderTableCapsEntriesPerSigner(t *testing.T) {
+	d := New(nil, testPeerID(t), WithMaxProviders(MaxProvidersPerSigner+4))
+	honest := testPeerID(t)
+	d.observe(rawMessage(t, honest, &api.ServiceAnnounce{
+		PeerId: honest.String(), Type: api.ServiceType_SERVICE_TYPE_INFERENCE,
+		ServiceName: "llm", Keys: []string{"m1"},
+		Timestamp: time.Now().Unix(),
+	}))
+
+	loud := testPeerID(t)
+	for i := range 3 * MaxProvidersPerSigner {
+		d.observe(rawMessage(t, loud, &api.ServiceAnnounce{
+			PeerId: loud.String(), Type: api.ServiceType_SERVICE_TYPE_INFERENCE,
+			ServiceName: "svc-" + string(rune('a'+i%26)) + string(rune('a'+i/26)), Keys: []string{"m1"},
+			Timestamp: time.Now().Unix(),
+		}))
+	}
+
+	if got := d.countBySignerLocked(loud.String()); got != MaxProvidersPerSigner {
+		t.Errorf("loud signer holds %d entries, want exactly %d", got, MaxProvidersPerSigner)
+	}
+	if got := len(d.Providers(api.ServiceType_SERVICE_TYPE_INFERENCE, "m1")); got != MaxProvidersPerSigner+1 {
+		t.Errorf("providers for m1: got %d, want %d", got, MaxProvidersPerSigner+1)
+	}
+	if d.countBySignerLocked(honest.String()) != 1 {
+		t.Error("the honest signer's entry was evicted by another peer's announcements")
+	}
+}
+
 func TestPeerLabels(t *testing.T) {
 	d := New(nil, testPeerID(t))
 	signer := testPeerID(t)

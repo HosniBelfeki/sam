@@ -50,6 +50,8 @@ func newFakeModelService(name string, handler http.Handler, models ...string) *f
 }
 
 // newTestFacade builds a facade with inert seams; tests override as needed.
+// The provider verifier accepts everyone: tests that care about the gate
+// replace it, and tests of the fail-closed path set it to nil explicitly.
 func newTestFacade() *openAIFacade {
 	return &openAIFacade{
 		ttl:           time.Minute,
@@ -61,6 +63,7 @@ func newTestFacade() *openAIFacade {
 		remoteModels: func(_ context.Context, _, _ string) ([]string, error) {
 			return nil, nil
 		},
+		verifyPeerLabels: func(context.Context, string, map[string]string) error { return nil },
 	}
 }
 
@@ -737,7 +740,8 @@ func TestFacade_Completions_LabelAttestation(t *testing.T) {
 	})
 
 	t.Run("requirement with enforcement unavailable fails closed", func(t *testing.T) {
-		f := newLabelFacade() // verifyPeerLabels deliberately nil
+		f := newLabelFacade()
+		f.verifyPeerLabels = nil
 		f.forward = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			t.Error("request must not be forwarded without attestation")
 		})
@@ -752,16 +756,33 @@ func TestFacade_Completions_LabelAttestation(t *testing.T) {
 		}
 	})
 
-	t.Run("no requirement never attests", func(t *testing.T) {
+	t.Run("no requirement still verifies the provider", func(t *testing.T) {
+		// A discovered peer is not a provider until its identity checks
+		// out, whether or not the caller asked for a label. Here every
+		// provider fails verification, so nothing may be forwarded.
 		f := newLabelFacade()
-		f.verifyPeerLabels = func(_ context.Context, _ string, _ map[string]string) error {
-			t.Error("attestation must not run without a requirement")
-			return nil
+		verified := 0
+		f.verifyPeerLabels = func(_ context.Context, _ string, required map[string]string) error {
+			verified++
+			if len(required) != 0 {
+				t.Errorf("required = %v, want none", required)
+			}
+			return fmt.Errorf("not an enrolled peer")
 		}
-		f.forward = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})
+		f.forward = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			t.Error("an unverified provider must not receive the request")
+		})
 
 		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"m1"}`))
-		f.handleCompletions(httptest.NewRecorder(), req)
+		rec := httptest.NewRecorder()
+		f.handleCompletions(rec, req)
+
+		if verified != 2 {
+			t.Errorf("verifier ran %d times, want once per provider (2)", verified)
+		}
+		if rec.Code == http.StatusOK {
+			t.Errorf("status = %d, want a failure when no provider verifies", rec.Code)
+		}
 	})
 }
 
@@ -963,7 +984,8 @@ func TestFacade_Completions_FloorGatesSilentCaller(t *testing.T) {
 	})
 
 	t.Run("a floor with no gate seam fails closed", func(t *testing.T) {
-		f := newFloorFacade() // verifyPeerLabels stays nil
+		f := newFloorFacade()
+		f.verifyPeerLabels = nil
 		forwarded := false
 		f.forward = http.HandlerFunc(func(http.ResponseWriter, *http.Request) { forwarded = true })
 

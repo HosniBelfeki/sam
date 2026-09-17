@@ -19,7 +19,9 @@ import (
 	"crypto/ed25519"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -52,6 +54,11 @@ func NewSQLStore(driverName, dataSourceName string) (*SQLStore, error) {
 		// Callers (e.g. integration tests that copy DB files) can override this by
 		// passing a DSN containing custom query parameter parameters (e.g. "?_pragma=journal_mode(DELETE)&_pragma=busy_timeout(5000)").
 		dataSourceName = dataSourceName + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
+	}
+	if driverName == "sqlite" {
+		if err := restrictSQLiteFileMode(dataSourceName); err != nil {
+			return nil, err
+		}
 	}
 	db, err := sql.Open(actualDriver, dataSourceName)
 	if err != nil {
@@ -110,6 +117,41 @@ func NewSQLStore(driverName, dataSourceName string) (*SQLStore, error) {
 
 func (s *SQLStore) isPostgres() bool {
 	return strings.Contains(s.driverName, "postgres") || strings.Contains(s.driverName, "pgx")
+}
+
+// sqliteFilePath extracts the on-disk path from a SQLite DSN, or "" for
+// in-memory databases.
+func sqliteFilePath(dsn string) string {
+	path := strings.TrimPrefix(dsn, "file:")
+	if i := strings.IndexByte(path, '?'); i >= 0 {
+		path = path[:i]
+	}
+	if path == "" || strings.Contains(path, ":memory:") {
+		return ""
+	}
+	return path
+}
+
+// restrictSQLiteFileMode makes the database owner-only. The keyring holds the
+// mesh signing private keys, and the SQLite driver otherwise creates the file
+// 0644 (minus umask). The file is created here, before the driver opens it,
+// because SQLite gives the -wal and -shm side files the main file's mode.
+func restrictSQLiteFileMode(dsn string) error {
+	path := sqliteFilePath(dsn)
+	if path == "" {
+		return nil
+	}
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return fmt.Errorf("failed to create database file %s: %w", path, err)
+	}
+	_ = f.Close()
+	for _, p := range []string{path, path + "-wal", path + "-shm"} {
+		if err := os.Chmod(p, 0o600); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("failed to restrict permissions on %s: %w", p, err)
+		}
+	}
+	return nil
 }
 
 type migration struct {
@@ -395,6 +437,20 @@ var migrations = []migration{
 			`ALTER TABLE bootstrap_tokens ADD COLUMN autonomous_recovery BOOLEAN DEFAULT FALSE NOT NULL`,
 		},
 	},
+	{
+		// Identity bans are keyed on issuer|subject; a user row keyed on the
+		// bare subject could not be matched against them, so the surfaces a
+		// user drives with an ID token (bootstrap tokens, revocation) did not
+		// see the ban. Empty for rows from before this migration until the
+		// user next logs in.
+		version: 11,
+		postgres: []string{
+			`ALTER TABLE users ADD COLUMN IF NOT EXISTS issuer VARCHAR(512) DEFAULT '' NOT NULL`,
+		},
+		sqlite: []string{
+			`ALTER TABLE users ADD COLUMN issuer TEXT DEFAULT '' NOT NULL`,
+		},
+	},
 }
 
 func (s *SQLStore) initSchema() error {
@@ -575,6 +631,28 @@ func (s *SQLStore) GetAllValidKeys(ctx context.Context) ([]KeyPair, error) {
 	return keys, rows.Err()
 }
 
+// GetAllValidPublicKeys implements Store.
+func (s *SQLStore) GetAllValidPublicKeys(ctx context.Context) ([]ed25519.PublicKey, error) {
+	query := s.rebind(`SELECT public_key FROM keyring WHERE expiration IS NULL OR expiration > ?`)
+	rows, err := s.db.QueryContext(ctx, query, time.Now().UnixMilli())
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var keys []ed25519.PublicKey
+	for rows.Next() {
+		var pub []byte
+		if err := rows.Scan(&pub); err != nil {
+			return nil, err
+		}
+		pubCopy := make([]byte, len(pub))
+		copy(pubCopy, pub)
+		keys = append(keys, ed25519.PublicKey(pubCopy))
+	}
+	return keys, rows.Err()
+}
+
 // ClaimKeyRotation implements Store.
 func (s *SQLStore) ClaimKeyRotation(ctx context.Context, now time.Time, interval time.Duration) (bool, error) {
 	query := s.rebind(`UPDATE rotation_lock SET next_rotation_at = ? WHERE id = 1 AND next_rotation_at <= ?`)
@@ -721,8 +799,18 @@ func (s *SQLStore) GetNode(ctx context.Context, peerID string) (*EnrolledNode, e
 // SetNodeBanned implements Store.
 func (s *SQLStore) SetNodeBanned(ctx context.Context, peerID string, banned bool) error {
 	query := s.rebind(`UPDATE nodes SET banned = ? WHERE peer_id = ?`)
-	_, err := s.db.ExecContext(ctx, query, banned, peerID)
-	return err
+	res, err := s.db.ExecContext(ctx, query, banned, peerID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // SetNodeAutonomousRecovery implements Store.
@@ -1092,12 +1180,21 @@ func (s *SQLStore) GetBootstrapToken(ctx context.Context, id string) (*Bootstrap
 	return &t, nil
 }
 
-// IncrementBootstrapTokenUsage increments usage count.
-func (s *SQLStore) IncrementBootstrapTokenUsage(ctx context.Context, id string) error {
-	query := `UPDATE bootstrap_tokens SET usages_count = usages_count + 1 WHERE id = ?`
-	_, err := s.db.ExecContext(ctx, s.rebind(query), id)
+// ConsumeBootstrapTokenUsage implements Store. The validity conditions live
+// in the WHERE clause so the check and the increment are one statement.
+func (s *SQLStore) ConsumeBootstrapTokenUsage(ctx context.Context, id string, now time.Time) error {
+	query := `UPDATE bootstrap_tokens SET usages_count = usages_count + 1
+		WHERE id = ? AND usages_count < max_usages AND revoked_at IS NULL AND expires_at > ?`
+	res, err := s.db.ExecContext(ctx, s.rebind(query), id, now.Unix())
 	if err != nil {
-		return fmt.Errorf("failed to increment usage: %w", err)
+		return fmt.Errorf("failed to consume token usage: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to consume token usage: %w", err)
+	}
+	if n == 0 {
+		return ErrBootstrapTokenUnusable
 	}
 	return nil
 }
@@ -1250,6 +1347,31 @@ func (s *SQLStore) UpdateEnrollmentRequest(ctx context.Context, id string, statu
 	return nil
 }
 
+// ResolveEnrollmentRequest implements Store.
+func (s *SQLStore) ResolveEnrollmentRequest(ctx context.Context, id string, status api.EnrollmentStatus, biscuit []byte, resolvedBy string) error {
+	query := `UPDATE enrollment_requests SET status = ?, biscuit_token = ?, resolved_at = ?, resolved_by = ?
+		WHERE id = ? AND status = ?`
+	res, err := s.db.ExecContext(ctx, s.rebind(query),
+		int(status),
+		biscuit,
+		time.Now().Unix(),
+		resolvedBy,
+		id,
+		int(api.EnrollmentStatus_ENROLLMENT_STATUS_PENDING),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to resolve enrollment request: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to resolve enrollment request: %w", err)
+	}
+	if n == 0 {
+		return ErrEnrollmentAlreadyResolved
+	}
+	return nil
+}
+
 // ListNodes retrieves all enrolled nodes.
 func (s *SQLStore) ListNodes(ctx context.Context) ([]EnrolledNode, error) {
 	query := s.rebind(`SELECT peer_id, public_key, biscuit_token, role, enrollment_type, claims_json, owner_id, labels_json, enrolled_at, expires_at, banned, autonomous_recovery FROM nodes ORDER BY enrolled_at DESC`)
@@ -1368,18 +1490,19 @@ func (s *SQLStore) SaveUser(ctx context.Context, user *User) error {
 	var query string
 	if s.isPostgres() {
 		query = s.rebind(`
-			INSERT INTO users (id, email, role, created_at)
-			VALUES (?, ?, ?, ?)
-			ON CONFLICT (id) DO UPDATE SET email = EXCLUDED.email, role = EXCLUDED.role`)
+			INSERT INTO users (id, issuer, email, role, created_at)
+			VALUES (?, ?, ?, ?, ?)
+			ON CONFLICT (id) DO UPDATE SET issuer = EXCLUDED.issuer, email = EXCLUDED.email, role = EXCLUDED.role`)
 	} else {
 		query = s.rebind(`
-			INSERT INTO users (id, email, role, created_at)
-			VALUES (?, ?, ?, ?)
-			ON CONFLICT (id) DO UPDATE SET email = excluded.email, role = excluded.role`)
+			INSERT INTO users (id, issuer, email, role, created_at)
+			VALUES (?, ?, ?, ?, ?)
+			ON CONFLICT (id) DO UPDATE SET issuer = excluded.issuer, email = excluded.email, role = excluded.role`)
 	}
 
 	_, err := s.db.ExecContext(ctx, query,
 		user.ID,
+		user.Issuer,
 		user.Email,
 		user.Role,
 		user.CreatedAt.Unix(),
@@ -1389,11 +1512,12 @@ func (s *SQLStore) SaveUser(ctx context.Context, user *User) error {
 
 // GetUser retrieves a user by ID.
 func (s *SQLStore) GetUser(ctx context.Context, id string) (*User, error) {
-	query := s.rebind(`SELECT id, email, role, created_at FROM users WHERE id = ?`)
+	query := s.rebind(`SELECT id, issuer, email, role, created_at FROM users WHERE id = ?`)
 	var user User
 	var created int64
 	err := s.db.QueryRowContext(ctx, query, id).Scan(
 		&user.ID,
+		&user.Issuer,
 		&user.Email,
 		&user.Role,
 		&created,
@@ -1410,7 +1534,7 @@ func (s *SQLStore) GetUser(ctx context.Context, id string) (*User, error) {
 
 // ListUsers retrieves all registered users.
 func (s *SQLStore) ListUsers(ctx context.Context) ([]User, error) {
-	query := `SELECT id, email, role, created_at FROM users`
+	query := `SELECT id, issuer, email, role, created_at FROM users`
 	rows, err := s.db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
@@ -1423,6 +1547,7 @@ func (s *SQLStore) ListUsers(ctx context.Context) ([]User, error) {
 		var created int64
 		if err := rows.Scan(
 			&user.ID,
+			&user.Issuer,
 			&user.Email,
 			&user.Role,
 			&created,

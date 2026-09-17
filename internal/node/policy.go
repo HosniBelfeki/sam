@@ -25,6 +25,15 @@ import (
 func BuildPolicyRules(roles []*api.PolicyRole, bindings []*api.PolicyBinding) []biscuit.Rule {
 	var rules []biscuit.Rule
 
+	// A binding member becomes the body of a rule that grants a mesh role,
+	// so only facts the control plane attests in the authority block may
+	// appear there: agent() is the caller's own claim, and role() would
+	// grant a role from a role.
+	allowedMemberPrefix := make(map[string]bool)
+	for _, p := range api.BindingMemberPrefixes() {
+		allowedMemberPrefix[p] = true
+	}
+
 	for _, b := range bindings {
 		if b == nil {
 			continue
@@ -41,7 +50,7 @@ func BuildPolicyRules(roles []*api.PolicyRole, bindings []*api.PolicyBinding) []
 				continue
 			}
 			parts := strings.SplitN(m, ":", 2)
-			if len(parts) == 2 {
+			if len(parts) == 2 && allowedMemberPrefix[parts[0]] {
 				memberType := parts[0]
 				memberVal := parts[1]
 				rules = append(rules, biscuit.Rule{

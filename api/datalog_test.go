@@ -360,11 +360,21 @@ func TestOIDCClaimToFact(t *testing.T) {
 		"sub":    FactUser,
 		"email":  FactEmail,
 		"groups": FactGroup,
-		"roles":  FactRole,
+		"roles":  FactIdpRole,
 	}
 
 	if !reflect.DeepEqual(facts, want) {
 		t.Errorf("OIDCClaimToFact() = %v, want %v", facts, want)
+	}
+	// role() is minted from mesh policy only. An issuer whose "roles" claim
+	// landed there could name sam:role:router and become a router.
+	for claim, fact := range facts {
+		if fact == FactRole {
+			t.Errorf("claim %q maps to the mesh role fact %q", claim, FactRole)
+		}
+	}
+	if p := BindingMemberPrefixes(); slices.Contains(p, FactRole) || !slices.Contains(p, FactIdpRole) || !slices.Contains(p, FactNode) {
+		t.Errorf("BindingMemberPrefixes() = %v; want idp_role and node, not role", p)
 	}
 
 	// Verify that modifying the returned map does not mutate the internal map.

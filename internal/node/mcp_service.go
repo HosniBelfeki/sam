@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
 	"sort"
 	"sync"
@@ -141,16 +140,17 @@ func (m *MCPService) Teardown() error {
 func (m *MCPService) backendTransport() (mcp.Transport, error) {
 	switch x := m.backend.(type) {
 	case *api.RegisterServiceRequest_TargetUrl:
-		return &mcp.StreamableClientTransport{Endpoint: x.TargetUrl}, nil
+		target, err := parseBackendTarget(x.TargetUrl)
+		if err != nil {
+			return nil, err
+		}
+		return &mcp.StreamableClientTransport{Endpoint: target.url.String(), HTTPClient: target.client()}, nil
 	case *api.RegisterServiceRequest_Command:
 		if x.Command == nil || len(x.Command.Command) == 0 {
 			return nil, fmt.Errorf("missing command for command-backed MCP service %q", m.info.GetName())
 		}
 		cmd := exec.Command(x.Command.Command[0], x.Command.Command[1:]...)
-		cmd.Env = os.Environ()
-		for k, v := range x.Command.Env {
-			cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, v))
-		}
+		cmd.Env = backendEnv(x.Command.Env)
 		return &boundedTransport{
 			Transport: &mcp.CommandTransport{Command: cmd},
 			slots:     m.sessionSlots(),

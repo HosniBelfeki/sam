@@ -88,15 +88,22 @@ The host in the URL is a placeholder that curl ignores once it dials a socket.
 
 **2. The TCP endpoint, with the node API token.** Use this when `get_mesh_info`
 reports no `local_api_socket`, or when that path is not reachable from where you
-run, for example a node inside a container. You already hold that token: it is
-the header you were configured with to reach this MCP server in the first place.
-Read it back from your own MCP client configuration — the `sam-mesh` entry in,
-for example, `~/.gemini/config/mcp_config.json` or `~/.claude.json` — rather than
-asking the user for it or reading the node's token file.
+run, for example a node inside a container. Do not read your MCP client
+configuration to recover it: those files hold the headers of every other server
+you are connected to, and reading them puts all of those secrets into the
+transcript. A daemonized node writes its token to
+`~/.config/sam-mesh/api-token`; let curl read that file itself so the value
+never appears in an argument, the shell history, or your output:
 
 ```bash
-curl http://127.0.0.1:8080/v1/models -H "X-Sam-Authentication: Bearer <token>"
+curl http://127.0.0.1:8080/v1/models -H @<(printf 'X-Sam-Authentication: Bearer %s' "$(cat ~/.config/sam-mesh/api-token)")
 ```
+
+`<(...)` needs bash or zsh; in a plain `sh`, write the header line to a file
+with mode 0600 and pass `-H @that-file` instead.
+
+If the node was started with `--api-token-path` or `SAM_API_TOKEN`, ask the
+user where the token lives rather than searching for it.
 
 Never print the token or echo it into the transcript. `Authorization` is not the
 node's credential: send it only when the destination service needs its own, and

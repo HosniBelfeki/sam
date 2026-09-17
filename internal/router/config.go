@@ -53,6 +53,10 @@ type Options struct {
 	// cap (default: 8) when > 0. Raise it when the listener sits behind a
 	// TLS-terminating proxy or NAT, where many peers share a few source IPs.
 	ConnsPerSourceIP int
+	// AllowInsecureControlPlane accepts a plaintext http:// ControlPlaneURL
+	// to a non-loopback host. Off by default: whoever answers that URL is
+	// the trust root.
+	AllowInsecureControlPlane bool
 }
 
 // Default sets default values for options.
@@ -91,5 +95,5 @@ func (o *Options) Validate() error {
 	if o.ControlPlaneURL == "" {
 		return fmt.Errorf("ControlPlaneURL must be specified")
 	}
-	return nil
+	return api.ValidateControlPlaneTransport(o.ControlPlaneURL, o.AllowInsecureControlPlane)
 }

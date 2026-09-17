@@ -57,6 +57,7 @@ spec:
           name: p2p-udp
         args:
         - "--control-plane=http://sam-control-plane-${ENV_NAME}.${NAMESPACE}.svc.cluster.local:8080"
+        - "--insecure-control-plane"
         - "--listen=/ip4/0.0.0.0/tcp/4501"
         - "--listen=/ip4/0.0.0.0/udp/4501/quic-v1"
         - "--external-addr=/dnsaddr/bootstrap.${ENV_NAME}.sam-mesh.dev"

@@ -278,21 +278,35 @@ roles: []
 	if err != nil {
 		t.Fatal(err)
 	}
+	routerInfoB, err := peer.AddrInfoFromP2pAddr(multiaddr.StringCast(fmt.Sprintf("/ip4/127.0.0.1/tcp/%d/p2p/%s", routerPortB, peerIDB)))
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
+	// The relay admits circuits only between peers that authenticated to
+	// the router, so the client is a mesh member: enrolled with CP B and
+	// handshaken with Router B before it dials the circuit. A fresh host per
+	// attempt sidesteps the swarm's dial backoff.
 	var connectErr error
 	for i := 0; i < 15; i++ {
 		clientHost, err := libp2p.New(libp2p.NoListenAddrs, libp2p.EnableRelay())
 		if err != nil {
 			t.Fatal(err)
 		}
-		connectErr = clientHost.Connect(ctx, *addrInfo)
+		clientBiscuit := enrollClientOnControlPlane(t, httpPortCP_B, clientHost.ID(), clientHost.Peerstore().PrivKey(clientHost.ID()), nodeJWT)
+		if connectErr = clientHost.Connect(ctx, *routerInfoB); connectErr == nil {
+			if connectErr = authenticateWithRouter(ctx, clientHost, routerInfoB.ID, clientBiscuit); connectErr == nil {
+				connectErr = clientHost.Connect(ctx, *addrInfo)
+			}
+		}
 		_ = clientHost.Close()
 		if connectErr == nil {
 			break
 		}
+		t.Logf("attempt %d: %v", i+1, connectErr)
 		time.Sleep(1 * time.Second)
 	}
 
@@ -300,6 +314,20 @@ roles: []
 		t.Fatalf("Failed to connect to Node B via router B relay: %v\nOutput: %s", connectErr, stdoutNode.String()+stderrNode.String())
 	}
 	t.Log("Successfully connected to Node B via router B relay circuit!")
+
+	// The same circuit is refused to a host that never authenticated to
+	// Router B: the relay is for mesh members, not for whoever can reach
+	// the router's port.
+	anonHost, err := libp2p.New(libp2p.NoListenAddrs, libp2p.EnableRelay())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = anonHost.Close() }()
+	anonCtx, anonCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer anonCancel()
+	if err := anonHost.Connect(anonCtx, *addrInfo); err == nil {
+		t.Fatal("an unauthenticated host reached the node through Router B's relay; the relay ACL must require an authenticated source")
+	}
 }
 
 // waitForActiveRouters polls the control plane's /info endpoint until at

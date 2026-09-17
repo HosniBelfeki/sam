@@ -60,6 +60,14 @@ message EnrollRequest {
   // enrollment flow's gates, minted as signed label() facts in the
   // biscuit. Empty means no claims.
   map<string, string> labels = 5;
+  // Proof of possession of public_key's private half: timestamp is unix
+  // milliseconds and challenge_signature signs the UTF-8 bytes of
+  // "sam:register:<peer_id>:<timestamp>". Required, and peer_id must be
+  // derived from public_key. The JWT proves who is asking; this proves
+  // they hold the key they are asking to bind, so an identity cannot
+  // register (and overwrite) another node's peer_id.
+  int64 timestamp = 6;
+  bytes challenge_signature = 7;
 }
 
 message EnrollResponse {
@@ -186,6 +194,13 @@ message RouterLeaseRequest {
   bytes biscuit = 3;
   repeated string connected_peers = 4;
   int32 dht_size = 5;
+  // Proof of possession of the router's enrolled key: timestamp is unix
+  // milliseconds and challenge_signature signs the UTF-8 bytes of
+  // "sam:routers-lease:<peer_id>:<timestamp>" with the key the router
+  // enrolled with. Required. The biscuit alone is not proof: routers hand
+  // theirs to every peer they authenticate.
+  int64 timestamp = 6;
+  bytes challenge_signature = 7;
 }
 
 message RouterLeaseResponse {
@@ -234,6 +249,14 @@ message PolicyConfigUpdateResponse {
 
 message KeysResponse {
   repeated bytes public_keys = 1;
+  // Unix milliseconds at which the set was signed; receivers reject responses
+  // outside a short freshness window so a captured set cannot be replayed.
+  int64 timestamp = 2;
+  // One ed25519 signature per entry of public_keys, by that key, over the
+  // deterministic encoding of this message with signatures cleared. A
+  // receiver trusting any key still valid on the control plane can verify
+  // the whole set (see api.VerifyKeysResponse).
+  repeated bytes signatures = 3;
 }
 
 message TokenRefreshRequest {

@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:convert';
+import 'dart:math';
 import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart';
 
@@ -7,6 +8,9 @@ class SamDartMcpServer {
   static const MethodChannel _channel = MethodChannel('com.example.sam_agent/mesh_expose');
   HttpServer? _server;
   final List<HttpResponse> _sseClients = [];
+  // Android loopback is shared by every installed app, so the port alone is
+  // no boundary: each start mints a token only the node is told about.
+  String? _token;
 
   // Callbacks to check current feature status from UI
   final bool Function() isBatteryEnabled;
@@ -17,19 +21,37 @@ class SamDartMcpServer {
     required this.isLocationEnabled,
   });
 
-  /// Starts the Dart HTTP Server acting as an MCP backend. The service it
-  /// backs is declared in the node's start configuration; there is no
-  /// runtime registration, so this server must be listening before the node
-  /// starts and probes it.
+  /// The URL the node dials, with this launch's credential as userinfo; the
+  /// node turns that into an Authorization header and never advertises it.
+  String get targetUrl {
+    final s = _server;
+    if (s == null || _token == null) throw StateError('not started');
+    return 'http://:$_token@127.0.0.1:${s.port}';
+  }
+
+  static String newToken() {
+    final rng = Random.secure();
+    return base64Url.encode(List<int>.generate(32, (_) => rng.nextInt(256))).replaceAll('=', '');
+  }
+
+  /// Starts the Dart HTTP Server acting as an MCP backend on a random
+  /// loopback port. The service it backs is declared in the node's start
+  /// configuration; there is no runtime registration, so this server must be
+  /// listening before the node starts and probes it.
   ///
-  /// Throws if the port cannot be bound.
-  Future<void> start({int port = 9090}) async {
+  /// Throws if no port can be bound.
+  Future<void> start({int port = 0}) async {
     if (_server != null) throw StateError('already started');
+    _token = newToken();
     _server = await HttpServer.bind(InternetAddress.loopbackIPv4, port);
-    debugPrint('SAM Dart MCP Server listening on port $port');
+    debugPrint('SAM Dart MCP Server listening on port ${_server!.port}');
 
     _server!.listen((HttpRequest request) async {
-      // Handle CORS if needed, but since it's loopback and called by Go, maybe not strict
+      if (!_authorized(request)) {
+        request.response.statusCode = HttpStatus.unauthorized;
+        await request.response.close();
+        return;
+      }
       if (request.method == 'GET') {
         _handleSse(request);
       } else if (request.method == 'POST') {
@@ -41,10 +63,28 @@ class SamDartMcpServer {
     });
   }
 
+  bool _authorized(HttpRequest request) {
+    final token = _token;
+    if (token == null) return false;
+    return constantTimeEquals(request.headers.value(HttpHeaders.authorizationHeader), 'Bearer $token');
+  }
+
+  /// Compares a presented credential without leaking where it diverges.
+  @visibleForTesting
+  static bool constantTimeEquals(String? a, String b) {
+    if (a == null || a.length != b.length) return false;
+    var diff = 0;
+    for (var i = 0; i < a.length; i++) {
+      diff |= a.codeUnitAt(i) ^ b.codeUnitAt(i);
+    }
+    return diff == 0;
+  }
+
   /// Stops the server
   Future<void> stop() async {
     await _server?.close(force: true);
     _server = null;
+    _token = null;
     _sseClients.clear();
     debugPrint('SAM Dart MCP Server stopped');
   }
@@ -127,7 +167,7 @@ class SamDartMcpServer {
         if (isLocationEnabled()) {
           tools.add({
             'name': 'get_location',
-            'description': 'Returns the current coarse location of the device.',
+            'description': 'Returns the approximate location of the device, rounded to about a kilometre.',
             'inputSchema': {'type': 'object', 'properties': {}}
           });
         }

@@ -97,15 +97,8 @@ spec:
           periodSeconds: 15
         resources:
           {{- toYaml .Values.router.resources | nindent 10 }}
-        env:
-        {{- if not .Values.router.useOidcToken }}
-        - name: BOOTSTRAP_TOKEN
-          valueFrom:
-            secretKeyRef:
-              name: {{ include "sam-mesh.fullname" . }}-router-token
-              key: token
-        {{- end }}
         {{- if .Values.router.hostPort }}
+        env:
         # kubelet expands $(HOST_IP) in the args below.
         - name: HOST_IP
           valueFrom:
@@ -114,6 +107,9 @@ spec:
         {{- end }}
         args:
         - "--control-plane=http://{{ include "sam-mesh.fullname" . }}-control-plane:{{ .Values.controlPlane.service.port }}"
+        # In-cluster plaintext to the chart's own control-plane Service; the
+        # cluster network is the trust boundary here.
+        - "--insecure-control-plane"
         - "--listen=/ip4/0.0.0.0/tcp/4501"
         - "--listen=/ip4/0.0.0.0/udp/4501/quic-v1"
         {{- if .Values.router.externalAddrs }}
@@ -134,7 +130,9 @@ spec:
         {{- if .Values.router.useOidcToken }}
         - "--jwt-path=/var/run/secrets/tokens/sam-token"
         {{- else }}
-        - "--bootstrap-token=$(BOOTSTRAP_TOKEN)"
+        # A file, not a flag value: argv is readable through kubectl exec and
+        # /proc/<pid>/cmdline.
+        - "--bootstrap-token-path=/var/run/secrets/sam-router/token"
         {{- end }}
         volumeMounts:
         - name: router-data
@@ -143,9 +141,13 @@ spec:
         - name: sam-token
           mountPath: /var/run/secrets/tokens
           readOnly: true
+        {{- else }}
+        - name: router-token
+          mountPath: /var/run/secrets/sam-router
+          readOnly: true
         {{- end }}
-      {{- if .Values.router.useOidcToken }}
       volumes:
+      {{- if .Values.router.useOidcToken }}
       - name: sam-token
         projected:
           sources:
@@ -153,6 +155,13 @@ spec:
               path: sam-token
               expirationSeconds: 3600
               audience: "sam-control-plane-audience"
+      {{- else }}
+      - name: router-token
+        secret:
+          secretName: {{ include "sam-mesh.fullname" . }}-router-token
+          items:
+          - key: token
+            path: token
       {{- end }}
   volumeClaimTemplates:
   - metadata:

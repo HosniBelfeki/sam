@@ -338,10 +338,9 @@ The real output:
 
 ```text
 mesh offered model: openrouter/auto
-mesh granted 9 tools: call_remote_tool, describe_remote_tool,
+mesh granted 6 tools: call_remote_tool, describe_remote_tool,
   discover_remote_services, find_remote_tools, get_mesh_info,
-  list_local_services, mesh_pubsub_broadcast, poll_messages,
-  subscribe_topic
+  list_local_services
 step 1: get_mesh_info({})
 This node is connected to **23 peers**.
 ```

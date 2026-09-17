@@ -66,12 +66,16 @@ func (s *A2AService) Probe(ctx context.Context) error {
 	if !ok {
 		return fmt.Errorf("a2a service %q has no URL backend to probe", s.info.GetName())
 	}
-	cardURL := strings.TrimSuffix(target.TargetUrl, "/") + "/.well-known/agent-card.json"
+	backend, err := parseBackendTarget(target.TargetUrl)
+	if err != nil {
+		return err
+	}
+	cardURL := strings.TrimSuffix(backend.url.String(), "/") + "/.well-known/agent-card.json"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, cardURL, nil)
 	if err != nil {
 		return err
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := backend.client().Do(req)
 	if err != nil {
 		return fmt.Errorf("fetch agent card of %q: %w", s.info.GetName(), err)
 	}

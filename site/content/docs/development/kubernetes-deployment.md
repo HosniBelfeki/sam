@@ -160,6 +160,12 @@ If you'd rather deploy the pieces by hand — for example to exercise the Mock O
 
 The manifests for the mock OIDC provider are available in [mock-oidc.yaml](manifests/mock-oidc.yaml).
 
+> **Warning:** the mock issuer signs a token for whatever identity it is asked
+> for. It generates its signing key at start-up so nothing secret ships in the
+> manifest, but any control plane that trusts this issuer admits anyone who can
+> reach it. Use it only on a cluster nobody else can reach, and never as the
+> `--issuer` of a control plane exposed beyond that cluster.
+
 [mock-oidc.yaml](manifests/mock-oidc.yaml ':include')
 
 ### SAM Control Plane and Router Manifests
@@ -245,6 +251,7 @@ If you are using the **Mock OIDC Provider**, the node can fetch the token using 
    ```bash
    sam-node run \
      --control-plane "http://$CONTROL_PLANE_IP:9090" \
+     --insecure-control-plane \
      --oidc-issuer "http://$MOCK_IP:18080" \
      --client-id "sam-mesh-audience" \
      # client secret via SAM_CLIENT_SECRET env or --client-secret-path
@@ -254,6 +261,7 @@ If you are using **Google OIDC**, you must obtain a valid Google ID token for yo
 ```bash
 sam-node run \
   --control-plane "http://$CONTROL_PLANE_IP:9090" \
+  --insecure-control-plane \
   --jwt "<your-google-id-token>"
 ```
 
@@ -322,7 +330,7 @@ The SAM project supports three primary flows for acquiring a JWT token to enroll
 *   **Example:**
 ```bash
 sam-node run \
-  --control-plane "http://control-plane.example.com:9090" \
+  --control-plane "https://control-plane.example.com:9090" \
   --oidc-issuer "https://accounts.google.com" \
   --client-id "$SAM_OIDC_ID" \
   --client-secret "$SAM_OIDC_SECRET"
@@ -349,7 +357,7 @@ sam-node run
 *   **Example:**
 ```bash
 sam-node run \
-  --control-plane "http://control-plane.example.com:9090" \
+  --control-plane "https://control-plane.example.com:9090" \
   --jwt-path "/var/run/secrets/kubernetes.io/serviceaccount/token"
 ```
 > [!NOTE]

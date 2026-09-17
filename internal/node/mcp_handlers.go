@@ -115,74 +115,6 @@ func (n *SamNode) handleDiscoverRemoteServices(ctx context.Context, req *mcp.Cal
 	}, nil, nil
 }
 
-// MeshPubsubBroadcastParams defines the parameters for the mesh_pubsub_broadcast tool.
-type MeshPubsubBroadcastParams struct {
-	Topic   string `json:"topic" jsonschema:"GossipSub topic name"`
-	Payload string `json:"payload" jsonschema:"Payload to publish"`
-}
-
-// handleMeshPubsubBroadcast implements the mesh_pubsub_broadcast tool.
-func (n *SamNode) handleMeshPubsubBroadcast(ctx context.Context, req *mcp.CallToolRequest, params MeshPubsubBroadcastParams) (*mcp.CallToolResult, any, error) {
-	n.mu.Lock()
-	t, ok := n.topics[params.Topic]
-	var err error
-	if !ok {
-		t, err = n.PubSub.Join(params.Topic)
-		if err == nil {
-			n.topics[params.Topic] = t
-		}
-	}
-	n.mu.Unlock()
-	if err != nil {
-		return nil, nil, err
-	}
-	if err := t.Publish(ctx, []byte(params.Payload)); err != nil {
-		return nil, nil, err
-	}
-	return &mcp.CallToolResult{
-		Content: []mcp.Content{
-			&mcp.TextContent{Text: "Published"},
-		},
-	}, nil, nil
-}
-
-// PollMessagesParams defines the parameters for the poll_messages tool.
-type PollMessagesParams struct {
-	Topic string `json:"topic" jsonschema:"GossipSub topic name"`
-}
-
-// handlePollMessages implements the poll_messages tool.
-func (n *SamNode) handlePollMessages(ctx context.Context, req *mcp.CallToolRequest, params PollMessagesParams) (*mcp.CallToolResult, any, error) {
-	n.mu.Lock()
-	msgs := n.receivedMsgs[params.Topic]
-	delete(n.receivedMsgs, params.Topic) // Clear on read!
-	n.mu.Unlock()
-
-	response := fmt.Sprintf("Messages on topic %s: %v", params.Topic, msgs)
-	return &mcp.CallToolResult{
-		Content: []mcp.Content{
-			&mcp.TextContent{Text: response},
-		},
-	}, nil, nil
-}
-
-// SubscribeTopicParams defines the parameters for the subscribe_topic tool.
-type SubscribeTopicParams struct {
-	Topic string `json:"topic" jsonschema:"GossipSub topic name"`
-}
-
-// handleSubscribeTopic implements the subscribe_topic tool.
-func (n *SamNode) handleSubscribeTopic(ctx context.Context, req *mcp.CallToolRequest, params SubscribeTopicParams) (*mcp.CallToolResult, any, error) {
-	if err := n.subscribeToTopic(ctx, params.Topic); err != nil {
-		return nil, nil, err
-	}
-	return &mcp.CallToolResult{
-		Content: []mcp.Content{
-			&mcp.TextContent{Text: "Subscribed"},
-		},
-	}, nil, nil
-}
-
 // GetMeshInfoParams defines the parameters for the get_mesh_info tool.
 type GetMeshInfoParams struct{}
 
@@ -200,6 +132,26 @@ func (n *SamNode) handleGetMeshInfo(ctx context.Context, req *mcp.CallToolReques
 		Content: []mcp.Content{
 			&mcp.TextContent{Text: string(responseBytes)},
 		},
+	}, nil, nil
+}
+
+// handleGetMeshInfoRemote is get_mesh_info as served to other peers over the
+// catalog stream: the local socket path, the router and the connected-peer
+// list are this node's business, not a remote caller's.
+func (n *SamNode) handleGetMeshInfoRemote(ctx context.Context, req *mcp.CallToolRequest, params GetMeshInfoParams) (*mcp.CallToolResult, any, error) {
+	full, err := n.meshInfo()
+	if err != nil {
+		return nil, nil, err
+	}
+	responseBytes, err := json.Marshal(struct {
+		PeerID  string `json:"peer_id"`
+		DHTSize int    `json:"dht_size"`
+	}{PeerID: full.PeerID, DHTSize: full.DHTSize})
+	if err != nil {
+		return nil, nil, err
+	}
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{&mcp.TextContent{Text: string(responseBytes)}},
 	}, nil, nil
 }
 

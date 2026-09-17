@@ -387,6 +387,7 @@ func withAuth(token string, allowAuthorizationFallback bool, next http.Handler) 
 			// Reaching the socket at all already proves the caller is the user
 			// who owns it, which is the same bar as reading the token file.
 			r.Header.Del(api.HeaderSamAuthentication)
+			stripSidecarTokenFromAuthorization(r, token)
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -427,11 +428,40 @@ func withAuth(token string, allowAuthorizationFallback bool, next http.Handler) 
 		// The gate credential is local-only: strip exactly the header it came in
 		// on so it can never flow past the gate. Anything left (e.g. Authorization
 		// when the gate was passed via X-Sam-Authentication) is the destination
-		// service's own credential and passes through untouched.
+		// service's own credential and passes through untouched, unless it is
+		// this same token sent twice, which an SDK configured with the sidecar
+		// token as api_key plus a default header will do.
 		r.Header.Del(headerName)
+		stripSidecarTokenFromAuthorization(r, token)
 
 		next.ServeHTTP(w, r)
 	})
+}
+
+// stripSidecarTokenFromAuthorization drops an Authorization header whose
+// bearer value is the sidecar token: it is the local gate credential, not the
+// destination's, and must not travel to a remote provider.
+func stripSidecarTokenFromAuthorization(r *http.Request, token string) {
+	if token == "" {
+		return
+	}
+	parts := strings.SplitN(r.Header.Get("Authorization"), " ", 2)
+	if len(parts) == 2 && strings.EqualFold(parts[0], "bearer") && constantTimeEqual(parts[1], token) {
+		r.Header.Del("Authorization")
+	}
+}
+
+// hasDotSegment reports whether any path segment is "." or "..". Go's
+// ServeMux canonicalizes these with a redirect, but the mesh proxies pass
+// paths through to backends that may resolve them against a different
+// service prefix than the one authorization was decided on.
+func hasDotSegment(p string) bool {
+	for _, seg := range strings.Split(p, "/") {
+		if seg == "." || seg == ".." {
+			return true
+		}
+	}
+	return false
 }
 
 // constantTimeEqual compares two secrets without leaking their contents through
@@ -705,43 +735,52 @@ func createEgressProxy(node *SamNode) http.Handler {
 			http.Error(w, "Service Unavailable: Missing Node Identity", http.StatusServiceUnavailable)
 			return
 		}
+		// The remote's policy is decided on the /{type}/{name} prefix this
+		// proxy forwards verbatim; a ".." in the rest is not ours to send.
+		if hasDotSegment(r.URL.Path) {
+			http.Error(w, "Bad Request: path must not contain dot segments", http.StatusBadRequest)
+			return
+		}
 
 		r, ok := applyEgressMiddleware(node, w, r)
 		if !ok {
 			return
 		}
 
-		// The operator's egress floor (egress.require_labels) holds at this
-		// chokepoint whatever the surface, so an agent that skips the facade
-		// and dials /sam/<peer>/... raw is gated the same way. required is nil:
-		// any caller requirement was already enforced by the surface that
-		// parsed it; the floor is what a silent caller cannot waive.
-		if floor := node.egressFloor(); len(floor) > 0 {
-			route, ok := parseEgressRoute(r.URL.Path)
-			if !ok {
-				http.Error(w, "Forbidden: egress floor in force and request names no peer", http.StatusForbidden)
-				return
+		// Every egress destination must prove it is an enrolled peer: the
+		// label gate verifies the peer's control-plane-signed biscuit (cached
+		// per peer) and, when the operator set an egress floor
+		// (egress.require_labels), holds it to that too. required is nil: any
+		// caller requirement was already enforced by the surface that parsed
+		// it; the floor is what a silent caller cannot waive.
+		route, ok := parseEgressRoute(r.URL.Path)
+		if !ok {
+			http.Error(w, "Bad Request: request names no peer", http.StatusBadRequest)
+			return
+		}
+		pid, err := peer.Decode(route.peerID)
+		if err != nil {
+			http.Error(w, "Bad Request: invalid peer ID", http.StatusBadRequest)
+			return
+		}
+		// The verdict is for the canonical peer, so the dial must name the
+		// same form: rewrite the segment the Director will re-parse rather
+		// than let a non-canonical spelling travel past the gate.
+		if canonical := pid.String(); route.peerID != canonical {
+			parts := strings.SplitN(r.URL.Path, "/", 6)
+			if len(parts) >= 3 {
+				parts[2] = canonical
+				r.URL.Path = strings.Join(parts, "/")
 			}
-			pid, err := peer.Decode(route.peerID)
-			if err != nil {
-				http.Error(w, "Bad Request: invalid peer ID", http.StatusBadRequest)
-				return
-			}
-			// The verdict is for the canonical peer, so the dial must name the
-			// same form: rewrite the segment the Director will re-parse rather
-			// than let a non-canonical spelling travel past the gate.
-			if canonical := pid.String(); route.peerID != canonical {
-				parts := strings.SplitN(r.URL.Path, "/", 6)
-				if len(parts) >= 3 {
-					parts[2] = canonical
-					r.URL.Path = strings.Join(parts, "/")
-				}
-			}
-			if err := node.VerifyPeerLabels(r.Context(), pid, nil); err != nil {
-				logger.Warnf("[Egress] floor gate refused egress to %s: %v", pid, err)
+		}
+		if err := node.VerifyPeerLabels(r.Context(), pid, nil); err != nil {
+			logger.Warnf("[Egress] refused egress to %s: %v", pid, err)
+			if len(node.egressFloor()) > 0 {
 				http.Error(w, "Forbidden: provider does not attest the egress floor", http.StatusForbidden)
-				return
+			} else {
+				http.Error(w, "Forbidden: destination is not an enrolled peer", http.StatusForbidden)
 			}
+			return
 		}
 
 		r.Header.Set(api.HeaderSamBiscuit, base64.StdEncoding.EncodeToString(biscuitBytes))

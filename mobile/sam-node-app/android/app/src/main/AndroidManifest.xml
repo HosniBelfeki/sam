@@ -1,6 +1,5 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET"/>
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
@@ -13,7 +12,12 @@
     <application
         android:label="sam_agent"
         android:name=".SamApplication"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:allowBackup="false">
+        <!-- allowBackup=false: app data holds the node's private key, its
+             biscuit and the local API token; none of it belongs in a cloud or
+             adb backup, and a restore onto another device would clone the
+             identity. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"

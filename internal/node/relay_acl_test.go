@@ -43,11 +43,18 @@ func TestNodeRelayACL_AllowConnect(t *testing.T) {
 		t.Errorf("Expected AllowConnect to return false when dest is not authenticated, even if src is")
 	}
 
-	// Dest is authenticated, src is not -> should succeed
+	// Dest is authenticated, src is not -> should fail: an unauthenticated
+	// source must not reach admitted peers through this node's relay.
 	node.authPeers.Delete(srcPeer)
 	node.authPeers.Store(destPeer, time.Now().Add(time.Hour))
+	if acl.AllowConnect(srcPeer, srcAddr, destPeer) {
+		t.Errorf("Expected AllowConnect to return false when src is not authenticated, even if dest is")
+	}
+
+	// Both authenticated -> should succeed
+	node.authPeers.Store(srcPeer, time.Now().Add(time.Hour))
 	if !acl.AllowConnect(srcPeer, srcAddr, destPeer) {
-		t.Errorf("Expected AllowConnect to return true when dest is authenticated")
+		t.Errorf("Expected AllowConnect to return true when both src and dest are authenticated")
 	}
 }
 

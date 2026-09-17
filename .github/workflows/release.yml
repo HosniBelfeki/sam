@@ -2,9 +2,9 @@ name: goreleaser
 
 on:
   push:
-    # run only against tags
+    # run only against release tags
     tags:
-      - "*"
+      - "v*"
 
 permissions:
   contents: read
@@ -14,7 +14,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      packages: write
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

@@ -107,6 +107,11 @@ func TestPolicyPermutations(t *testing.T) {
   - name: role-direct
     allowed_services: ["mcp://test-role"]
     allowed_targets: ["group:compute"]
+  # Same shape as role-direct but with no idp_role binding: an issuer's
+  # roles claim naming it must grant nothing.
+  - name: role-unbound
+    allowed_services: ["mcp://test-unbound"]
+    allowed_targets: ["group:compute"]
   - name: admin
     allowed_services: ["*"]
     allowed_targets: ["*:*"]
@@ -120,6 +125,8 @@ bindings:
     members: ["group:eng-team"]
   - role: role-node
     members: ["user:node-user"]
+  - role: role-direct
+    members: ["idp_role:role-direct"]
   - role: admin
     members: ["user:admin-user"]
   - role: admin
@@ -226,10 +233,18 @@ services:
 			expectAllow: true,
 		},
 		{
-			name:        "Fact roles: role(role-direct)",
+			name:        "Fact idp_role bound: idp_role(role-direct) -> role(role-direct)",
 			jwtClaims:   map[string]interface{}{"sub": "some-id", "roles": []string{"role-direct"}},
 			targetSvc:   "mcp://test-role",
 			expectAllow: true,
+		},
+		{
+			// The issuer's roles claim used to be minted as role() itself, so
+			// naming any mesh role in it granted that role with no binding.
+			name:        "Fact idp_role unbound: roles claim does not mint a mesh role",
+			jwtClaims:   map[string]interface{}{"sub": "some-id", "roles": []string{"role-unbound"}},
+			targetSvc:   "mcp://test-unbound",
+			expectAllow: false,
 		},
 		{
 			name:        "Fact node: node(peerID)",
@@ -251,13 +266,8 @@ services:
 			apiTokenA := "tokenA"
 			apiPortA := getFreePort(t)
 
-			if r, ok := tt.jwtClaims["roles"]; ok {
-				if stringSlice, ok := r.([]string); ok {
-					tt.jwtClaims["roles"] = append(stringSlice, api.RoleNode)
-				}
-			} else {
-				tt.jwtClaims["roles"] = []string{api.RoleNode}
-			}
+			// The seat comes from the sam:system:authenticated binding above,
+			// never from a roles claim naming sam:role:node.
 			jwtA := mintToken(tt.jwtClaims)
 
 			cmdA := exec.Command(nodeBin, "run",
