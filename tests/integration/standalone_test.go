@@ -161,6 +161,61 @@ func TestStandaloneNodeJoin(t *testing.T) {
 	})
 }
 
+// TestStandaloneNoJoinToken pins the fleet configuration: no standing join
+// token exists anywhere (not in the store, not on disk), the embedded
+// router still enrolls with its per-boot token, and devices join only with
+// explicitly minted tokens.
+func TestStandaloneNoJoinToken(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if _, err := standalone.New(standalone.Options{BindAddress: "127.0.0.1:0", DataDir: t.TempDir(), DisableJoinToken: true, JoinToken: "sam_tok_x"}); err == nil {
+		t.Fatal("DisableJoinToken together with an explicit JoinToken must be rejected")
+	}
+
+	dataDir := t.TempDir()
+	srv, err := standalone.New(standalone.Options{BindAddress: "127.0.0.1:0", DataDir: dataDir, DisableJoinToken: true})
+	if err != nil {
+		t.Fatalf("failed to create standalone server: %v", err)
+	}
+	if err := srv.Start(ctx); err != nil {
+		t.Fatalf("failed to start standalone server: %v", err)
+	}
+	t.Cleanup(func() { _ = srv.Close() })
+	if srv.JoinToken() != "" {
+		t.Fatalf("JoinToken() = %q, want empty", srv.JoinToken())
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, "join-token")); !os.IsNotExist(err) {
+		t.Fatalf("join-token file must not be written: %v", err)
+	}
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+srv.Addr()+"/admin/bootstrap-tokens", nil)
+	req.Header.Set("Authorization", "Bearer "+srv.AdminToken())
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("GET /admin/bootstrap-tokens: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || strings.Contains(string(body), "sam-one join token") {
+		t.Fatalf("token list = %s %s; want 200 without a join token", resp.Status, body)
+	}
+
+	// The embedded router self-enrolled without it, and a minted token still
+	// admits a device through the single port.
+	_, portStr, _ := net.SplitHostPort(srv.Addr())
+	port, _ := strconv.Atoi(portStr)
+	waitForActiveRouters(t, port, 1, 10*time.Second)
+	devTok, err := srv.MintDeviceEnrollmentToken(ctx, 0, 1)
+	if err != nil {
+		t.Fatalf("failed to mint device token: %v", err)
+	}
+	if err := newStandaloneTestNode(t, ctx).EnrollBootstrap(ctx, srv.PublicURL(), devTok); err != nil {
+		t.Fatalf("device enrollment without a join token failed: %v", err)
+	}
+}
+
 // newStandaloneTestNode returns a started, unenrolled loopback node.
 func newStandaloneTestNode(t *testing.T, ctx context.Context) *node.SamNode {
 	t.Helper()

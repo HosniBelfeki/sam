@@ -90,6 +90,7 @@ For more devices, or on a non-interactive deployment, mint a code on demand
 with the admin CLI:
 
 ```bash
+# Admin credential: env, or --admin-token-path <file>; never a flag value.
 export SAM_ADMIN_TOKEN=...      # from the banner, or <data-dir>/admin-token
 sam-one token qr --server https://brave-otter-quick-1234.trycloudflare.com
 ```
@@ -171,3 +172,58 @@ and changing labels means unenrolling and scanning a new code.
   pin a token to a hostname: a token is valid at whatever URL the same
   control plane answers on. Treat the printed line like the join token —
   it is a credential until it is spent or expires.
+
+## From demo to fleet
+
+`sam-one` is the same control plane, router and store as the split
+deployment in one process, so a device enrolled through a QR code gets the
+production credential lifecycle: a Biscuit bound to its own key, renewed
+through `POST /refresh` with a signed challenge well before its 24 h
+expiry, verified against rotating signing keys, revocable with
+`sam-one admin ban`. The mobile app runs the same renewal loop as
+`sam-node`. What separates a demo from a fleet is configuration:
+
+* **Drop the standing join token.** The auto-generated join token is a
+  ten-year, unlimited-use secret meant for `sam-node join` on a laptop.
+  Run with `--no-join-token`; devices then enroll only with tokens you
+  mint (`token qr`, `token create`) or through OIDC.
+* **Seed a real policy.** Without `--policy-file` the first boot installs
+  an open development policy (any enrolled node may declare any label and
+  register any service) and says so in the log. Use
+  `--control-plane-manual-enrollment` if each device should be approved in
+  the console before it gets a credential.
+* **Pass secrets, don't read them off the screen.** Secrets are only ever
+  read from a file (`--admin-token-path`, `--token-path`) or the environment
+  (`SAM_ADMIN_TOKEN`, `SAM_TOKEN`); there is deliberately no flag that takes
+  the value, so it never lands in `ps` output or shell history. When you
+  supply them, the banner names the source instead of echoing the value into
+  your logs. `--enroll-qr=false` keeps startup codes out of non-interactive
+  logs.
+* **Give the mesh a stable https name.** A quick tunnel changes hostname on
+  every start, and enrolled devices remember the URL they enrolled at —
+  fine for an afternoon, fatal for a fleet. Use Cloud Run, a named tunnel
+  on your own domain, or a reverse proxy with `--external-url`.
+* **Decide what happens to devices that go dark.** The signing key rotates
+  every 24 h and stays valid for verification for a 1 h grace period. A
+  device that renews inside that window is fine indefinitely; one that
+  comes back later holds a Biscuit no current key can verify, and
+  `/refresh` refuses it — the node exits rather than run unverified. Two
+  knobs, and they are a trade-off:
+  * Mint its token with `--autonomous-recovery`. The device may then
+    recover on proof of possession of its key alone, whenever it returns.
+    The cost is that a lost device keeps renewing until you ban it.
+  * Or widen the window for everyone with
+    `--control-plane-key-grace-period` (e.g. `168h` for a weekly check-in
+    cadence). The cost is that a stolen credential also lives that long.
+  Toggle recovery per device later from the console
+  (`POST /admin/nodes/{peer-id}/autonomous-recovery`).
+* **Keep the data directory.** `router.key` is the mesh's identity;
+  `sam.db` holds enrollments, tokens and policy. Back it up, or point
+  `--db-driver postgres` at a managed database. `sam-one` is a singleton by
+  design; when you need more than one control plane, move to the split
+  components with the Helm chart.
+
+Want OIDC instead of tokens? Give `sam-one` an issuer (`--issuer`,
+`--allowed-audiences`, `--oidc-client-id`) and the app's **Login & Enroll**
+and **Device Login** flows work unchanged, as does signing in to the
+console as an OIDC admin.

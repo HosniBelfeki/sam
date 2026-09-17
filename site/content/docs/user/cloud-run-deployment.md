@@ -151,7 +151,9 @@ provider starts for propagation on first call.
 
 ## 6. Operate with the CLI
 
-The `sam-one` binary doubles as an admin client for the running service:
+The `sam-one` binary doubles as an admin client for the running service.
+It reads the admin credential from `SAM_ADMIN_TOKEN` or a file named by
+`--admin-token-path`, never from a flag value:
 
 ```bash
 export SAM_ADMIN_TOKEN="$ADMIN_TOKEN"

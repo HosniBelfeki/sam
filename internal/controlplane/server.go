@@ -1828,16 +1828,7 @@ func (s *Server) HandleAdminBootstrapTokens(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	var req struct {
-		Role        string `json:"role"`
-		TTLHours    int    `json:"ttl_hours"`
-		MaxUsages   int    `json:"max_usages"`
-		Description string `json:"description"`
-		// Copied onto every node this token enrolls; see
-		// storage.EnrolledNode.AutonomousRecovery.
-		AutonomousRecovery bool `json:"autonomous_recovery"`
-	}
-
+	var req api.BootstrapTokenRequest
 	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid JSON body", http.StatusBadRequest)
@@ -1886,11 +1877,11 @@ func (s *Server) HandleAdminBootstrapTokens(w http.ResponseWriter, r *http.Reque
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"id":         tokenRecord.ID,
-		"token":      tokenVal,
-		"role":       tokenRecord.Role,
-		"expires_at": tokenRecord.ExpiresAt.Format(time.RFC3339),
+	_ = json.NewEncoder(w).Encode(api.BootstrapTokenResponse{
+		ID:        tokenRecord.ID,
+		Token:     tokenVal,
+		Role:      tokenRecord.Role,
+		ExpiresAt: tokenRecord.ExpiresAt.Format(time.RFC3339),
 	})
 }
 
@@ -2540,18 +2531,9 @@ func (s *Server) HandleUserBootstrapTokens(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	var req struct {
-		Role        string `json:"role"`
-		OwnerID     string `json:"owner_id"`
-		TTLHours    int    `json:"ttl_hours"`
-		MaxUsages   int    `json:"max_usages"`
-		Description string `json:"description"`
-		// Copied onto every node this token enrolls; see
-		// storage.EnrolledNode.AutonomousRecovery. Admin-only: it decides
-		// whether a lost device can rejoin the mesh on its own.
-		AutonomousRecovery bool `json:"autonomous_recovery"`
-	}
-
+	// AutonomousRecovery is admin-only here: it decides whether a lost device
+	// can rejoin the mesh on its own.
+	var req api.BootstrapTokenRequest
 	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid JSON body", http.StatusBadRequest)
@@ -2624,12 +2606,12 @@ func (s *Server) HandleUserBootstrapTokens(w http.ResponseWriter, r *http.Reques
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"id":         tokenRecord.ID,
-		"token":      tokenVal,
-		"role":       tokenRecord.Role,
-		"owner_id":   tokenRecord.OwnerID,
-		"expires_at": tokenRecord.ExpiresAt.Format(time.RFC3339),
+	_ = json.NewEncoder(w).Encode(api.BootstrapTokenResponse{
+		ID:        tokenRecord.ID,
+		Token:     tokenVal,
+		Role:      tokenRecord.Role,
+		OwnerID:   tokenRecord.OwnerID,
+		ExpiresAt: tokenRecord.ExpiresAt.Format(time.RFC3339),
 	})
 }
 

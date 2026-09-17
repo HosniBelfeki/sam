@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -40,18 +39,18 @@ type adminClient struct {
 	token  string
 }
 
-// resolveAdminToken picks the admin credential: explicit flag, then the
-// SAM_ADMIN_TOKEN env, then the token persisted in data-dir by a previous run.
-func resolveAdminToken(flagVal, dataDir string) (string, error) {
-	if flagVal != "" {
-		return flagVal, nil
-	}
-	if env := os.Getenv("SAM_ADMIN_TOKEN"); env != "" {
-		return env, nil
+// resolveAdminToken picks the admin credential: a file named by the flag,
+// then the SAM_ADMIN_TOKEN env, then the token persisted in data-dir by a
+// previous run. The value itself is never a flag argument.
+func resolveAdminToken(tokenPath, dataDir string) (string, error) {
+	if tok, err := secretFromPathOrEnv(tokenPath, "SAM_ADMIN_TOKEN"); err != nil {
+		return "", fmt.Errorf("invalid --admin-token-path: %w", err)
+	} else if tok != "" {
+		return tok, nil
 	}
 	tok, err := standalone.AdminTokenFromDataDir(dataDir)
 	if err != nil {
-		return "", fmt.Errorf("no admin token: pass --admin-token, set SAM_ADMIN_TOKEN, or point --data-dir at a sam-one data directory (%v)", err)
+		return "", fmt.Errorf("no admin token: pass --admin-token-path, set SAM_ADMIN_TOKEN, or point --data-dir at a sam-one data directory (%v)", err)
 	}
 	return tok, nil
 }
@@ -80,19 +79,18 @@ func (c *adminClient) do(method, path, contentType string, body []byte) ([]byte,
 	return respBody, nil
 }
 
-type createdToken struct {
-	ID        string `json:"id"`
-	Token     string `json:"token"`
-	Role      string `json:"role"`
-	ExpiresAt string `json:"expires_at"`
-}
-
-func (c *adminClient) createToken(role string, ttlHours, maxUsages int, description string) (*createdToken, error) {
-	payload, err := json.Marshal(map[string]any{
-		"role":        role,
-		"ttl_hours":   ttlHours,
-		"max_usages":  maxUsages,
-		"description": description,
+// createToken mints a bootstrap token. autonomousRecovery is copied onto
+// every node the token enrolls: such a node may still /refresh after the
+// control plane's signing key rotated past its grace period, which is what
+// a device that spends days offline needs and what a stolen device should
+// not get.
+func (c *adminClient) createToken(role string, ttlHours, maxUsages int, description string, autonomousRecovery bool) (*api.BootstrapTokenResponse, error) {
+	payload, err := json.Marshal(api.BootstrapTokenRequest{
+		Role:               role,
+		TTLHours:           ttlHours,
+		MaxUsages:          maxUsages,
+		Description:        description,
+		AutonomousRecovery: autonomousRecovery,
 	})
 	if err != nil {
 		return nil, err
@@ -101,7 +99,7 @@ func (c *adminClient) createToken(role string, ttlHours, maxUsages int, descript
 	if err != nil {
 		return nil, err
 	}
-	var created createdToken
+	var created api.BootstrapTokenResponse
 	if err := json.Unmarshal(body, &created); err != nil {
 		return nil, fmt.Errorf("failed to decode response %q: %w", body, err)
 	}
@@ -167,11 +165,11 @@ func (c *adminClient) resolveTokenID(idOrPrefix string) (string, error) {
 // newAdminSubcommands wires the token and admin command trees onto root.
 func newAdminSubcommands() []*cobra.Command {
 	var (
-		server        string
-		adminToken    string
-		dataDir       string
-		clientFactory = func() (*adminClient, error) {
-			tok, err := resolveAdminToken(adminToken, dataDir)
+		server         string
+		adminTokenPath string
+		dataDir        string
+		clientFactory  = func() (*adminClient, error) {
+			tok, err := resolveAdminToken(adminTokenPath, dataDir)
 			if err != nil {
 				return nil, err
 			}
@@ -185,15 +183,16 @@ func newAdminSubcommands() []*cobra.Command {
 
 	addSharedFlags := func(cmd *cobra.Command) {
 		cmd.PersistentFlags().StringVar(&server, "server", "http://127.0.0.1:8080", "Base URL of the running sam-one server")
-		cmd.PersistentFlags().StringVar(&adminToken, "admin-token", "", "Admin API bearer token (or env SAM_ADMIN_TOKEN, or read from --data-dir)")
+		cmd.PersistentFlags().StringVar(&adminTokenPath, "admin-token-path", "", "File containing the admin API bearer token (or env SAM_ADMIN_TOKEN, or read from --data-dir)")
 		cmd.PersistentFlags().StringVar(&dataDir, "data-dir", ".", "sam-one data directory holding the persisted admin token")
 	}
 
 	var (
-		role        string
-		ttlHours    int
-		maxUsages   int
-		description string
+		role               string
+		ttlHours           int
+		maxUsages          int
+		description        string
+		autonomousRecovery bool
 	)
 	tokenCreate := &cobra.Command{
 		Use:   "create",
@@ -203,7 +202,7 @@ func newAdminSubcommands() []*cobra.Command {
 			if err != nil {
 				return err
 			}
-			created, err := c.createToken(role, ttlHours, maxUsages, description)
+			created, err := c.createToken(role, ttlHours, maxUsages, description, autonomousRecovery)
 			if err != nil {
 				return err
 			}
@@ -218,6 +217,7 @@ func newAdminSubcommands() []*cobra.Command {
 	tokenCreate.Flags().IntVar(&ttlHours, "ttl-hours", 24, "Token validity in hours")
 	tokenCreate.Flags().IntVar(&maxUsages, "max-usages", 1, "How many enrollments the token allows")
 	tokenCreate.Flags().StringVar(&description, "description", "", "Free-form note stored with the token")
+	tokenCreate.Flags().BoolVar(&autonomousRecovery, "autonomous-recovery", false, autonomousRecoveryHelp)
 
 	tokenList := &cobra.Command{
 		Use:   "list",
@@ -311,15 +311,19 @@ func tokenStatus(tok *storage.BootstrapToken, now time.Time) string {
 	}
 }
 
+// autonomousRecoveryHelp is shared by every command that mints tokens.
+const autonomousRecoveryHelp = "Let enrolled devices renew even after the signing key rotated past its grace period (devices that stay offline for days); a lost device then keeps renewing until banned"
+
 // newTokenQRCommand mints a node token and renders it, with the URL devices
 // must enroll against, as a terminal QR code. server points at the shared
 // --server flag so the QR defaults to the URL the admin used.
 func newTokenQRCommand(clientFactory func() (*adminClient, error), server *string) *cobra.Command {
 	var (
-		enrollURL   string
-		ttlHours    int
-		maxUsages   int
-		description string
+		enrollURL          string
+		ttlHours           int
+		maxUsages          int
+		description        string
+		autonomousRecovery bool
 	)
 	cmd := &cobra.Command{
 		Use:   "qr",
@@ -350,7 +354,7 @@ func newTokenQRCommand(clientFactory func() (*adminClient, error), server *strin
 			if description == "" {
 				description = "device enrollment via " + target
 			}
-			created, err := c.createToken(api.RoleNode, ttlHours, maxUsages, description)
+			created, err := c.createToken(api.RoleNode, ttlHours, maxUsages, description, autonomousRecovery)
 			if err != nil {
 				return err
 			}
@@ -361,5 +365,6 @@ func newTokenQRCommand(clientFactory func() (*adminClient, error), server *strin
 	cmd.Flags().IntVar(&ttlHours, "ttl-hours", 1, "Token validity in hours")
 	cmd.Flags().IntVar(&maxUsages, "max-usages", 1, "How many devices may enroll with this code")
 	cmd.Flags().StringVar(&description, "description", "", "Free-form note stored with the token")
+	cmd.Flags().BoolVar(&autonomousRecovery, "autonomous-recovery", false, autonomousRecoveryHelp)
 	return cmd
 }

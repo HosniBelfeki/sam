@@ -93,6 +93,11 @@ type Options struct {
 	// JoinToken is the cluster join token; auto-generated and persisted in
 	// DataDir when empty.
 	JoinToken string
+	// DisableJoinToken runs without any standing join token: devices then
+	// enroll only with explicitly minted bootstrap tokens or through OIDC.
+	// The right setting for a fleet; the default keeps `sam-node join` on a
+	// laptop zero-config.
+	DisableJoinToken bool
 	// AdminToken protects the admin REST API; auto-generated and persisted in
 	// DataDir when empty.
 	AdminToken string
@@ -178,6 +183,9 @@ func (o *Options) Default() {
 func (o *Options) Validate() error {
 	if _, err := wsListenMultiaddr(o.BindAddress); err != nil {
 		return fmt.Errorf("invalid bind address %q: %w", o.BindAddress, err)
+	}
+	if o.DisableJoinToken && o.JoinToken != "" {
+		return fmt.Errorf("a join token was supplied together with DisableJoinToken")
 	}
 	if o.ExternalURL != "" {
 		if _, err := externalMultiaddr(o.ExternalURL); err != nil {
@@ -268,14 +276,16 @@ func (s *Server) Start(ctx context.Context) error {
 		return err
 	}
 
-	s.joinToken = s.opts.JoinToken
-	if s.joinToken == "" {
-		if s.joinToken, err = loadOrCreateTokenFile(filepath.Join(s.opts.DataDir, joinTokenFile), joinTokenPrefix); err != nil {
-			return fmt.Errorf("failed to provision join token: %w", err)
+	if !s.opts.DisableJoinToken {
+		s.joinToken = s.opts.JoinToken
+		if s.joinToken == "" {
+			if s.joinToken, err = loadOrCreateTokenFile(filepath.Join(s.opts.DataDir, joinTokenFile), joinTokenPrefix); err != nil {
+				return fmt.Errorf("failed to provision join token: %w", err)
+			}
 		}
-	}
-	if err := s.ensureBootstrapToken(ctx, s.joinToken, api.RoleNode, joinTokenMaxUsages, joinTokenTTL, "sam-one join token"); err != nil {
-		return fmt.Errorf("failed to register join token: %w", err)
+		if err := s.ensureBootstrapToken(ctx, s.joinToken, api.RoleNode, joinTokenMaxUsages, joinTokenTTL, "sam-one join token"); err != nil {
+			return fmt.Errorf("failed to register join token: %w", err)
+		}
 	}
 
 	// Per-boot single-use credential for the embedded router's stock
@@ -393,8 +403,13 @@ func (s *Server) PublicURL() string {
 // AdminToken returns the resolved admin API token.
 func (s *Server) AdminToken() string { return s.adminToken }
 
-// JoinToken returns the resolved cluster join token.
+// JoinToken returns the resolved cluster join token, or "" when the server
+// runs with DisableJoinToken.
 func (s *Server) JoinToken() string { return s.joinToken }
+
+// JoinTokenPath is where an auto-generated join token is persisted, for
+// `sam-node join --bootstrap-token-path`.
+func (s *Server) JoinTokenPath() string { return filepath.Join(s.opts.DataDir, joinTokenFile) }
 
 // PeerID returns the embedded router's peer ID.
 func (s *Server) PeerID() string { return s.router.Host.ID().String() }

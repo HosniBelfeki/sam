@@ -179,11 +179,48 @@ explicitly agreed to. If the dependency only runs inside a sandbox image, it
 belongs in that command's own module (`cmd/nano-init/go.mod` pattern). Flag
 any new root dependency that lacks this justification.
 
-## 5. Review output
+## 5. API surfaces and secrets
+
+### Why
+
+SAM has two API surfaces with different encodings (`AGENTS.md` §1, "Two API
+surfaces"): the mesh protocol between components is protobuf from
+`api/sam.proto`; the operator plane (`/admin/*`, `/users/*`) is JSON whose
+shapes are Go structs in `api/`. Shapes defined ad hoc inside a handler, or
+borrowed from `internal/storage`, have no single owner: the console, the CLI
+and the tests each re-spell the field names, and a rename breaks one of them
+silently. Secrets passed as flag values leak through `ps` and shell history
+regardless of how carefully the rest of the system handles them.
+
+### Rules
+
+1. **Flag wire shapes defined outside `api/`.** In a handler, `var req struct
+   { ... json:"..." }`, `json.NewEncoder(w).Encode(map[string]any{...})`, or a
+   client building `map[string]any{"ttl_hours": ...}` is a request for
+   change: name the `api.*Request` / `api.*Response` type that should exist
+   (or the proto message, if a mesh component consumes it).
+2. **Flag internal types on the wire.** `json.NewEncoder(w).Encode(list)`
+   where `list` is `[]*storage.X`, or a `cmd/` / `internal/console` package
+   importing `internal/storage` to decode a response, serializes storage
+   details (hashes, timestamps, column-shaped names) as an API. Propose an
+   `api.XInfo` type and quote the fields that must not cross.
+3. **Flag the wrong encoding for the surface.** A new mesh-protocol message
+   as JSON, or a new operator endpoint that only the console will call as
+   protobuf, needs a stated reason. The tell for "mesh protocol" is a
+   consumer in `internal/node`, `internal/router`, `internal/sambox` or the
+   FFI.
+4. **Flag secrets as flag values.** Any `Flags().StringVar(&x, "...token"|
+   "...secret"|"...password", ...)` whose value is the credential itself,
+   rather than a `--*-path` or an env var name, is a finding; so is a
+   banner or log line that prints a credential the operator supplied.
+   `sam-control-plane --admin-token-path` and `sam-node
+   --bootstrap-token-path` are the reference shape.
+
+## 6. Review output
 
 - Group findings by the section numbers above so the author can see which
   rule applies.
-- For rule 1 and rule 2 findings, always propose the corrected code, not
+- For rule 1, rule 2 and rule 5 findings, always propose the corrected code, not
   just the diagnosis.
 - Do not raise generic Go style nits (naming, comment punctuation, import
   ordering) that `gofmt` and `golangci-lint` already enforce via `make lint`.

@@ -46,8 +46,9 @@ func main() {
 		dataDir              string
 		dbDriver             string
 		dbDSN                string
-		joinToken            string
-		adminToken           string
+		joinTokenPath        string
+		noJoinToken          bool
+		adminTokenPath       string
 		policyFile           string
 		oidcIssuer           string
 		oidcClientID         string
@@ -77,13 +78,16 @@ func main() {
 				}
 			}
 
-			// Env fallbacks keep single-container platforms (Cloud Run)
-			// configurable without flags.
-			if joinToken == "" {
-				joinToken = os.Getenv("SAM_TOKEN")
+			// Secrets arrive through a file or the environment, never as a
+			// flag value that would sit in `ps` and shell history. Env keeps
+			// single-container platforms (Cloud Run) configurable.
+			joinToken, err := secretFromPathOrEnv(joinTokenPath, "SAM_TOKEN")
+			if err != nil {
+				logger.Fatalf("Invalid --token-path: %v", err)
 			}
-			if adminToken == "" {
-				adminToken = os.Getenv("SAM_ADMIN_TOKEN")
+			adminToken, err := secretFromPathOrEnv(adminTokenPath, "SAM_ADMIN_TOKEN")
+			if err != nil {
+				logger.Fatalf("Invalid --admin-token-path: %v", err)
 			}
 			if externalURL == "" {
 				externalURL = os.Getenv("SAM_EXTERNAL_URL")
@@ -134,6 +138,7 @@ func main() {
 				DBDriver:         dbDriver,
 				DBDSN:            dbDSN,
 				JoinToken:        joinToken,
+				DisableJoinToken: noJoinToken,
 				AdminToken:       adminToken,
 				PolicyFile:       policyFile,
 				OIDCIssuer:       oidcIssuer,
@@ -154,7 +159,7 @@ func main() {
 				}
 			}()
 
-			printBanner(srv, tun)
+			printBanner(srv, tun, bannerSecrets{adminSupplied: adminToken != "", joinSupplied: joinToken != ""})
 			if enrollQR {
 				if err := printBootEnrollQR(cmd.Context(), srv, enrollQRMaxUsages); err != nil {
 					logger.Errorf("Device enrollment QR: %v", err)
@@ -179,8 +184,9 @@ func main() {
 	rootCmd.Flags().StringVar(&dataDir, "data-dir", ".", "Directory for the database, router key and generated tokens")
 	rootCmd.Flags().StringVar(&dbDriver, "db-driver", "sqlite", "Database driver (sqlite or postgres)")
 	rootCmd.Flags().StringVar(&dbDSN, "db-dsn", "", "Database DSN (default <data-dir>/sam.db for sqlite)")
-	rootCmd.Flags().StringVar(&joinToken, "token", "", "Cluster join token (or env SAM_TOKEN; auto-generated if empty)")
-	rootCmd.Flags().StringVar(&adminToken, "admin-token", "", "Admin API bearer token (or env SAM_ADMIN_TOKEN; auto-generated if empty)")
+	rootCmd.Flags().StringVar(&joinTokenPath, "token-path", "", "File containing the cluster join token (or env SAM_TOKEN; auto-generated and persisted in --data-dir if neither is set)")
+	rootCmd.Flags().BoolVar(&noJoinToken, "no-join-token", false, "Run without a standing join token; devices enroll only with minted bootstrap tokens (token create/qr) or OIDC")
+	rootCmd.Flags().StringVar(&adminTokenPath, "admin-token-path", "", "File containing the admin API bearer token (or env SAM_ADMIN_TOKEN; auto-generated and persisted in --data-dir if neither is set)")
 	rootCmd.Flags().StringVar(&policyFile, "policy-file", "", "Path to a protojson PolicyConfigUpdateRequest seeding the mesh policy on first boot only")
 	rootCmd.Flags().StringVar(&oidcIssuer, "issuer", "", "Optional external OIDC issuer URL (comma-separated)")
 	rootCmd.Flags().StringVar(&oidcClientID, "oidc-client-id", "", "OAuth client id advertised via /info (defaults to the first allowed audience)")
@@ -219,8 +225,21 @@ func main() {
 	}
 }
 
-func printBanner(srv *standalone.Server, tun tunnel.Tunnel) {
+// bannerSecrets records which credentials the operator supplied (flag or
+// env). Those are theirs already and stdout is often a log pipeline, so the
+// banner names the source instead of echoing the value; tokens sam-one
+// generated itself are shown, since this is where the operator learns them.
+type bannerSecrets struct {
+	adminSupplied bool
+	joinSupplied  bool
+}
+
+func printBanner(srv *standalone.Server, tun tunnel.Tunnel, secrets bannerSecrets) {
 	base := srv.PublicURL()
+	adminShown := srv.AdminToken()
+	if secrets.adminSupplied {
+		adminShown = "(supplied via --admin-token-path / SAM_ADMIN_TOKEN)"
+	}
 	fmt.Println("══════════════════════════════════════════════════════════════════")
 	fmt.Println("SAM standalone mesh is ready!")
 	fmt.Println()
@@ -230,11 +249,23 @@ func printBanner(srv *standalone.Server, tun tunnel.Tunnel) {
 	}
 	fmt.Printf("Web Console:  %s/console\n", base)
 	fmt.Printf("Router Peer:  %s\n", srv.PeerID())
-	fmt.Printf("Admin Token:  %s\n", srv.AdminToken())
-	fmt.Printf("Join Token:   %s\n", srv.JoinToken())
-	fmt.Println()
-	fmt.Println("To enroll a node:")
-	fmt.Printf("  sam-node join %s --bootstrap-token %s\n", base, srv.JoinToken())
+	fmt.Printf("Admin Token:  %s\n", adminShown)
+	switch {
+	case srv.JoinToken() == "":
+		fmt.Println("Join Token:   disabled (--no-join-token); enroll devices with `sam-one token qr` / `token create` or OIDC")
+	case secrets.joinSupplied:
+		fmt.Println("Join Token:   (supplied via --token-path / SAM_TOKEN)")
+		fmt.Println()
+		fmt.Println("To enroll a node:")
+		fmt.Printf("  sam-node join %s --bootstrap-token-path <file with the join token>\n", base)
+	default:
+		fmt.Printf("Join Token:   %s\n", srv.JoinToken())
+		fmt.Println()
+		fmt.Println("To enroll a node:")
+		// The token is persisted next to the database; a file beats a value
+		// in the shell history, like sam-node's own help recommends.
+		fmt.Printf("  sam-node join %s --bootstrap-token-path %s\n", base, srv.JoinTokenPath())
+	}
 	fmt.Println("══════════════════════════════════════════════════════════════════")
 }
 
@@ -326,4 +357,22 @@ func freePort(host string) (int, error) {
 	}
 	defer func() { _ = l.Close() }()
 	return l.Addr().(*net.TCPAddr).Port, nil
+}
+
+// secretFromPathOrEnv reads a credential from path when given, else from
+// the named environment variable; "" means neither was set. A path that is
+// set but unreadable or empty is an error, not a silent fallback.
+func secretFromPathOrEnv(path, env string) (string, error) {
+	if path != "" {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return "", err
+		}
+		secret := strings.TrimSpace(string(data))
+		if secret == "" {
+			return "", fmt.Errorf("%s is empty", path)
+		}
+		return secret, nil
+	}
+	return strings.TrimSpace(os.Getenv(env)), nil
 }
