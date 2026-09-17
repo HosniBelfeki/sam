@@ -781,10 +781,11 @@ class _NodeControlPageState extends State<NodeControlPage> {
     final link = await Navigator.of(context).push<EnrollLink>(
       MaterialPageRoute(builder: (_) => const ScanEnrollCodePage()),
     );
-    if (link != null) await _confirmAndEnroll(link);
+    if (link != null && mounted) await _confirmAndEnroll(link);
   }
 
   Future<void> _handleEnrollLink(String raw) async {
+    if (!mounted) return;
     final link = parseEnrollLink(raw);
     if (link == null) {
       setState(() => _status = 'Ignored link: not a sam://enroll code');
@@ -836,7 +837,7 @@ class _NodeControlPageState extends State<NodeControlPage> {
         ],
       ),
     );
-    if (ok == true) await _enrollWithToken(link.server, link.token);
+    if (ok == true && mounted) await _enrollWithToken(link.server, link.token);
   }
 
   // Manual entry: the token field takes either a bare token (with the URL

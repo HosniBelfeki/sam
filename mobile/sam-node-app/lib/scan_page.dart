@@ -35,6 +35,7 @@ class _ScanEnrollCodePageState extends State<ScanEnrollCodePage> {
         continue;
       }
       _done = true;
+      if (!mounted) return;
       Navigator.of(context).pop(link);
       return;
     }
