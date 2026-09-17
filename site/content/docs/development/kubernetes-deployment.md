@@ -160,6 +160,12 @@ If you'd rather deploy the pieces by hand — for example to exercise the Mock O
 
 The manifests for the mock OIDC provider are available in [mock-oidc.yaml](manifests/mock-oidc.yaml).
 
+> **Warning:** the mock issuer signs a token for whatever identity it is asked
+> for. It generates its signing key at start-up so nothing secret ships in the
+> manifest, but any control plane that trusts this issuer admits anyone who can
+> reach it. Use it only on a cluster nobody else can reach, and never as the
+> `--issuer` of a control plane exposed beyond that cluster.
+
 [mock-oidc.yaml](manifests/mock-oidc.yaml ':include')
 
 ### SAM Control Plane and Router Manifests

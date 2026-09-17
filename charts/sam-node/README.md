@@ -37,7 +37,8 @@ service:
 |-----|---------|---------|
 | `controlPlaneUrl` | — (required) | Control plane URL the node enrolls with |
 | `audience` | `sam-mesh-audience` | Projected token audience |
-| `apiToken` | `devtoken` | Bearer token for the node's local REST API |
+| `apiToken` | `""` (generated) | Bearer token for the node's local REST API, stored in the Secret `<release>-api-token` and mounted as a file. Empty generates a random one on first install; set to pin |
+| `podSecurityContext` / `securityContext` | nonroot 65532, seccomp RuntimeDefault, no capabilities | Pod and container security contexts |
 | `bindAddr` | `127.0.0.1:8080` | Node API bind address (loopback = pod-private) |
 | `extraArgs` | `[]` | Extra sam-node args |
 | `config` | empty services | Merged over the chart's defaults and rendered as `sam-node.yaml`; pods roll on config changes |

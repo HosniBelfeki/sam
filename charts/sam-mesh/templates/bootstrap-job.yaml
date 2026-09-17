@@ -128,10 +128,12 @@ spec:
 
 
           echo "Generating bootstrap token for sam-router..."
+          # One use per router replica: a leaked token is worth nothing once
+          # the routers have enrolled.
           TOKEN_RESP=$(curl -sf -X POST \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${ADMIN_TOKEN}" \
-            -d '{"role": "sam:role:router", "max_usages": 999999}' \
+            -d '{"role": "sam:role:router", "max_usages": {{ .Values.router.replicaCount | int }}}' \
             "${CP_URL}/admin/bootstrap-tokens")
 
           ROUTER_TOKEN=$(echo "${TOKEN_RESP}" | sed -n 's/.*"token"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')

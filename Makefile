@@ -216,6 +216,7 @@ helm-test:
 .PHONY: verify
 verify:
 	./hack/verify-generated.sh
+	./hack/verify-secrets.sh
 
 update:
 	go mod tidy
