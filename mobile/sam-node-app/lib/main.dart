@@ -54,6 +54,17 @@ Future<String?> _isolatedEnrollBootstrap(String dataDir, String server, String t
   }
 });
 
+Future<String?> _isolatedUnenroll(String dataDir) => Isolate.run(() {
+  try {
+    return SamNodeLib().unenroll(dataDir);
+  } catch (e) {
+    return e.toString();
+  }
+});
+
+/// Unenroll keeps the PeerID; resetIdentity deletes the key behind it too.
+enum _UnenrollChoice { unenroll, resetIdentity }
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   try {
@@ -1086,46 +1097,70 @@ class _NodeControlPageState extends State<NodeControlPage> {
   }
 
   Future<void> _unenroll() async {
-    final confirm = await showDialog<bool>(
+    final choice = await showDialog<_UnenrollChoice>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Unenroll Node'),
         content: const Text(
-            'Are you sure you want to unenroll? This will delete your local identity and disconnect you from the mesh.'),
+            'Unenroll disconnects this device from the mesh and deletes its '
+            'credentials. The PeerID is kept, so re-enrolling brings back the '
+            'same node.\n\n'
+            'Reset device identity also deletes the key behind the PeerID and '
+            'every local setting, so the next enrollment looks like a device '
+            'the mesh has never seen.'),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(context, false),
+              onPressed: () => Navigator.pop(context),
               child: const Text('Cancel')),
           TextButton(
-            onPressed: () => Navigator.pop(context, true),
+            onPressed: () =>
+                Navigator.pop(context, _UnenrollChoice.resetIdentity),
+            child: const Text('Reset device identity',
+                style: TextStyle(color: Colors.red)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, _UnenrollChoice.unenroll),
             child: const Text('Unenroll', style: TextStyle(color: Colors.red)),
           ),
         ],
       ),
     );
 
-    if (confirm == true) {
-      if (_running) {
-        _stop();
-      }
-      final appDir = await getApplicationDocumentsDirectory();
-      final dataDir = '${appDir.path}/sam_data';
-      try {
+    if (choice == null) return;
+
+    // Closing the store here is what lets UnenrollNode take its file lock.
+    if (_running) {
+      _stop();
+    }
+    final appDir = await getApplicationDocumentsDirectory();
+    final dataDir = '${appDir.path}/sam_data';
+    try {
+      if (choice == _UnenrollChoice.resetIdentity) {
         final dir = Directory(dataDir);
         if (await dir.exists()) {
           await dir.delete(recursive: true);
         }
-        setState(() {
-          _isEnrolled = false;
-          _joinedWithToken = false;
-          _status = 'Unenrolled';
-          _nodeID = '';
-        });
-      } catch (e) {
-        setState(() {
-          _status = 'Failed to unenroll: $e';
-        });
+      } else {
+        final err = await _isolatedUnenroll(dataDir);
+        if (err != null) {
+          setState(() {
+            _status = 'Failed to unenroll: $err';
+          });
+          return;
+        }
       }
+      setState(() {
+        _isEnrolled = false;
+        _joinedWithToken = false;
+        _status = choice == _UnenrollChoice.resetIdentity
+            ? 'Device identity reset'
+            : 'Unenrolled (PeerID kept)';
+        _nodeID = '';
+      });
+    } catch (e) {
+      setState(() {
+        _status = 'Failed to unenroll: $e';
+      });
     }
   }
 

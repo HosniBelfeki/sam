@@ -606,3 +606,21 @@ func ReEnrollNode(dataDir string, labels string) error {
 	}
 	return nil
 }
+
+// UnenrollNode clears the stored mesh identity and keeps the key behind the
+// PeerID, so re-enrolling brings back the same node. Deleting the data
+// directory instead is what makes the next enrollment a new device.
+func UnenrollNode(dataDir string) error {
+	mu.Lock()
+	isRunning := activeNode != nil || unauthSrv != nil
+	mu.Unlock()
+	if isRunning {
+		return errors.New("stop the node before unenrolling")
+	}
+	store, err := node.NewStore(dataDir)
+	if err != nil {
+		return fmt.Errorf("failed to open store: %w", err)
+	}
+	defer func() { _ = store.Close() }()
+	return store.ResetMeshIdentity()
+}
