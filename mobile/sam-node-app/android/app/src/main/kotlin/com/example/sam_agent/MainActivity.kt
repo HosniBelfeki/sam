@@ -46,8 +46,10 @@ class MainActivity : FlutterActivity() {
                     val enabled = call.argument<Boolean>("enabled") ?: false
                     Log.d("SAM_NODE", "setExposeLocation: $enabled")
                     if (enabled) {
+                        // Coarse only: the tool promises an approximate position, so
+                        // the app must not hold a permission that could give more.
                         if (androidx.core.content.ContextCompat.checkSelfPermission(this, android.Manifest.permission.ACCESS_COARSE_LOCATION) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-                            androidx.core.app.ActivityCompat.requestPermissions(this, arrayOf(android.Manifest.permission.ACCESS_COARSE_LOCATION, android.Manifest.permission.ACCESS_FINE_LOCATION), 1001)
+                            androidx.core.app.ActivityCompat.requestPermissions(this, arrayOf(android.Manifest.permission.ACCESS_COARSE_LOCATION), 1001)
                         }
                     }
                     result.success(true)
@@ -72,18 +74,18 @@ class MainActivity : FlutterActivity() {
                             result.success("{\"error\": \"Location permission not granted\"}")
                             return@setMethodCallHandler
                         }
-                        
-                        val hasFineLocation = androidx.core.content.ContextCompat.checkSelfPermission(this, android.Manifest.permission.ACCESS_FINE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+                        // Network provider only, and rounded to two decimals (about
+                        // a kilometre): a mesh peer gets the neighbourhood, not the
+                        // building, whatever the platform would hand this app.
                         val locationManager = getSystemService(Context.LOCATION_SERVICE) as android.location.LocationManager
-                        val location: android.location.Location? = if (hasFineLocation) {
-                            locationManager.getLastKnownLocation(android.location.LocationManager.GPS_PROVIDER) 
-                                ?: locationManager.getLastKnownLocation(android.location.LocationManager.NETWORK_PROVIDER)
-                        } else {
+                        val location: android.location.Location? =
                             locationManager.getLastKnownLocation(android.location.LocationManager.NETWORK_PROVIDER)
-                        }
-                            
+
                         if (location != null) {
-                            result.success("{\"latitude\": ${location.latitude}, \"longitude\": ${location.longitude}}")
+                            val lat = coarsen(location.latitude)
+                            val lon = coarsen(location.longitude)
+                            result.success("{\"latitude\": $lat, \"longitude\": $lon, \"precision_km\": 1}")
                         } else {
                             result.success("{\"error\": \"No location available\"}")
                         }
@@ -97,4 +99,7 @@ class MainActivity : FlutterActivity() {
             }
         }
     }
+
+    // Two decimal places of a degree is roughly 1.1 km at the equator.
+    private fun coarsen(degrees: Double): Double = Math.round(degrees * 100.0) / 100.0
 }

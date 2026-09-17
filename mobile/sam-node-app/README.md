@@ -64,7 +64,7 @@ Once launched, the app displays a control interface:
 
 1.  **Control plane URL**: The address of the SAM control plane (e.g., `https://bananas.sam-mesh.dev`).
 2.  **Enrollment JWT**: A valid JWT token retrieved from your OIDC provider to authenticate the node registration.
-3.  **Local API Token**: The secret bearer token used to secure the local sidecar REST APIs (defaults to `secret-token`).
+3.  **Local API Token**: The bearer token that secures the local sidecar REST API. It is generated on first launch and kept in the app's private storage; view, copy or regenerate it on the **Config** tab. There is no default: Android loopback is shared by every installed app, so a fixed value would let any of them act as this node.
 4.  **Enroll Node**: Click this button first to generate the local Peer Identity and register the node with the control plane.
 5.  **Start Node**: Launches the Go node runtime in the background. It will bind its local MCP sidecar to `127.0.0.1:5005`.
 6.  **Stop Node**: Gracefully shuts down the background Go mesh client.
@@ -111,23 +111,24 @@ You can query the phone's telemetry from a remote machine (or another node) usin
 1.  **Discover tools on the remote phone service**:
     ```bash
     # Query the local SAM node proxy for tools hosted by the phone-sensors peer
+    # (-token is your own node's API token, not the phone's)
     go run cmd/mcp-client/main.go \
       -url "http://localhost:8080/sam/<PHONE_PEER_ID>/mcp/phone-sensors" \
-      -token "secret-token" \
+      -token "$(cat ~/.config/sam-mesh/api-token)" \
       -list
     ```
     *Output:*
     *   `get_battery_status`: Returns the current battery level and charging status of the device.
-    *   `get_location`: Returns the current coarse location of the device.
+    *   `get_location`: Returns the approximate location of the device, rounded to about a kilometre.
 
 2.  **Query the location**:
     ```bash
     go run cmd/mcp-client/main.go \
       -url "http://localhost:8080/sam/<PHONE_PEER_ID>/mcp/phone-sensors" \
-      -token "secret-token" \
+      -token "$(cat ~/.config/sam-mesh/api-token)" \
       -tool "get_location"
     ```
-    *Output:* `{"latitude": 42.2805588, "longitude": -8.6124088}`
+    *Output:* `{"latitude": 42.28, "longitude": -8.61, "precision_km": 1}`
 
 ---
 

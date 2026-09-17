@@ -20,12 +20,18 @@ const (
 )
 
 type ServiceConfig struct {
-	Type        string            `yaml:"type"` // e.g., "mcp", "inference"
-	Name        string            `yaml:"name"`
-	Description string            `yaml:"description"`
-	TargetURL   string            `yaml:"target_url,omitempty"`
-	Command     []string          `yaml:"command,omitempty"`
-	Env         map[string]string `yaml:"env,omitempty"`
+	Type        string `yaml:"type"` // e.g., "mcp", "inference"
+	Name        string `yaml:"name"`
+	Description string `yaml:"description"`
+	TargetURL   string `yaml:"target_url,omitempty"`
+	// TargetAuthPath names a file holding the credential the backend at
+	// TargetURL requires: "TOKEN" is sent as "Authorization: Bearer TOKEN",
+	// "user:pass" as HTTP Basic. A file, not a value, for the same reason
+	// the CLI takes --api-token-path: config files are copied, committed and
+	// rendered into ConfigMaps; a credential in one is a credential in all.
+	TargetAuthPath string            `yaml:"target_auth_path,omitempty"`
+	Command        []string          `yaml:"command,omitempty"`
+	Env            map[string]string `yaml:"env,omitempty"`
 }
 
 // NodeConfig defines the optional attenuation rules and static services for a specific SAM Node.

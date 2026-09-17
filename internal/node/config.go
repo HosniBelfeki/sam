@@ -62,6 +62,17 @@ func LoadNodeConfig(path string) (*NodeConfigComplete, error) {
 			path, config.Version, api.NodeConfigVersionV1Alpha1)
 	}
 
+	// A credential written into a file on disk is refused here, not in
+	// CompleteNodeConfig: the mobile FFI builds its config in memory with a
+	// per-launch token that is never written anywhere.
+	for _, svc := range config.Services {
+		if svc.TargetURL != "" {
+			if err := rejectInlineBackendCredential(svc.TargetURL); err != nil {
+				return nil, fmt.Errorf("node config %s, service %q: %w", path, svc.Name, err)
+			}
+		}
+	}
+
 	return CompleteNodeConfig(config)
 }
 
@@ -96,6 +107,9 @@ func CompleteNodeConfig(config api.NodeConfig) (*NodeConfigComplete, error) {
 	for i, svc := range config.Services {
 		if err := api.ValidateServiceFormat(svc.Type + "://" + svc.Name); err != nil {
 			return nil, fmt.Errorf("invalid service config at index %d: %w", i, err)
+		}
+		if svc.TargetAuthPath != "" && svc.TargetURL == "" {
+			return nil, fmt.Errorf("service %q: target_auth_path needs a target_url", svc.Name)
 		}
 	}
 

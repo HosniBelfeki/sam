@@ -140,7 +140,11 @@ func (m *MCPService) Teardown() error {
 func (m *MCPService) backendTransport() (mcp.Transport, error) {
 	switch x := m.backend.(type) {
 	case *api.RegisterServiceRequest_TargetUrl:
-		return &mcp.StreamableClientTransport{Endpoint: x.TargetUrl}, nil
+		target, err := parseBackendTarget(x.TargetUrl)
+		if err != nil {
+			return nil, err
+		}
+		return &mcp.StreamableClientTransport{Endpoint: target.url.String(), HTTPClient: target.client()}, nil
 	case *api.RegisterServiceRequest_Command:
 		if x.Command == nil || len(x.Command.Command) == 0 {
 			return nil, fmt.Errorf("missing command for command-backed MCP service %q", m.info.GetName())

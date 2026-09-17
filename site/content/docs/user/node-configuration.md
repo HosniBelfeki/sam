@@ -71,7 +71,8 @@ The `services` array allows you to register endpoints that remote peers in the S
 | `description` | A human-readable description published to the mesh discovery catalogue. |
 | `command` | *(For MCP)* The executable command array to spawn as a local subprocess, speaking MCP over stdio (e.g. `["node", "index.js"]`). Mutually exclusive with `target_url`. |
 | `env` | *(For MCP)* Key-value environment variables passed to the subprocess. |
-| `target_url` | *(For MCP/Inference/A2A)* The upstream URL to proxy traffic to. For `type: mcp`, this points to an already-running Streamable HTTP MCP server; SAM does not spawn or manage its lifecycle, but only proxies to it. Mutually exclusive with `command`. |
+| `target_url` | *(For MCP/Inference/A2A)* The upstream URL to proxy traffic to. For `type: mcp`, this points to an already-running Streamable HTTP MCP server; SAM does not spawn or manage its lifecycle, but only proxies to it. Mutually exclusive with `command`. Must not carry a credential (`http://user:pass@...` is refused); use `target_auth_path`. |
+| `target_auth_path` | *(Optional, with `target_url`)* Path to a file holding the credential the backend requires: a bare `TOKEN` is sent as `Authorization: Bearer TOKEN`, `user:pass` as HTTP Basic. The node reads the file once at start, presents the credential on every request to the backend (overriding any `Authorization` a caller sent) and never advertises or logs it. A file, not a value, because `sam-node.yaml` is copied, committed and rendered into ConfigMaps; mount a Secret and point here, as with `--api-token-path`. |
 
 ### Inference Service Path Standards & Proxy Routing
 

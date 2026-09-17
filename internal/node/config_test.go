@@ -17,6 +17,7 @@ package node
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/google/sam/api"
@@ -334,6 +335,55 @@ func TestCompleteNodeConfig(t *testing.T) {
 		Attenuation: api.Attenuation{Checks: []string{"not datalog"}},
 	}); err == nil {
 		t.Fatal("CompleteNodeConfig() with invalid Datalog: want error, got nil")
+	}
+}
+
+// A backend credential may not be written into sam-node.yaml: the file is
+// copied, committed and rendered into ConfigMaps. It comes from
+// target_auth_path instead. An in-memory config (the mobile FFI, which
+// passes a per-launch token that is never written) is not held to this.
+func TestBackendCredentialRefusedInConfigFileOnly(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sam-node.yaml")
+	inline := `version: v1alpha1
+services:
+  - type: mcp
+    name: sensors
+    target_url: "http://:s3cret@127.0.0.1:9090"
+`
+	if err := os.WriteFile(path, []byte(inline), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadNodeConfig(path)
+	if err == nil {
+		t.Fatal("a credential inside target_url in a config file must be refused")
+	}
+	if strings.Contains(err.Error(), "s3cret") {
+		t.Errorf("the refusal must not echo the credential: %v", err)
+	}
+
+	viaFile := `version: v1alpha1
+services:
+  - type: mcp
+    name: sensors
+    target_url: "http://127.0.0.1:9090"
+    target_auth_path: ` + filepath.Join(dir, "token") + `
+`
+	if err := os.WriteFile(path, []byte(viaFile), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadNodeConfig(path)
+	if err != nil {
+		t.Fatalf("target_auth_path form must load: %v", err)
+	}
+	if cfg.Services[0].TargetAuthPath == "" {
+		t.Error("target_auth_path was not carried through")
+	}
+
+	if _, err := CompleteNodeConfig(api.NodeConfig{
+		Services: []api.ServiceConfig{{Type: "mcp", Name: "sensors", TargetURL: "http://:launch-token@127.0.0.1:41225"}},
+	}); err != nil {
+		t.Errorf("an in-memory config with a per-launch credential must be accepted: %v", err)
 	}
 }
 
