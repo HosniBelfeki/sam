@@ -21,26 +21,48 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
 
 // newPipeBridge returns a StdioBridge wired to two in-memory pipes so tests
 // can drive stdin/stdout without a real subprocess.
-func newPipeBridge() (*StdioBridge, *io.PipeWriter, *bytes.Buffer) {
+func newPipeBridge() (*StdioBridge, *io.PipeWriter, *syncBuffer) {
 	stdoutReader, stdoutWriter := io.Pipe()
-	stdinBuf := &bytes.Buffer{}
+	stdinBuf := &syncBuffer{}
 	b := &StdioBridge{
-		stdin:  nopWriteCloser{stdinBuf},
+		stdin:  stdinBuf,
 		stdout: stdoutReader,
 	}
 	b.Start()
 	return b, stdoutWriter, stdinBuf
 }
 
-type nopWriteCloser struct{ io.Writer }
+// syncBuffer is the fake backend's stdin: written by request goroutines,
+// read by the test.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
 
-func (nopWriteCloser) Close() error { return nil }
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.Write(p)
+}
+
+func (s *syncBuffer) Close() error { return nil }
+
+func (s *syncBuffer) lines() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	text := strings.TrimSpace(s.buf.String())
+	if text == "" {
+		return nil
+	}
+	return strings.Split(text, "\n")
+}
 
 // waitFor polls cond until it holds; fails the test after 2s.
 func waitFor(t *testing.T, what string, cond func() bool) {
@@ -69,11 +91,13 @@ func TestStdioBridge_ServeHTTP_GETIsRefused(t *testing.T) {
 
 // bridgeIDOf returns the id the bridge assigned to the most recent request it
 // wrote to the backend's stdin, so a test can answer as the backend would.
-func bridgeIDOf(t *testing.T, stdinBuf *bytes.Buffer) string {
+// bridgeIDOf returns the bridge-assigned id of the line-th request (1-based)
+// the backend received, waiting for it to arrive.
+func bridgeIDOf(t *testing.T, stdinBuf *syncBuffer, line int) string {
 	t.Helper()
-	lines := strings.Split(strings.TrimSpace(stdinBuf.String()), "\n")
+	waitFor(t, "request to reach the backend", func() bool { return len(stdinBuf.lines()) >= line })
 	var msg map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &msg); err != nil {
+	if err := json.Unmarshal([]byte(stdinBuf.lines()[line-1]), &msg); err != nil {
 		t.Fatalf("stdin line is not JSON: %v", err)
 	}
 	return string(msg["id"])
@@ -91,8 +115,8 @@ func TestStdioBridge_ServeHTTP_POSTNotificationReturnsAccepted(t *testing.T) {
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusAccepted)
 	}
-	if got := stdinBuf.String(); got != body+"\n" {
-		t.Fatalf("stdin got %q, want %q", got, body+"\n")
+	if got := stdinBuf.lines(); len(got) != 1 || got[0] != body {
+		t.Fatalf("stdin got %q, want [%q]", got, body)
 	}
 }
 
@@ -116,7 +140,7 @@ func TestStdioBridge_ServeHTTP_POSTCallWaitsForMatchingReply(t *testing.T) {
 		return len(b.calls) > 0
 	})
 	// The backend never sees the caller's id, only the bridge's.
-	bridgeID := bridgeIDOf(t, stdinBuf)
+	bridgeID := bridgeIDOf(t, stdinBuf, 1)
 	if bridgeID == `"caller-7"` {
 		t.Fatal("caller id reached the backend unrewritten")
 	}
@@ -139,6 +163,77 @@ func TestStdioBridge_ServeHTTP_POSTCallWaitsForMatchingReply(t *testing.T) {
 		t.Fatalf("reply id = %s, want the caller's own \"caller-7\"", got["id"])
 	}
 }
+
+// A subprocess reads stdin and writes stdout on one thread. When it is
+// blocked writing a large reply, it is not reading, so a caller's write to
+// stdin blocks once the pipe is full. If that writer held the state lock,
+// deliver could not drain stdout, the backend could never finish writing,
+// and the two would wait on each other forever: a blocked stdin write must
+// not stop other callers' replies from being delivered.
+func TestStdioBridge_BlockedStdinWriteDoesNotStallDelivery(t *testing.T) {
+	stdoutReader, stdoutWriter := io.Pipe()
+	// A backend that is not reading stdin: the write blocks until someone
+	// reads the other end, which nobody does until the end of the test.
+	stdinReader, stdinWriter := io.Pipe()
+	// entered fires as a write to stdin begins; the test must not touch b.mu
+	// to learn that, or it would itself hang on the bug it is looking for.
+	entered := make(chan struct{}, 8)
+	b := &StdioBridge{stdin: signalingWriter{w: stdinWriter, entered: entered}, stdout: stdoutReader}
+	b.Start()
+	defer func() { _ = stdoutWriter.Close(); _ = stdinReader.Close() }()
+
+	// Caller A: its request is written and it waits for a reply. Its stdin
+	// write completes because we read exactly that line.
+	recA := httptest.NewRecorder()
+	doneA := make(chan struct{})
+	go func() {
+		b.ServeHTTP(recA, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"jsonrpc":"2.0","id":"a","method":"ping"}`)))
+		close(doneA)
+	}()
+	<-entered
+	lineA := make([]byte, 256)
+	nA, err := stdinReader.Read(lineA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var msgA map[string]json.RawMessage
+	if err := json.Unmarshal(lineA[:nA], &msgA); err != nil {
+		t.Fatalf("stdin line is not JSON: %v", err)
+	}
+	bridgeIDA := string(msgA["id"])
+
+	// Caller B: registered, then blocked in the stdin write because the
+	// backend has stopped reading.
+	recB := httptest.NewRecorder()
+	go b.ServeHTTP(recB, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"jsonrpc":"2.0","id":"b","method":"ping"}`)))
+	<-entered
+
+	// The backend now answers A. With the state lock held by B's blocked
+	// write, this delivery would never happen.
+	if _, err := stdoutWriter.Write([]byte(`{"jsonrpc":"2.0","id":` + bridgeIDA + `,"result":{}}` + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-doneA:
+	case <-time.After(2 * time.Second):
+		t.Fatal("caller A's reply was not delivered while another caller was blocked writing to stdin")
+	}
+	if recA.Code != http.StatusOK {
+		t.Fatalf("caller A status = %d, want 200", recA.Code)
+	}
+}
+
+type signalingWriter struct {
+	w       io.WriteCloser
+	entered chan struct{}
+}
+
+func (s signalingWriter) Write(p []byte) (int, error) {
+	s.entered <- struct{}{}
+	return s.w.Write(p)
+}
+
+func (s signalingWriter) Close() error { return s.w.Close() }
 
 // M18: with one backend process behind every authorized caller, two callers
 // using the same JSON-RPC id used to collide in the bridge's routing table,
@@ -167,14 +262,14 @@ func TestStdioBridge_ServeHTTP_SameIDFromTwoCallersDoesNotCrossWires(t *testing.
 		defer b.mu.Unlock()
 		return len(b.calls) == 1
 	})
-	idA := bridgeIDOf(t, stdinBuf)
+	idA := bridgeIDOf(t, stdinBuf, 1)
 	bb := start("secret-for-b")
 	waitFor(t, "second call registered", func() bool {
 		b.mu.Lock()
 		defer b.mu.Unlock()
 		return len(b.calls) == 2
 	})
-	idB := bridgeIDOf(t, stdinBuf)
+	idB := bridgeIDOf(t, stdinBuf, 2)
 	if idA == idB {
 		t.Fatalf("both callers got bridge id %s", idA)
 	}
@@ -223,7 +318,7 @@ func TestStdioBridge_ServeHTTP_LargeReplyIsDelivered(t *testing.T) {
 	})
 
 	payload := strings.Repeat("x", 100<<10)
-	_, _ = stdoutWriter.Write([]byte(`{"jsonrpc":"2.0","id":` + bridgeIDOf(t, stdinBuf) + `,"result":"` + payload + `"}` + "\n"))
+	_, _ = stdoutWriter.Write([]byte(`{"jsonrpc":"2.0","id":` + bridgeIDOf(t, stdinBuf, 1) + `,"result":"` + payload + `"}` + "\n"))
 
 	select {
 	case <-done:

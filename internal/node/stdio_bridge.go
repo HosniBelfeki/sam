@@ -42,6 +42,7 @@ type StdioBridge struct {
 	cmd    *exec.Cmd
 	stdin  io.WriteCloser
 	stdout io.ReadCloser
+	// mu guards nextID, calls and closed. It is never held across I/O.
 	mu     sync.Mutex
 	nextID uint64
 	// calls maps a bridge-assigned id to the request waiting on it.
@@ -49,6 +50,10 @@ type StdioBridge struct {
 	// closed is set once the stdout reader has stopped; the backend can no
 	// longer answer, so requests are refused instead of hanging.
 	closed bool
+	// writeMu serializes stdin writes. Separate from mu: a write blocks when
+	// the backend is not reading, and the backend may not be reading because
+	// it is blocked writing stdout, which only deliver (needing mu) drains.
+	writeMu sync.Mutex
 }
 
 type pendingCall struct {
@@ -178,13 +183,18 @@ func (b *StdioBridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	b.mu.Lock()
-	if b.closed {
-		b.mu.Unlock()
+	isClosed := b.closed
+	b.mu.Unlock()
+	if isClosed {
 		http.Error(w, "Backend process is no longer running", http.StatusServiceUnavailable)
 		return
 	}
+	// If the backend closes between the check and the write, the write
+	// fails or lands in a dead pipe; either way the reader's shutdown has
+	// closed call.reply and the select below answers 503.
+	b.writeMu.Lock()
 	_, err = b.stdin.Write(append(toBackend, '\n'))
-	b.mu.Unlock()
+	b.writeMu.Unlock()
 	if err != nil {
 		http.Error(w, "Failed to write to process stdin", http.StatusInternalServerError)
 		return
