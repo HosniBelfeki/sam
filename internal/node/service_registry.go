@@ -111,6 +111,27 @@ func (r *ServiceRegistry) Register(ctx context.Context, svc Service) error {
 	if info.Type == api.ServiceType_SERVICE_TYPE_UNSPECIFIED {
 		return fmt.Errorf("cannot register service with unspecified type")
 	}
+	// The same check the config loader runs, for services that arrive by
+	// other routes (FFI, tests): a name carrying its own scheme, such as
+	// "plugin://x", would be addressed as type://plugin://x and dispatch
+	// could no longer tell which type the policy was evaluated on.
+	typeStr, err := api.ServiceTypeToString(info.Type)
+	if err != nil {
+		return err
+	}
+	if err := api.ValidateServiceFormat(typeStr + "://" + info.Name); err != nil {
+		return fmt.Errorf("invalid service name %q: %w", info.Name, err)
+	}
+
+	// Policy is evaluated on type://name and the registry is keyed on name,
+	// so a second type under the same name would let a grant for one reach
+	// the other. One name, one service.
+	r.mu.RLock()
+	existing, taken := r.services[info.Name]
+	r.mu.RUnlock()
+	if taken && existing.Info().Type != info.Type {
+		return fmt.Errorf("service name %q is already registered as %s; a name cannot serve two types", info.Name, existing.Info().Type)
+	}
 
 	if err := svc.Init(ctx); err != nil {
 		return fmt.Errorf("init %s: %w", info.Name, err)
@@ -177,6 +198,18 @@ func (r *ServiceRegistry) Get(name string) (Service, bool) {
 	defer r.mu.RUnlock()
 	svc, ok := r.services[name]
 	return svc, ok
+}
+
+// GetTyped returns the service registered under name only if it is of type
+// t. Dispatch after authorization must use this: the policy was evaluated
+// on t://name, and a service of another type under that name is not what
+// the caller was granted.
+func (r *ServiceRegistry) GetTyped(t api.ServiceType, name string) (Service, bool) {
+	svc, ok := r.Get(name)
+	if !ok || svc.Info().Type != t {
+		return nil, false
+	}
+	return svc, true
 }
 
 // List returns the ServiceInfo for every registered service, optionally

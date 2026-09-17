@@ -129,8 +129,10 @@ func TestNewReverseProxyHandler_RewritesRequests(t *testing.T) {
 			if got := forwarded.URL.String(); got != tc.wantURL {
 				t.Errorf("upstream URL = %q, want %q", got, tc.wantURL)
 			}
-			if forwarded.Host != req.Host {
-				t.Errorf("upstream Host = %q, want %q", forwarded.Host, req.Host)
+			// The peer chose req.Host; the backend is addressed by its
+			// configured URL, and the original stays in X-Forwarded-Host.
+			if forwarded.Host != "backend.example" {
+				t.Errorf("upstream Host = %q, want %q", forwarded.Host, "backend.example")
 			}
 			for name, want := range map[string]string{
 				api.HeaderSamNoTrailingSlash: "",

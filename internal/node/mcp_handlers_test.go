@@ -333,16 +333,26 @@ func TestHandleFindRemoteTools_MeshWide(t *testing.T) {
 		t.Fatalf("RegisterService B: %v", err)
 	}
 	if err := nodeC.RegisterService(ctx, &api.RegisterServiceRequest{
-		Service: &api.ServiceInfo{Type: api.ServiceType_SERVICE_TYPE_MCP, Name: "mcp://summarizer"},
+		Service: &api.ServiceInfo{Type: api.ServiceType_SERVICE_TYPE_MCP, Name: "summarizer"},
 		Backend: &api.RegisterServiceRequest_TargetUrl{TargetUrl: cSrv.URL},
 	}); err != nil {
 		t.Fatalf("RegisterService C: %v", err)
 	}
 	if err := nodeD.RegisterService(ctx, &api.RegisterServiceRequest{
-		Service: &api.ServiceInfo{Type: api.ServiceType_SERVICE_TYPE_MCP, Name: "plugin://linter"},
+		Service: &api.ServiceInfo{Type: api.ServiceType_SERVICE_TYPE_MCP, Name: "linter"},
 		Backend: &api.RegisterServiceRequest_TargetUrl{TargetUrl: dSrv.URL},
 	}); err != nil {
 		t.Fatalf("RegisterService D: %v", err)
+	}
+	// A name that carries its own scheme used to be accepted and reached via
+	// a name-only fallback that ignored the type the policy was evaluated on.
+	for _, legacy := range []string{"mcp://summarizer", "plugin://linter"} {
+		if err := nodeD.RegisterService(ctx, &api.RegisterServiceRequest{
+			Service: &api.ServiceInfo{Type: api.ServiceType_SERVICE_TYPE_MCP, Name: legacy},
+			Backend: &api.RegisterServiceRequest_TargetUrl{TargetUrl: dSrv.URL},
+		}); err == nil {
+			t.Errorf("service name %q was accepted", legacy)
+		}
 	}
 
 	// Direct fan-out test: invoke fetchRemoteToolCatalogue for peers,
@@ -365,17 +375,10 @@ func TestHandleFindRemoteTools_MeshWide(t *testing.T) {
 		gotNames[tool.ToolName] = true
 	}
 
-	// Test permutation 1: no prefix gets "mcp://" automatically prepended.
-	if !gotNames["mcp://code-reviewer/review_pr"] {
-		t.Errorf("missing mcp://code-reviewer/review_pr; got %v", gotNames)
-	}
-	// Test permutation 2: "mcp://" prefix is preserved.
-	if !gotNames["mcp://summarizer/summarize"] {
-		t.Errorf("missing mcp://summarizer/summarize; got %v", gotNames)
-	}
-	// Test permutation 3: custom namespace prefix is preserved.
-	if !gotNames["plugin://linter/lint"] {
-		t.Errorf("missing plugin://linter/lint; got %v", gotNames)
+	for _, want := range []string{"mcp://code-reviewer/review_pr", "mcp://summarizer/summarize", "mcp://linter/lint"} {
+		if !gotNames[want] {
+			t.Errorf("missing %s; got %v", want, gotNames)
+		}
 	}
 }
 

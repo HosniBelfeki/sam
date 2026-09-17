@@ -2011,6 +2011,12 @@ func (n *SamNode) StartIngressServer(ctx context.Context) error {
 			// The path is remote-controlled and the peer is not yet authorized:
 			// it is logged only after VerifyBiscuitToken passes.
 			path := r.URL.Path
+			// Policy is decided on the /{type}/{name} prefix; a ".." segment in
+			// what follows could resolve to a sibling service on a shared backend.
+			if hasDotSegment(path) {
+				http.Error(w, "Invalid path", http.StatusBadRequest)
+				return
+			}
 			parts := strings.SplitN(strings.TrimPrefix(path, "/"), "/", 3)
 			if len(parts) < 2 {
 				http.Error(w, "Invalid path", http.StatusBadRequest)
@@ -2074,9 +2080,11 @@ func (n *SamNode) StartIngressServer(ctx context.Context) error {
 			r.Header.Del(api.HeaderSamNoTrailingSlash)
 			r.Header.Set(api.HeaderPeerID, remotePeer.String())
 
-			svc, ok := n.services.Get(serviceName)
+			// Under the type the policy was evaluated on: a same-named service
+			// of another type is not what the caller was granted.
+			svc, ok := n.services.GetTyped(serviceType, serviceName)
 			if !ok {
-				logger.Errorf("[Ingress] Service not found: %s", truncateForLog(serviceName))
+				logger.Errorf("[Ingress] Service not found: %s", truncateForLog(target))
 				http.Error(w, "Service not found", http.StatusNotFound)
 				return
 			}

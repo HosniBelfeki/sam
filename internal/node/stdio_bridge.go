@@ -17,63 +17,52 @@ package node
 import (
 	"bufio"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"os/exec"
+	"strconv"
 	"sync"
 
 	"github.com/google/sam/api"
 )
 
-// StdioBridge backs the local SSE/POST HTTP ingress route for a
-// command-backed service (registered via baseService.Init). It is not used
-// for mesh sessions - see MCPService.backendTransport, which gives those
-// their own subprocess instead of sharing this one.
+// StdioBridge backs the POST HTTP ingress route for a command-backed service
+// (registered via baseService.Init). It is not used for mesh sessions - see
+// MCPService.backendTransport, which gives those their own subprocess
+// instead of sharing this one.
+//
+// One backend process serves every authorized caller, so the bridge owns the
+// JSON-RPC id space: each request's id is replaced with a bridge-assigned
+// one before it reaches the backend and restored on the way out, and a
+// response is delivered only to the request it answers. Two callers sending
+// the same id can no longer receive each other's replies. There is no
+// broadcast (SSE) side: with a shared process, a server-initiated message
+// cannot be attributed to a caller, so it is not delivered to any of them.
 type StdioBridge struct {
-	cmd     *exec.Cmd
-	stdin   io.WriteCloser
-	stdout  io.ReadCloser
-	mu      sync.Mutex
-	clients map[chan string]bool
-	calls   map[string]chan string
+	cmd    *exec.Cmd
+	stdin  io.WriteCloser
+	stdout io.ReadCloser
+	mu     sync.Mutex
+	nextID uint64
+	// calls maps a bridge-assigned id to the request waiting on it.
+	calls map[uint64]*pendingCall
 	// closed is set once the stdout reader has stopped; the backend can no
 	// longer answer, so requests are refused instead of hanging.
 	closed bool
 }
 
+type pendingCall struct {
+	originalID json.RawMessage
+	reply      chan []byte
+}
+
 func (b *StdioBridge) Start() {
-	b.clients = make(map[chan string]bool)
-	b.calls = make(map[string]chan string)
+	b.calls = make(map[uint64]*pendingCall)
 	go func() {
 		scanner := bufio.NewScanner(b.stdout)
 		scanner.Buffer(make([]byte, 0, 64<<10), maxRequestBodyBytes)
 		for scanner.Scan() {
-			line := scanner.Text()
-
-			b.mu.Lock()
-			if len(line) > 0 && line[0] == '{' {
-				var msg map[string]any
-				if err := json.Unmarshal([]byte(line), &msg); err == nil {
-					if idVal, ok := msg["id"]; ok {
-						reqIDStr := fmt.Sprintf("%v", idVal)
-						if ch, found := b.calls[reqIDStr]; found {
-							select {
-							case ch <- line:
-							default:
-							}
-						}
-					}
-				}
-			}
-
-			for ch := range b.clients {
-				select {
-				case ch <- line:
-				default:
-				}
-			}
-			b.mu.Unlock()
+			b.deliver(scanner.Bytes())
 		}
 
 		if err := scanner.Err(); err != nil {
@@ -87,148 +76,138 @@ func (b *StdioBridge) Start() {
 
 		b.mu.Lock()
 		b.closed = true
-		for ch := range b.clients {
-			close(ch)
-			delete(b.clients, ch)
+		for id, call := range b.calls {
+			close(call.reply)
+			delete(b.calls, id)
 		}
-		for _, ch := range b.calls {
-			close(ch)
-		}
-		b.calls = make(map[string]chan string)
 		b.mu.Unlock()
 	}()
 }
 
-func (b *StdioBridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodGet:
-		flusher, ok := w.(http.Flusher)
-		if !ok {
-			http.Error(w, "Streaming unsupported!", http.StatusInternalServerError)
-			return
-		}
+// deliver routes one backend line to the call it answers. Lines that carry
+// no bridge id (notifications, requests from the backend, non-JSON output)
+// have no owner and are dropped.
+func (b *StdioBridge) deliver(line []byte) {
+	if len(line) == 0 || line[0] != '{' {
+		return
+	}
+	var msg map[string]json.RawMessage
+	if err := json.Unmarshal(line, &msg); err != nil {
+		return
+	}
+	rawID, ok := msg["id"]
+	if !ok {
+		return
+	}
+	bridgeID, err := strconv.ParseUint(string(rawID), 10, 64)
+	if err != nil {
+		return
+	}
 
-		ch := make(chan string, 10)
+	b.mu.Lock()
+	call, found := b.calls[bridgeID]
+	if found {
+		delete(b.calls, bridgeID)
+	}
+	b.mu.Unlock()
+	if !found {
+		return
+	}
+
+	msg["id"] = call.originalID
+	restored, err := json.Marshal(msg)
+	if err != nil {
+		close(call.reply)
+		return
+	}
+	call.reply <- restored
+	close(call.reply)
+}
+
+func (b *StdioBridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		// No GET: the legacy SSE stream broadcast every backend line to every
+		// reader, i.e. every caller's tool output to every other caller.
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
+	defer func() { _ = r.Body.Close() }()
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "Failed to read body", http.StatusBadRequest)
+		return
+	}
+
+	var msg map[string]json.RawMessage
+	if err := json.Unmarshal(body, &msg); err != nil {
+		http.Error(w, "Body must be a JSON-RPC message", http.StatusBadRequest)
+		return
+	}
+	originalID, isCall := msg["id"]
+
+	var call *pendingCall
+	var toBackend []byte
+	if isCall {
+		call = &pendingCall{originalID: originalID, reply: make(chan []byte, 1)}
 		b.mu.Lock()
 		if b.closed {
 			b.mu.Unlock()
 			http.Error(w, "Backend process is no longer running", http.StatusServiceUnavailable)
 			return
 		}
-		b.clients[ch] = true
+		b.nextID++
+		bridgeID := b.nextID
+		b.calls[bridgeID] = call
 		b.mu.Unlock()
-
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("Connection", "keep-alive")
-		// Flush headers immediately to establish the stream
-		w.WriteHeader(http.StatusOK)
-		flusher.Flush()
-
 		defer func() {
 			b.mu.Lock()
-			delete(b.clients, ch)
+			delete(b.calls, bridgeID)
 			b.mu.Unlock()
-			close(ch)
 		}()
 
-		ctx := r.Context()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case line, ok := <-ch:
-				if !ok {
-					return
-				}
-				if _, err := fmt.Fprintf(w, "data: %s\n\n", line); err != nil {
-					logger.Errorf("Failed to write to SSE client: %v", err)
-					return
-				}
-				flusher.Flush()
-			}
-		}
-	case http.MethodPost:
-		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
-		defer func() { _ = r.Body.Close() }()
-		body, err := io.ReadAll(r.Body)
+		msg["id"] = json.RawMessage(strconv.FormatUint(bridgeID, 10))
+		toBackend, err = json.Marshal(msg)
 		if err != nil {
-			http.Error(w, "Failed to read body", http.StatusInternalServerError)
+			http.Error(w, "Failed to encode request", http.StatusInternalServerError)
 			return
 		}
+	} else {
+		toBackend = body
+	}
 
-		var msg map[string]any
-		isCall := false
-		var reqID any
-		if err := json.Unmarshal(body, &msg); err == nil {
-			if id, ok := msg["id"]; ok {
-				isCall = true
-				reqID = id
-			}
-		}
-
-		var ch <-chan string
-		var unsub func()
-		if isCall {
-			reqIDStr := fmt.Sprintf("%v", reqID)
-			callCh := make(chan string, 1)
-			b.mu.Lock()
-			if b.closed {
-				b.mu.Unlock()
-				http.Error(w, "Backend process is no longer running", http.StatusServiceUnavailable)
-				return
-			}
-			b.calls[reqIDStr] = callCh
-			b.mu.Unlock()
-			ch = callCh
-			unsub = func() {
-				b.mu.Lock()
-				if existing, ok := b.calls[reqIDStr]; ok && existing == callCh {
-					delete(b.calls, reqIDStr)
-					close(callCh)
-				}
-				b.mu.Unlock()
-			}
-			defer unsub()
-		}
-
-		b.mu.Lock()
-		if b.closed {
-			b.mu.Unlock()
-			http.Error(w, "Backend process is no longer running", http.StatusServiceUnavailable)
-			return
-		}
-		_, err = b.stdin.Write(append(body, '\n'))
+	b.mu.Lock()
+	if b.closed {
 		b.mu.Unlock()
+		http.Error(w, "Backend process is no longer running", http.StatusServiceUnavailable)
+		return
+	}
+	_, err = b.stdin.Write(append(toBackend, '\n'))
+	b.mu.Unlock()
+	if err != nil {
+		http.Error(w, "Failed to write to process stdin", http.StatusInternalServerError)
+		return
+	}
 
-		if err != nil {
-			http.Error(w, "Failed to write to process stdin", http.StatusInternalServerError)
+	w.Header().Set("Mcp-Session-Id", "stdio-bridge")
+
+	if !isCall {
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+
+	select {
+	case <-r.Context().Done():
+		return
+	case line, ok := <-call.reply:
+		if !ok {
+			http.Error(w, "Backend process exited before answering", http.StatusServiceUnavailable)
 			return
 		}
-
-		w.Header().Set("Mcp-Session-Id", "stdio-bridge")
-
-		if !isCall {
-			w.WriteHeader(http.StatusAccepted)
-			return
-		}
-
-		ctx := r.Context()
-		select {
-		case <-ctx.Done():
-			return
-		case line, ok := <-ch:
-			if !ok {
-				http.Error(w, "Backend process exited before answering", http.StatusServiceUnavailable)
-				return
-			}
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(line))
-			return
-		}
-	default:
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(line)
 	}
 }
 

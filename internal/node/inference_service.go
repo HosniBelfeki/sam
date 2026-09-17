@@ -128,6 +128,11 @@ type inferenceTransport struct {
 func (t *inferenceTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	attemptReq := req.Clone(req.Context())
 	attemptReq.Header.Del("Accept-Encoding") // Prevent gzipped response from breaking token tracking
+	// A Director proxy does not manage X-Forwarded-For, and RemoteAddr here is
+	// a peer id, so an inbound value would reach the backend as-is.
+	attemptReq.Header.Del("X-Forwarded-For")
+	attemptReq.Header.Del("X-Forwarded-Host")
+	attemptReq.Header.Del("X-Forwarded-Proto")
 
 	attemptReq.URL.Scheme = t.backend.Scheme
 	attemptReq.URL.Host = t.backend.Host

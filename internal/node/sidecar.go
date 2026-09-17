@@ -387,6 +387,7 @@ func withAuth(token string, allowAuthorizationFallback bool, next http.Handler) 
 			// Reaching the socket at all already proves the caller is the user
 			// who owns it, which is the same bar as reading the token file.
 			r.Header.Del(api.HeaderSamAuthentication)
+			stripSidecarTokenFromAuthorization(r, token)
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -427,11 +428,40 @@ func withAuth(token string, allowAuthorizationFallback bool, next http.Handler) 
 		// The gate credential is local-only: strip exactly the header it came in
 		// on so it can never flow past the gate. Anything left (e.g. Authorization
 		// when the gate was passed via X-Sam-Authentication) is the destination
-		// service's own credential and passes through untouched.
+		// service's own credential and passes through untouched, unless it is
+		// this same token sent twice, which an SDK configured with the sidecar
+		// token as api_key plus a default header will do.
 		r.Header.Del(headerName)
+		stripSidecarTokenFromAuthorization(r, token)
 
 		next.ServeHTTP(w, r)
 	})
+}
+
+// stripSidecarTokenFromAuthorization drops an Authorization header whose
+// bearer value is the sidecar token: it is the local gate credential, not the
+// destination's, and must not travel to a remote provider.
+func stripSidecarTokenFromAuthorization(r *http.Request, token string) {
+	if token == "" {
+		return
+	}
+	parts := strings.SplitN(r.Header.Get("Authorization"), " ", 2)
+	if len(parts) == 2 && strings.EqualFold(parts[0], "bearer") && constantTimeEqual(parts[1], token) {
+		r.Header.Del("Authorization")
+	}
+}
+
+// hasDotSegment reports whether any path segment is "." or "..". Go's
+// ServeMux canonicalizes these with a redirect, but the mesh proxies pass
+// paths through to backends that may resolve them against a different
+// service prefix than the one authorization was decided on.
+func hasDotSegment(p string) bool {
+	for _, seg := range strings.Split(p, "/") {
+		if seg == "." || seg == ".." {
+			return true
+		}
+	}
+	return false
 }
 
 // constantTimeEqual compares two secrets without leaking their contents through
@@ -703,6 +733,12 @@ func createEgressProxy(node *SamNode) http.Handler {
 		if biscuitBytes == nil {
 			logger.Errorf("[Proxy] Failed to load node identity for egress request, rejecting.")
 			http.Error(w, "Service Unavailable: Missing Node Identity", http.StatusServiceUnavailable)
+			return
+		}
+		// The remote's policy is decided on the /{type}/{name} prefix this
+		// proxy forwards verbatim; a ".." in the rest is not ours to send.
+		if hasDotSegment(r.URL.Path) {
+			http.Error(w, "Bad Request: path must not contain dot segments", http.StatusBadRequest)
 			return
 		}
 

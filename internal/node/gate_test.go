@@ -217,7 +217,7 @@ func TestHandleMCPStream_DumbPipeProxy(t *testing.T) {
 
 	// Bypass biscuit auth by exposing HandleMCPStream on a test-only protocol.
 	nodeA.Host.SetStreamHandler(testMCPProtocol, func(s network.Stream) {
-		nodeA.HandleMCPStream(s, RequestContext{Target: "code-reviewer"})
+		nodeA.HandleMCPStream(s, RequestContext{Target: "mcp://code-reviewer"})
 	})
 
 	if err := nodeB.Host.Connect(ctx, peer.AddrInfo{ID: nodeA.Host.ID(), Addrs: nodeA.Host.Addrs()}); err != nil {
@@ -291,7 +291,7 @@ func TestHandleMCPStream_ForwarderRoutesCalls(t *testing.T) {
 	t.Cleanup(func() { _ = svc.Teardown() })
 
 	nodeA.Host.SetStreamHandler(testMCPProtocol, func(s network.Stream) {
-		nodeA.HandleMCPStream(s, RequestContext{Target: "svc"})
+		nodeA.HandleMCPStream(s, RequestContext{Target: "mcp://svc"})
 	})
 
 	if err := nodeB.Host.Connect(ctx, peer.AddrInfo{ID: nodeA.Host.ID(), Addrs: nodeA.Host.Addrs()}); err != nil {
@@ -431,7 +431,7 @@ func TestHandleStreamPassThrough_BackendEOFDoesNotDropInFlightResponse(t *testin
 	t.Cleanup(func() { _ = svc.Teardown() })
 
 	nodeA.Host.SetStreamHandler(testMCPProtocol, func(s network.Stream) {
-		nodeA.HandleMCPStream(s, RequestContext{Target: "svc"})
+		nodeA.HandleMCPStream(s, RequestContext{Target: "mcp://svc"})
 	})
 
 	if err := nodeB.Host.Connect(ctx, peer.AddrInfo{ID: nodeA.Host.ID(), Addrs: nodeA.Host.Addrs()}); err != nil {
@@ -514,7 +514,7 @@ func TestHandleStreamPassThrough_SlowBackendDoesNotHitDrainTimeout(t *testing.T)
 	t.Cleanup(func() { _ = svc.Teardown() })
 
 	nodeA.Host.SetStreamHandler(testMCPProtocol, func(s network.Stream) {
-		nodeA.HandleMCPStream(s, RequestContext{Target: "slow-svc"})
+		nodeA.HandleMCPStream(s, RequestContext{Target: "mcp://slow-svc"})
 	})
 
 	if err := nodeB.Host.Connect(ctx, peer.AddrInfo{ID: nodeA.Host.ID(), Addrs: nodeA.Host.Addrs()}); err != nil {

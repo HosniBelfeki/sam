@@ -75,27 +75,24 @@ func (g *nodeConnGate) InterceptSecured(dir network.Direction, p peer.ID, n netw
 func (n *SamNode) HandleMCPStream(s network.Stream, reqCtx RequestContext) {
 	// If the TargetService is for a registered local backend, dumb-pipe proxy to it.
 	target := reqCtx.Target
-	_, targetName := api.ParseServiceTarget(target)
+	targetType, targetName := api.ParseServiceTarget(target)
 	if target != "" && targetName != api.CatalogTarget {
 		if n.services == nil {
 			logger.Errorf("[MCP] Service registry is not initialized")
 			_ = s.Reset()
 			return
 		}
-		svc, ok := n.services.Get(targetName)
-		if !ok && targetName != target {
-			svc, ok = n.services.Get(target)
-		}
-		if ok {
-			mcpSvc, isMcp := svc.(*MCPService)
-			if isMcp {
-				mcpSvc.HandleStreamPassThrough(s)
-				return
+		// The policy passed on the type the caller named; this stream only
+		// carries MCP, so anything else is a type-confusion attempt.
+		if t, err := api.ParseServiceType(targetType); err == nil && t == api.ServiceType_SERVICE_TYPE_MCP {
+			if svc, ok := n.services.GetTyped(t, targetName); ok {
+				if mcpSvc, isMcp := svc.(*MCPService); isMcp {
+					mcpSvc.HandleStreamPassThrough(s)
+					return
+				}
 			}
 		}
-		// If service not found or not an MCPService, we fall through or close it.
-		// For now, close the stream if target is invalid.
-		logger.Warnf("[MCP] Client requested unknown target service %q, closing stream", target)
+		logger.Warnf("[MCP] Client requested unknown target service %q, closing stream", truncateForLog(target))
 		_ = s.Reset()
 		return
 	}
@@ -121,7 +118,7 @@ func (n *SamNode) HandleMCPStream(s network.Stream, reqCtx RequestContext) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "get_mesh_info",
 		Description: "Get information about the mesh network",
-	}, n.handleGetMeshInfo)
+	}, n.handleGetMeshInfoRemote)
 
 	ctx := context.Background()
 	if err := server.Run(ctx, transport); err != nil {

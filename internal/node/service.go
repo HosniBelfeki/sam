@@ -59,8 +59,9 @@ func newReverseProxyHandler(targetURL string) (http.Handler, error) {
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			noTrailingSlash := pr.In.Header.Get(api.HeaderSamNoTrailingSlash) == "true"
 			pr.SetURL(u)
-			// Preserve the Host behavior of NewSingleHostReverseProxy.
-			pr.Out.Host = pr.In.Host
+			// The inbound Host is whatever the remote peer sent; the backend
+			// is addressed by its configured URL.
+			pr.Out.Host = u.Host
 			pr.Out.Header.Del(api.HeaderSamNoTrailingSlash)
 			if noTrailingSlash && !strings.HasSuffix(u.Path, "/") && strings.HasSuffix(pr.Out.URL.Path, "/") {
 				pr.Out.URL.Path = strings.TrimSuffix(pr.Out.URL.Path, "/")

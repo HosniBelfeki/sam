@@ -203,6 +203,26 @@ func (n *SamNode) handleGetMeshInfo(ctx context.Context, req *mcp.CallToolReques
 	}, nil, nil
 }
 
+// handleGetMeshInfoRemote is get_mesh_info as served to other peers over the
+// catalog stream: the local socket path, the router and the connected-peer
+// list are this node's business, not a remote caller's.
+func (n *SamNode) handleGetMeshInfoRemote(ctx context.Context, req *mcp.CallToolRequest, params GetMeshInfoParams) (*mcp.CallToolResult, any, error) {
+	full, err := n.meshInfo()
+	if err != nil {
+		return nil, nil, err
+	}
+	responseBytes, err := json.Marshal(struct {
+		PeerID  string `json:"peer_id"`
+		DHTSize int    `json:"dht_size"`
+	}{PeerID: full.PeerID, DHTSize: full.DHTSize})
+	if err != nil {
+		return nil, nil, err
+	}
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{&mcp.TextContent{Text: string(responseBytes)}},
+	}, nil, nil
+}
+
 // CallRemoteToolParams defines the parameters for the call_remote_tool tool.
 //
 // Arguments is a JSON object whose shape matches the target server's
