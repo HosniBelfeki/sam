@@ -9,8 +9,10 @@
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE"/>
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE"/>
+    <!-- Scanning the sam://enroll QR code shown by the control plane. -->
+    <uses-permission android:name="android.permission.CAMERA"/>
     <application
-        android:label="sam_agent"
+        android:label="SAM Connect"
         android:name=".SamApplication"
         android:icon="@mipmap/ic_launcher"
         android:allowBackup="false">
@@ -38,6 +40,14 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+            <!-- sam://enroll?server=...&token=... links: a stock camera app
+                 scanning the enrollment QR hands the payload to this app. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="sam" android:host="enroll"/>
             </intent-filter>
         </activity>
         <!-- Don't delete the meta-data below.

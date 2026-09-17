@@ -343,10 +343,39 @@ func decodeLabels(jsonText string) (map[string]string, error) {
 	return labels, nil
 }
 
-// EnrollNode enrolls a node. Labels arrive as a JSON object and are minted
-// into the node's Biscuit here; changing them means enrolling again, which
-// reuses the stored key so the PeerID survives.
+// EnrollNode enrolls a node with an OIDC JWT. Labels arrive as a JSON object
+// and are minted into the node's Biscuit here; changing them means enrolling
+// again, which reuses the stored key so the PeerID survives.
 func EnrollNode(dataDir string, controlPlaneURL string, jwt string, allowLoopback bool, labels string, refreshToken string) error {
+	return enrollWith(dataDir, controlPlaneURL, allowLoopback, labels, func(ctx context.Context, n *node.SamNode, store *node.Store) error {
+		if err := n.Enroll(ctx, controlPlaneURL, jwt); err != nil {
+			return err
+		}
+		if refreshToken != "" {
+			saveRefreshSession(ctx, store, controlPlaneURL, refreshToken)
+		}
+		return nil
+	})
+}
+
+// EnrollNodeBootstrap enrolls a node with a pre-shared bootstrap token (the
+// join token or the one carried by a sam://enroll QR code) through POST
+// /enroll; no identity provider is involved. The control plane spends the
+// token, so a single-use token is burned by this call whether or not the
+// node later keeps its identity.
+func EnrollNodeBootstrap(dataDir string, controlPlaneURL string, bootstrapToken string, allowLoopback bool, labels string) error {
+	if strings.TrimSpace(bootstrapToken) == "" {
+		return errors.New("bootstrap token is required")
+	}
+	return enrollWith(dataDir, controlPlaneURL, allowLoopback, labels, func(ctx context.Context, n *node.SamNode, _ *node.Store) error {
+		return n.EnrollBootstrap(ctx, controlPlaneURL, strings.TrimSpace(bootstrapToken))
+	})
+}
+
+// enrollWith runs one enrollment flow on a throwaway node built from the
+// stored (or freshly generated) key, then persists the control plane URL and
+// syncs the mesh config so the next StartNode finds everything in place.
+func enrollWith(dataDir string, controlPlaneURL string, allowLoopback bool, labels string, enroll func(context.Context, *node.SamNode, *node.Store) error) error {
 	parsedLabels, err := decodeLabels(labels)
 	if err != nil {
 		return err
@@ -406,16 +435,12 @@ func EnrollNode(dataDir string, controlPlaneURL string, jwt string, allowLoopbac
 		_ = meshNode.Teardown()
 	}()
 
-	err = meshNode.Enroll(enrollCtx, controlPlaneURL, jwt)
-	if err != nil {
+	if err := enroll(enrollCtx, meshNode, store); err != nil {
 		return fmt.Errorf("enrollment failed: %w", err)
 	}
 
 	if err := store.SaveControlPlaneURL(controlPlaneURL); err != nil {
 		return fmt.Errorf("failed to save control plane URL: %w", err)
-	}
-	if refreshToken != "" {
-		saveRefreshSession(enrollCtx, store, controlPlaneURL, refreshToken)
 	}
 
 	_, _, _, err = node.SyncMeshConfig(enrollCtx, store)

@@ -35,19 +35,28 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-func TestMobileFFILifecycle(t *testing.T) {
-	// 1. Setup Mock Router
+// mockMesh is a fake control plane plus a router that accepts any auth, so
+// the FFI can enroll and start against it in-process. It records the last
+// request seen on each enrollment endpoint.
+type mockMesh struct {
+	url              string
+	registerRequest  api.EnrollRequest
+	bootstrapRequest api.BootstrapEnrollRequest
+}
+
+func newMockMesh(t *testing.T) *mockMesh {
+	t.Helper()
 	routerHost, err := libp2p.New(libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = routerHost.Close() }()
+	t.Cleanup(func() { _ = routerHost.Close() })
 
 	routerDHT, err := dht.New(routerHost, dht.Mode(dht.ModeServer), dht.ProtocolPrefix("/sam"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = routerDHT.Close() }()
+	t.Cleanup(func() { _ = routerDHT.Close() })
 
 	// Generate key-pair for Mock Control Plane signing
 	cpPubKey, cpPrivKey, err := ed25519.GenerateKey(rand.Reader)
@@ -74,52 +83,65 @@ func TestMobileFFILifecycle(t *testing.T) {
 		println("--- MOCK ROUTER: wrote AuthResponse success with valid biscuit")
 	})
 
-	var enrolledLabels map[string]string
+	mesh := &mockMesh{}
+	routerAddrs := []string{routerHost.Addrs()[0].String() + "/p2p/" + routerHost.ID().String()}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/register", func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
-		var req api.EnrollRequest
-		_ = proto.Unmarshal(body, &req)
-		enrolledLabels = req.Labels
-
-		biscuitBytes := mintMockBiscuit(t, req.PeerId, cpPrivKey, api.RoleNode)
-		resp := &api.EnrollResponse{
-			BiscuitToken:          biscuitBytes,
+		_ = proto.Unmarshal(body, &mesh.registerRequest)
+		writeProto(w, &api.EnrollResponse{
+			BiscuitToken:          mintMockBiscuit(t, mesh.registerRequest.PeerId, cpPrivKey, api.RoleNode),
 			ControlPlanePublicKey: cpPubKey,
-			RouterAddresses:       []string{routerHost.Addrs()[0].String() + "/p2p/" + routerHost.ID().String()},
-		}
-		data, _ := proto.Marshal(resp)
-		w.Header().Set("Content-Type", "application/x-protobuf")
-		_, _ = w.Write(data)
+			RouterAddresses:       routerAddrs,
+		})
+	})
+	mux.HandleFunc("/enroll", func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = proto.Unmarshal(body, &mesh.bootstrapRequest)
+		writeProto(w, &api.BootstrapEnrollResponse{
+			Status:                api.EnrollmentStatus_ENROLLMENT_STATUS_APPROVED,
+			BiscuitToken:          mintMockBiscuit(t, mesh.bootstrapRequest.PeerId, cpPrivKey, api.RoleNode),
+			ControlPlanePublicKey: cpPubKey,
+			RouterAddresses:       routerAddrs,
+		})
 	})
 	mux.HandleFunc("/info", func(w http.ResponseWriter, r *http.Request) {
-		resp := &api.ControlPlaneInfoResponse{
+		writeProto(w, &api.ControlPlaneInfoResponse{
 			OidcIssuer: "http://mock-issuer",
 			ClientId:   "mock-client",
 			Audience:   "mock-audience",
-		}
-		data, _ := proto.Marshal(resp)
-		w.Header().Set("Content-Type", "application/x-protobuf")
-		_, _ = w.Write(data)
+		})
 	})
 
 	httpServer := httptest.NewServer(mux)
-	defer httpServer.Close()
+	t.Cleanup(httpServer.Close)
+	mesh.url = httpServer.URL
+	return mesh
+}
 
-	// 2. Mobile Enrollment
+func writeProto(w http.ResponseWriter, message proto.Message) {
+	data, _ := proto.Marshal(message)
+	w.Header().Set("Content-Type", "application/x-protobuf")
+	_, _ = w.Write(data)
+}
+
+func TestMobileFFILifecycle(t *testing.T) {
+	mesh := newMockMesh(t)
+
+	// Mobile Enrollment
 	tmpDir := t.TempDir()
-	err = EnrollNode(tmpDir, httpServer.URL, "dummy-jwt", true, `{"region":"eu-west-1"}`, "")
+	err := EnrollNode(tmpDir, mesh.url, "dummy-jwt", true, `{"region":"eu-west-1"}`, "")
 	if err != nil {
 		t.Fatalf("EnrollNode failed: %v", err)
 	}
-	if enrolledLabels["region"] != "eu-west-1" {
-		t.Fatalf("Expected label region=eu-west-1 in enroll request, got %v", enrolledLabels)
+	if mesh.registerRequest.Labels["region"] != "eu-west-1" {
+		t.Fatalf("Expected label region=eu-west-1 in enroll request, got %v", mesh.registerRequest.Labels)
 	}
 
-	// 3. Mobile Node Start
+	// Mobile Node Start
 	cfg := MobileConfig{
 		DataDir:         tmpDir,
-		ControlPlaneURL: httpServer.URL,
+		ControlPlaneURL: mesh.url,
 		MeshID:          "test-mesh",
 		BindAddr:        "127.0.0.1:0", // random free port
 		ApiToken:        "test-token",
@@ -143,6 +165,32 @@ func TestMobileFFILifecycle(t *testing.T) {
 	err = StopNode()
 	if err != nil {
 		t.Fatalf("StopNode failed: %v", err)
+	}
+}
+
+func TestEnrollNodeBootstrap(t *testing.T) {
+	mesh := newMockMesh(t)
+	dir := t.TempDir()
+	if err := EnrollNodeBootstrap(dir, mesh.url, " sam_dev_join-token\n", true, `{"region":"eu-west-1"}`); err != nil {
+		t.Fatalf("EnrollNodeBootstrap failed: %v", err)
+	}
+	if mesh.bootstrapRequest.BootstrapToken != "sam_dev_join-token" {
+		t.Fatalf("bootstrap token not sent (trimmed) to /enroll, got %q", mesh.bootstrapRequest.BootstrapToken)
+	}
+	if mesh.bootstrapRequest.Labels["region"] != "eu-west-1" {
+		t.Fatalf("Expected label region=eu-west-1 in bootstrap request, got %v", mesh.bootstrapRequest.Labels)
+	}
+	if mesh.registerRequest.PeerId != "" {
+		t.Fatal("bootstrap enrollment must not call /register")
+	}
+	if IsEnrolled(dir) != 1 {
+		t.Fatal("expected node to be enrolled after bootstrap enrollment")
+	}
+}
+
+func TestEnrollNodeBootstrapRequiresToken(t *testing.T) {
+	if err := EnrollNodeBootstrap(t.TempDir(), "http://127.0.0.1:1", "  ", true, `{}`); err == nil {
+		t.Fatal("expected an empty bootstrap token to be rejected before any network call")
 	}
 }
 

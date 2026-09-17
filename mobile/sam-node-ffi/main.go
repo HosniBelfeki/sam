@@ -79,6 +79,15 @@ func ReEnrollNode(dataDir *C.char, labels *C.char) *C.char {
 	return nil
 }
 
+//export EnrollNodeBootstrap
+func EnrollNodeBootstrap(dataDir *C.char, controlPlaneURL *C.char, bootstrapToken *C.char, allowLoopback C.char, labels *C.char) *C.char {
+	err := ffi.EnrollNodeBootstrap(C.GoString(dataDir), C.GoString(controlPlaneURL), C.GoString(bootstrapToken), allowLoopback != 0, C.GoString(labels))
+	if err != nil {
+		return C.CString(err.Error())
+	}
+	return nil
+}
+
 //export FetchControlPlaneInfoJSON
 func FetchControlPlaneInfoJSON(controlPlaneURL *C.char) *C.char {
 	goControlPlaneURL := C.GoString(controlPlaneURL)

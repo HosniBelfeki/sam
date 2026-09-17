@@ -16,6 +16,7 @@ dependencies:
   url_launcher: ^6.2.5
   crypto: ^3.0.3
   qr_flutter: ^4.1.0
+  mobile_scanner: ^7.4.2
   firebase_core: ^4.0.0
   firebase_ai: ^3.0.0
 

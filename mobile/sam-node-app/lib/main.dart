@@ -16,6 +16,8 @@ import 'package:url_launcher/url_launcher.dart';
 
 import 'sam_ffi.dart';
 import 'mcp_server.dart';
+import 'enroll_link.dart';
+import 'scan_page.dart';
 
 // Isolate.run lives in these top-level functions, not in State methods: a closure
 // there shares its context with sibling setState closures, so `this` and its
@@ -39,6 +41,14 @@ Future<String?> _isolatedEnroll(String dataDir, String controlPlaneText, String 
 Future<String?> _isolatedReEnroll(String dataDir, String labelsText) => Isolate.run(() {
   try {
     return SamNodeLib().reEnroll(dataDir, labelsText);
+  } catch (e) {
+    return e.toString();
+  }
+});
+
+Future<String?> _isolatedEnrollBootstrap(String dataDir, String server, String token, String labelsText) => Isolate.run(() {
+  try {
+    return SamNodeLib().enrollBootstrap(dataDir, server, token, true, labelsText);
   } catch (e) {
     return e.toString();
   }
@@ -83,6 +93,18 @@ class _NodeControlPageState extends State<NodeControlPage> {
   final _jwtController = TextEditingController();
   // Saved by the FFI at enrollment so Re-enroll can skip the browser.
   String _refreshToken = '';
+  // Bootstrap token typed or pasted by hand; a pasted sam://enroll link is
+  // accepted here too and fills the URL field.
+  final _joinTokenController = TextEditingController();
+  bool _manualEntry = false;
+  // A token-joined node cannot re-attest labels in place: /enroll re-mints
+  // from the labels already on record and there is no login session to
+  // refresh. Re-enroll is disabled for it; the marker dies with the data dir
+  // on unenroll.
+  static const _joinedWithTokenFile = 'joined-with-token';
+  bool _joinedWithToken = false;
+  // sam://enroll links delivered by MainActivity (stock camera app, browser).
+  static const _enrollLinkChannel = MethodChannel('dev.sammesh.connect/enroll_link');
   // Bearer token for the sidecar API on 127.0.0.1:5005. Android loopback is
   // shared by every installed app, so a fixed value would let any of them
   // act as this node. Generated once and kept in the app-private data dir
@@ -96,7 +118,7 @@ class _NodeControlPageState extends State<NodeControlPage> {
   static const _labelsFile = 'labels';
   final _labelsController = TextEditingController();
 
-  static const _exposeChannel = MethodChannel('com.example.sam_agent/mesh_expose');
+  static const _exposeChannel = MethodChannel('dev.sammesh.connect/mesh_expose');
 
   late SamNodeLib _samLib;
   bool?
@@ -135,7 +157,7 @@ class _NodeControlPageState extends State<NodeControlPage> {
   void initState() {
     super.initState();
     _samLib = SamNodeLib();
-    _checkEnrollment();
+    _checkEnrollment().then((_) => _listenForEnrollLinks());
     _embeddedMcpServer = SamDartMcpServer(
       isBatteryEnabled: () => _exposeBattery,
       isLocationEnabled: () => _exposeLocation,
@@ -145,8 +167,10 @@ class _NodeControlPageState extends State<NodeControlPage> {
   @override
   void dispose() {
     _pollingTimer?.cancel();
+    _enrollLinkChannel.setMethodCallHandler(null);
     _controlPlaneController.dispose();
     _jwtController.dispose();
+    _joinTokenController.dispose();
     _labelsController.dispose();
     _externalMcpUrlController.dispose();
     _externalMcpNameController.dispose();
@@ -167,8 +191,10 @@ class _NodeControlPageState extends State<NodeControlPage> {
     if (await labelsFile.exists()) {
       _labelsController.text = await labelsFile.readAsString();
     }
+    final joinedWithToken = await File('$dataDir/$_joinedWithTokenFile').exists();
     setState(() {
       _isEnrolled = enrolled;
+      _joinedWithToken = joinedWithToken;
       if (enrolled) {
         _status = 'Enrolled';
         // Try to get node ID if running (though might not be started yet)
@@ -730,6 +756,146 @@ class _NodeControlPageState extends State<NodeControlPage> {
     });
   }
 
+  // ---- Token / QR enrollment -------------------------------------------
+
+  // Links arrive two ways: the one the activity was launched with (asked for
+  // once, after the enrollment state is known) and later ones pushed while
+  // the app is open.
+  Future<void> _listenForEnrollLinks() async {
+    _enrollLinkChannel.setMethodCallHandler((call) async {
+      if (call.method == 'onLink' && call.arguments is String) {
+        await _handleEnrollLink(call.arguments as String);
+      }
+    });
+    try {
+      final initial = await _enrollLinkChannel.invokeMethod<String>('getInitialLink');
+      if (initial != null) await _handleEnrollLink(initial);
+    } on MissingPluginException {
+      // Not on Android (tests, desktop): links only come from the scanner.
+    } catch (e) {
+      debugPrint('DEBUG: getInitialLink failed: $e');
+    }
+  }
+
+  Future<void> _scanEnrollCode() async {
+    final link = await Navigator.of(context).push<EnrollLink>(
+      MaterialPageRoute(builder: (_) => const ScanEnrollCodePage()),
+    );
+    if (link != null) await _confirmAndEnroll(link);
+  }
+
+  Future<void> _handleEnrollLink(String raw) async {
+    final link = parseEnrollLink(raw);
+    if (link == null) {
+      setState(() => _status = 'Ignored link: not a sam://enroll code');
+      return;
+    }
+    if (_isEnrolled == true) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Already enrolled. Unenroll first to join another mesh.')));
+      return;
+    }
+    await _confirmAndEnroll(link);
+  }
+
+  // The link came from a camera or another app: show where it leads before
+  // spending the single-use token on it.
+  Future<void> _confirmAndEnroll(EnrollLink link) async {
+    if (!mounted) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Join this mesh?'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Control plane'),
+            SelectableText(link.server,
+                style: const TextStyle(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 12),
+            const Text('Enrollment token'),
+            Text(link.tokenHint,
+                style: const TextStyle(fontFamily: 'monospace')),
+            const SizedBox(height: 12),
+            const Text(
+              'Enrollment codes admit a limited number of devices for a '
+              'limited time. Labels from the Config tab are attested now.',
+              style: TextStyle(fontSize: 12, color: Colors.grey),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Join')),
+        ],
+      ),
+    );
+    if (ok == true) await _enrollWithToken(link.server, link.token);
+  }
+
+  // Manual entry: the token field takes either a bare token (with the URL
+  // field naming the control plane) or a whole sam://enroll link.
+  Future<void> _joinWithToken() async {
+    final typed = _joinTokenController.text.trim();
+    if (typed.isEmpty) {
+      setState(() => _status = 'Enter an enrollment token or a sam://enroll link');
+      return;
+    }
+    final link = parseEnrollLink(typed);
+    if (link != null) {
+      _controlPlaneController.text = link.server;
+      await _enrollWithToken(link.server, link.token);
+      return;
+    }
+    final server = _controlPlaneController.text.trim();
+    if (!isTrustedControlPlaneUrl(server)) {
+      setState(() => _status =
+          'Control plane URL must be https:// (plain http only for localhost)');
+      return;
+    }
+    await _enrollWithToken(server, typed);
+  }
+
+  Future<void> _enrollWithToken(String server, String token) async {
+    final labelsText = _labelsController.text.trim();
+    final labels = _labelsOrReport(labelsText, 'Enrollment failed');
+    if (labels == null) return;
+    setState(() {
+      _loggingIn = true;
+      _status = 'Enrolling with token at ${Uri.parse(server).host}...';
+    });
+    final appDir = await getApplicationDocumentsDirectory();
+    final dataDir = '${appDir.path}/sam_data';
+    final err = await _isolatedEnrollBootstrap(dataDir, server, token, jsonEncode(labels));
+    if (err == null) {
+      await _saveLabels(dataDir, labelsText);
+      try {
+        await File('$dataDir/$_joinedWithTokenFile').create(recursive: true);
+      } catch (e) {
+        debugPrint('DEBUG: Failed to save join marker: $e');
+      }
+      _joinTokenController.clear();
+    }
+    if (!mounted) return;
+    setState(() {
+      _loggingIn = false;
+      if (err != null) {
+        _status = 'Enrollment failed: $err';
+      } else {
+        _controlPlaneController.text = server;
+        _status = 'Enrollment successful!';
+        _isEnrolled = true;
+        _joinedWithToken = true;
+      }
+    });
+  }
+
   // Silent path first: the refresh token saved at enrollment buys a JWT.
   // Any failure (none saved, expired, revoked) falls back to the browser.
   Future<void> _reEnroll() async {
@@ -950,6 +1116,7 @@ class _NodeControlPageState extends State<NodeControlPage> {
         }
         setState(() {
           _isEnrolled = false;
+          _joinedWithToken = false;
           _status = 'Unenrolled';
           _nodeID = '';
         });
@@ -1223,7 +1390,9 @@ class _NodeControlPageState extends State<NodeControlPage> {
                   if (_isEnrolled == true) ...[
                     const SizedBox(height: 10),
                     ElevatedButton.icon(
-                      onPressed: _loggingIn || isRunning ? null : _reEnroll,
+                      onPressed: _loggingIn || isRunning || _joinedWithToken
+                          ? null
+                          : _reEnroll,
                       icon: _loggingIn
                           ? const SizedBox(
                               height: 20,
@@ -1232,6 +1401,14 @@ class _NodeControlPageState extends State<NodeControlPage> {
                           : const Icon(Icons.login),
                       label: const Text('Re-enroll to apply'),
                     ),
+                    if (_joinedWithToken)
+                      const Padding(
+                        padding: EdgeInsets.only(top: 6),
+                        child: Text(
+                          'Joined with a token. Unenroll and join again to change labels.',
+                          style: TextStyle(fontSize: 12, color: Colors.grey),
+                        ),
+                      ),
                   ],
                 ],
               ),
@@ -1311,7 +1488,11 @@ class _NodeControlPageState extends State<NodeControlPage> {
     );
   }
 
+  // Landing screen. The primary path is the QR code a control plane prints
+  // (sam-one's terminal, `sam-one token qr`); everything else sits behind
+  // "Enter details manually": a bootstrap token, or the OIDC logins.
   Widget _buildEnrollmentView() {
+    final busy = _loggingIn;
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16.0),
       child: Column(
@@ -1320,48 +1501,113 @@ class _NodeControlPageState extends State<NodeControlPage> {
           const Text('Welcome to SAM',
               style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
               textAlign: TextAlign.center),
-          const SizedBox(height: 20),
-          const Text('Please enroll your node to join the mesh.',
-              textAlign: TextAlign.center),
-          const SizedBox(height: 30),
-          TextField(
-            controller: _controlPlaneController,
-            // A pasted URL often carries a trailing space or newline.
-            inputFormatters: [FilteringTextInputFormatter.deny(RegExp(r'\s'))],
-            decoration: const InputDecoration(
-              labelText: 'Control plane URL',
-              border: OutlineInputBorder(),
-              hintText: 'https://bananas.sam-mesh.dev',
-            ),
+          const SizedBox(height: 12),
+          const Text(
+            'Join a mesh by scanning the enrollment code shown by its control plane.',
+            textAlign: TextAlign.center,
           ),
-          const SizedBox(height: 20),
-          ElevatedButton.icon(
-            onPressed: _loggingIn ? null : _loginAndEnroll,
-            icon: _loggingIn
+          const SizedBox(height: 24),
+          FilledButton.icon(
+            onPressed: busy ? null : _scanEnrollCode,
+            icon: busy
                 ? const SizedBox(
                     height: 20,
                     width: 20,
                     child: CircularProgressIndicator(strokeWidth: 2))
-                : const Icon(Icons.login),
-            label: const Text('Login & Enroll (Browser)'),
-            style: ElevatedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 16)),
+                : const Icon(Icons.qr_code_scanner),
+            label: const Text('Scan enrollment code'),
+            style: FilledButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 18)),
           ),
-          const SizedBox(height: 10),
-          ElevatedButton.icon(
-            onPressed: _loggingIn ? null : _startDeviceLogin,
-            icon: const Icon(Icons.tv),
-            label: const Text('Device Login (TV / Other Device)'),
-            style: ElevatedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 16)),
-          ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 8),
           const Text(
-            'Set labels on the Config tab before enrolling.',
+            'Opening a sam://enroll link from another app works too.',
             textAlign: TextAlign.center,
             style: TextStyle(fontSize: 12, color: Colors.grey),
           ),
-          const SizedBox(height: 30),
+          const SizedBox(height: 16),
+          TextButton.icon(
+            onPressed: busy
+                ? null
+                : () => setState(() => _manualEntry = !_manualEntry),
+            icon: Icon(_manualEntry ? Icons.expand_less : Icons.expand_more),
+            label: Text(_manualEntry
+                ? 'Hide manual entry'
+                : 'Enter details manually'),
+          ),
+          if (_manualEntry) ...[
+            const SizedBox(height: 8),
+            TextField(
+              controller: _controlPlaneController,
+              enabled: !busy,
+              // A pasted URL often carries a trailing space or newline.
+              inputFormatters: [FilteringTextInputFormatter.deny(RegExp(r'\s'))],
+              decoration: const InputDecoration(
+                labelText: 'Control plane URL',
+                border: OutlineInputBorder(),
+                hintText: 'https://bananas.sam-mesh.dev',
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _joinTokenController,
+              enabled: !busy,
+              inputFormatters: [FilteringTextInputFormatter.deny(RegExp(r'\s'))],
+              onChanged: (text) {
+                // A pasted sam://enroll link names the control plane itself.
+                final link = parseEnrollLink(text);
+                if (link != null && _controlPlaneController.text != link.server) {
+                  setState(() => _controlPlaneController.text = link.server);
+                }
+              },
+              decoration: const InputDecoration(
+                labelText: 'Enrollment token',
+                border: OutlineInputBorder(),
+                hintText: 'sam_dev_… or a sam://enroll link',
+              ),
+            ),
+            const SizedBox(height: 12),
+            ElevatedButton.icon(
+              onPressed: busy ? null : _joinWithToken,
+              icon: const Icon(Icons.vpn_key),
+              label: const Text('Join with token'),
+              style: ElevatedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 16)),
+            ),
+            const SizedBox(height: 20),
+            const Row(children: [
+              Expanded(child: Divider()),
+              Padding(
+                padding: EdgeInsets.symmetric(horizontal: 12),
+                child: Text('or sign in',
+                    style: TextStyle(fontSize: 12, color: Colors.grey)),
+              ),
+              Expanded(child: Divider()),
+            ]),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: busy ? null : _loginAndEnroll,
+              icon: const Icon(Icons.login),
+              label: const Text('Login & Enroll (Browser)'),
+              style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 16)),
+            ),
+            const SizedBox(height: 10),
+            OutlinedButton.icon(
+              onPressed: busy ? null : _startDeviceLogin,
+              icon: const Icon(Icons.tv),
+              label: const Text('Device Login (TV / Other Device)'),
+              style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 16)),
+            ),
+          ],
+          const SizedBox(height: 16),
+          const Text(
+            'Labels are attested at enrollment; set them on the Config tab first.',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 12, color: Colors.grey),
+          ),
+          const SizedBox(height: 24),
           if (_status.isNotEmpty &&
               _status != 'Enrolled' &&
               _status != 'Unenrolled')
