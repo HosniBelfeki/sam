@@ -23,8 +23,21 @@ import (
 	"github.com/google/sam/api"
 	"github.com/google/sam/internal/identity"
 	lru "github.com/hashicorp/golang-lru/v2"
+	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 )
+
+// The gate guards calls that ride relayed connections (egress proxy, MCP
+// sessions). If its own auth stream could not, every relay-only peer would be
+// refused as "no addresses" before the call it was checking ever ran.
+func TestLabelGateDialsOverLimitedConnections(t *testing.T) {
+	if allowed, _ := network.GetAllowLimitedConn(context.Background()); allowed {
+		t.Fatal("a plain context must not allow limited connections; the test would prove nothing")
+	}
+	if allowed, _ := network.GetAllowLimitedConn(labelGateDialContext(context.Background())); !allowed {
+		t.Fatal("the label gate's dial context must allow a relayed (limited) connection")
+	}
+}
 
 func TestCheckPeerLabels(t *testing.T) {
 	cpPub, cpPriv, err := ed25519.GenerateKey(nil)

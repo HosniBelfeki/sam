@@ -24,6 +24,7 @@ import (
 
 	"github.com/google/sam/api"
 	"github.com/google/sam/internal/identity"
+	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-msgio"
 	"google.golang.org/protobuf/proto"
@@ -240,6 +241,13 @@ type peerBiscuitObservation struct {
 	ConnectionPeer peer.ID
 }
 
+// labelGateDialContext allows the auth stream to open over a relayed
+// (limited) connection. Without it libp2p insists on a direct dial, which
+// peers behind a relay have no addresses for.
+func labelGateDialContext(ctx context.Context) context.Context {
+	return network.WithAllowLimitedConn(ctx, "label-gate")
+}
+
 // fetchPeerBiscuitEvidence is the uncached form used by the local evidence API.
 // It preserves the PeerID authenticated by the libp2p stream separately from
 // the requested target so callers can fail closed on any binding mismatch.
@@ -249,7 +257,11 @@ func (n *SamNode) fetchPeerBiscuitEvidence(ctx context.Context, peerID peer.ID) 
 		return peerBiscuitObservation{}, fmt.Errorf("missing node identity")
 	}
 
-	dialCtx, cancel := context.WithTimeout(ctx, labelGateDialTimeout)
+	// Reach the peer the way the call this gate guards would: the egress
+	// proxy resolves addresses lazily and rides relayed connections, so the
+	// check runs before either has happened and must do both itself.
+	n.preparePeerAddrs(ctx, peerID)
+	dialCtx, cancel := context.WithTimeout(labelGateDialContext(ctx), labelGateDialTimeout)
 	defer cancel()
 	s, err := n.Host.NewStream(dialCtx, peerID, api.AuthProtocolID)
 	if err != nil {
