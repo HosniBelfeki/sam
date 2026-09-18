@@ -143,6 +143,9 @@ router:
   # Overrides the announced multiaddrs; derived from hostPort when left empty.
   externalAddrs: []
   allowLoopback: false
+  # Plain HTTP port for /metrics, /healthz and /readyz. Unauthenticated, so it
+  # is only ever a containerPort, never a hostPort or Service.
+  metricsPort: 9090
   # PVC for /data/router.key, so the libp2p peer ID survives rescheduling.
   storageSize: 1Gi
   # PVC StorageClass; cluster default when null.
@@ -213,3 +216,18 @@ bootstrap:
   # labels in its sam-node.yaml. Empty means nodes cannot enroll with any label
   # (fail closed).
   nodeLabels: []
+
+# Scraping of the control-plane and router /metrics endpoints. Both are
+# cluster-internal and unauthenticated; enable the resource for whichever
+# collector the cluster runs, since each is a CRD that may not be installed.
+monitoring:
+  interval: 30s
+  # Google Managed Prometheus (monitoring.googleapis.com/v1 PodMonitoring),
+  # present by default on GKE.
+  podMonitoring:
+    enabled: false
+  # prometheus-operator (monitoring.coreos.com/v1 PodMonitor).
+  podMonitor:
+    enabled: false
+    # Extra labels, e.g. the release selector a Prometheus instance matches on.
+    labels: {}

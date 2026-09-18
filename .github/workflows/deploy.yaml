@@ -234,6 +234,7 @@ jobs:
           kubectl create namespace dex --dry-run=client -o yaml | kubectl apply -f -
           kubectl create namespace ${NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -
           kubectl create namespace ${CANARY_NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -
+          envsubst '${ENV_NAME}' < .github/k8s/sam-canary-sa-template.yaml | kubectl apply -f -
 
       - name: Provision Dex Secrets
         env:
@@ -374,6 +375,12 @@ jobs:
           envsubst '${ENV_NAME} ${NAMESPACE} ${GCP_PROJECT_ID} ${CLUSTER_NAME} ${CLUSTER_REGION} ${IMAGE_TAG}' < .github/k8s/sam-router-template.yaml | kubectl apply -f -
           envsubst '${ENV_NAME} ${NAMESPACE} ${GCP_PROJECT_ID} ${CLUSTER_NAME} ${CLUSTER_REGION} ${IMAGE_TAG}' < .github/k8s/sam-console-template.yaml | kubectl apply -f -
           envsubst '${ENV_NAME} ${NAMESPACE} ${GCP_PROJECT_ID}' < .github/k8s/dns-sync-cronjob-template.yaml | kubectl apply -f -
+          # Managed Prometheus ships with GKE; a cluster without it should not block the mesh rollout.
+          if kubectl get crd podmonitorings.monitoring.googleapis.com >/dev/null 2>&1; then
+            envsubst '${ENV_NAME} ${NAMESPACE}' < .github/k8s/sam-monitoring-template.yaml | kubectl apply -f -
+          else
+            echo "::warning::PodMonitoring CRD not found; managed collection is off on this cluster, metrics will not be scraped"
+          fi
           
           kubectl rollout status deployment/sam-control-plane-${ENV_NAME} -n ${NAMESPACE} --timeout=120s || {
             echo "Control Plane Deployment failed!"
@@ -529,48 +536,6 @@ jobs:
             --external-addr=/ip4/${EXTERNAL_IP}/tcp/4501 \
             --external-addr=/ip4/${EXTERNAL_IP}/udp/4501/quic-v1'
 
-
-      - name: Deploy COP Canary
-        env:
-          VAR_ENV_NAME: ${{ vars.ENV_NAME }}
-          VAR_IMAGE_TAG: ${{ env.IMAGE_TAG }}
-        run: |
-          print_rollout_diagnostics() {
-            local namespace="$1"
-            local deployment="$2"
-            local selector="$3"
-
-            echo "Collecting diagnostics for deployment/${deployment} in namespace ${namespace}..."
-
-            kubectl describe deployment/${deployment} -n ${namespace} || true
-            kubectl get pods -n ${namespace} -l "${selector}" -o wide || true
-            kubectl describe pods -n ${namespace} -l "${selector}" || true
-            kubectl get events -n ${namespace} --sort-by=.lastTimestamp || true
-
-            for pod in $(kubectl get pods -n ${namespace} -l "${selector}" -o name 2>/dev/null); do
-              echo "==== Describe ${pod} ===="
-              kubectl describe -n ${namespace} "${pod}" || true
-
-              for container in $(kubectl get -n ${namespace} "${pod}" -o jsonpath='{.spec.containers[*].name}' 2>/dev/null); do
-                echo "==== Logs for ${pod} container ${container} ===="
-                kubectl logs -n ${namespace} "${pod#pod/}" -c "${container}" --tail=-1 || true
-              done
-            done
-          }
-
-          export ENV_NAME="${VAR_ENV_NAME}"
-          export CANARY_NAMESPACE="sam-canary-${ENV_NAME}"
-          export NAMESPACE="sam-${ENV_NAME}"
-          export IMAGE_TAG="${VAR_IMAGE_TAG}"
-          export BANANA_BOT_SCRIPT=$(cat site/content/docs/snippets/banana_bot_playground.py | sed 's/^/    /')
-
-          envsubst '${ENV_NAME} ${NAMESPACE} ${IMAGE_TAG} ${BANANA_BOT_SCRIPT}' < .github/k8s/sam-node-cop-template.yaml | kubectl apply -f -
-          kubectl rollout status deployment/cop-canary-${ENV_NAME} -n ${CANARY_NAMESPACE} --timeout=120s || {
-            echo "Cop Canary Deployment failed!"
-            print_rollout_diagnostics "${CANARY_NAMESPACE}" "cop-canary-${ENV_NAME}" "app=cop-canary-${ENV_NAME}"
-            exit 1
-          }
-
       - name: Deploy SAM Box Canary
         env:
           VAR_ENV_NAME: ${{ vars.ENV_NAME }}
@@ -608,50 +573,6 @@ jobs:
           kubectl rollout status deployment/box-canary-${ENV_NAME} -n ${CANARY_NAMESPACE} --timeout=120s || {
             echo "sam-box Canary Deployment failed!"
             print_rollout_diagnostics "${CANARY_NAMESPACE}" "box-canary-${ENV_NAME}" "app=box-canary-${ENV_NAME}"
-            exit 1
-          }
-
-      - name: Deploy SAM Node Canary
-        env:
-          VAR_ENV_NAME: ${{ vars.ENV_NAME }}
-          VAR_IMAGE_TAG: ${{ env.IMAGE_TAG }}
-        run: |
-          print_rollout_diagnostics() {
-            local namespace="$1"
-            local deployment="$2"
-            local selector="$3"
-
-            echo "Collecting diagnostics for deployment/${deployment} in namespace ${namespace}..."
-
-            kubectl describe deployment/${deployment} -n ${namespace} || true
-            kubectl get pods -n ${namespace} -l "${selector}" -o wide || true
-            kubectl describe pods -n ${namespace} -l "${selector}" || true
-            kubectl get events -n ${namespace} --sort-by=.lastTimestamp || true
-
-            for pod in $(kubectl get pods -n ${namespace} -l "${selector}" -o name 2>/dev/null); do
-              echo "==== Describe ${pod} ===="
-              kubectl describe -n ${namespace} "${pod}" || true
-
-              for container in $(kubectl get -n ${namespace} "${pod}" -o jsonpath='{.spec.containers[*].name}' 2>/dev/null); do
-                echo "==== Logs for ${pod} container ${container} ===="
-                kubectl logs -n ${namespace} "${pod#pod/}" -c "${container}" --tail=-1 || true
-              done
-            done
-          }
-
-          export ENV_NAME="${VAR_ENV_NAME}"
-          export CANARY_NAMESPACE="sam-canary-${ENV_NAME}"
-          export NAMESPACE="sam-${ENV_NAME}"
-          export IMAGE_TAG="${VAR_IMAGE_TAG}"
-
-          envsubst '${ENV_NAME} ${NAMESPACE} ${IMAGE_TAG}' < .github/k8s/sam-node-template.yaml | kubectl apply -f -
-          kubectl rollout status deployment/sam-canary-${ENV_NAME} -n ${CANARY_NAMESPACE} --timeout=120s || {
-            echo "Canary Deployment failed!"
-            print_rollout_diagnostics "${CANARY_NAMESPACE}" "sam-canary-${ENV_NAME}" "app=sam-canary-${ENV_NAME}"
-
-            echo "Rolling back Canary deployment..."
-            kubectl rollout undo deployment/sam-canary-${ENV_NAME} -n ${CANARY_NAMESPACE}
-            kubectl rollout status deployment/sam-canary-${ENV_NAME} -n ${CANARY_NAMESPACE} || true
             exit 1
           }
 
@@ -864,3 +785,50 @@ jobs:
             kubectl rollout status deployment/openrouter-canary-${ENV_NAME} -n ${CANARY_NAMESPACE} || true
             exit 1
           }
+
+      # A fresh node enrolls, reaches a router and calls the everything
+      # canary's MCP server through the mesh: what a new user does. The
+      # CronJob keeps doing it every 15 minutes; running it once here, after
+      # every canary is up, makes the rollout prove it before the deploy is
+      # called good.
+      - name: Deploy and run the cold-path probe
+        env:
+          VAR_ENV_NAME: ${{ vars.ENV_NAME }}
+          VAR_IMAGE_TAG: ${{ env.IMAGE_TAG }}
+        run: |
+          export ENV_NAME="${VAR_ENV_NAME}"
+          export CANARY_NAMESPACE="sam-canary-${ENV_NAME}"
+          export NAMESPACE="sam-${ENV_NAME}"
+          export IMAGE_TAG="${VAR_IMAGE_TAG}"
+          JOB="sam-probe-rollout-${ENV_NAME}"
+
+          envsubst '${ENV_NAME} ${NAMESPACE} ${IMAGE_TAG}' < .github/k8s/sam-probe-cronjob-template.yaml | kubectl apply -f -
+
+          kubectl delete job "${JOB}" -n "${CANARY_NAMESPACE}" --ignore-not-found
+          kubectl create job --from="cronjob/sam-probe-${ENV_NAME}" "${JOB}" -n "${CANARY_NAMESPACE}"
+
+          # `kubectl wait` can only wait for one condition; a failed Job would
+          # otherwise sit out the whole timeout.
+          for _ in $(seq 1 60); do
+            status=$(kubectl get job "${JOB}" -n "${CANARY_NAMESPACE}" -o jsonpath='{range .status.conditions[*]}{.type}={.status}{"\n"}{end}')
+            case "${status}" in
+              *Complete=True*) break ;;
+              *Failed=True*) break ;;
+            esac
+            sleep 5
+          done
+
+          echo "==== probe output ===="
+          kubectl logs "job/${JOB}" -n "${CANARY_NAMESPACE}" -c probe --tail=-1 || true
+
+          case "${status:-}" in
+            *Complete=True*) echo "Cold-path probe passed." ;;
+            *)
+              echo "Cold-path probe did not pass: a fresh node could not enroll, reach a router, or call a mesh service."
+              echo "==== sam-node sidecar log ===="
+              kubectl logs "job/${JOB}" -n "${CANARY_NAMESPACE}" -c sam-node --tail=200 || true
+              kubectl describe job "${JOB}" -n "${CANARY_NAMESPACE}" || true
+              exit 1
+              ;;
+          esac
+

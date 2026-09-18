@@ -64,6 +64,7 @@ import (
 	"github.com/libp2p/go-msgio"
 	"github.com/multiformats/go-multiaddr"
 	madns "github.com/multiformats/go-multiaddr-dns"
+	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -178,6 +179,10 @@ type SamNode struct {
 	BiscuitTimeout   time.Duration
 	cachedIdentity   atomic.Value
 	logger           *golog.ZapEventLogger
+
+	// metricsRegistry holds this node's state collector; see metricsHandler.
+	metricsOnce     sync.Once
+	metricsRegistry *prometheus.Registry
 }
 
 // UpdateRelays updates the current relays used by AutoRelay.

@@ -36,8 +36,13 @@ type Options struct {
 	BiscuitTimeout        time.Duration
 	BiscuitTTL            time.Duration // Lifespan minted into every issued Biscuit's expiration() fact; defaults to api.BiscuitTokenTTL
 	OIDCSessionTTL        time.Duration // How long an OIDC enrollment stays refreshable before the identity must re-authenticate interactively; defaults to api.OIDCSessionTTL
-	AdminToken            string        // Optional: administrative bearer token for protecting policy and enrollment queue REST APIs
-	AutoApproveEnrollment bool          // If true, valid bootstrap token enrollment requests are immediately approved without administrative manual gate
+	// NodeRetention is how long an enrolled node's row is kept after its
+	// session expired before being deleted; 0 keeps rows forever. Every
+	// pod restart without a persistent data dir enrolls a fresh identity,
+	// so without this the nodes table only ever grows.
+	NodeRetention         time.Duration
+	AdminToken            string // Optional: administrative bearer token for protecting policy and enrollment queue REST APIs
+	AutoApproveEnrollment bool   // If true, valid bootstrap token enrollment requests are immediately approved without administrative manual gate
 }
 
 // Default sets default values for control plane options.

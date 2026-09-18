@@ -36,7 +36,6 @@ import (
 	libp2phttp "github.com/libp2p/go-libp2p-http"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 // StartSidecarServer serves the node's local API on a TCP address, on a Unix
@@ -51,7 +50,7 @@ func StartSidecarServer(node *SamNode, addr, socketPath, token, certFile, keyFil
 	// Gated like the rest: the labels carry peer IDs and per-peer request counts,
 	// and this mux is reachable by any local process over TCP. Socket callers are
 	// unaffected, which is how every scrape in this repo reads it.
-	mux.Handle("/metrics", withAuth(token, true, promhttp.Handler()))
+	mux.Handle("/metrics", withAuth(token, true, node.metricsHandler()))
 
 	// Protected endpoints. allowAuthorizationFallback=true is safe here: none of
 	// these ever forward the inbound Authorization header to another service.

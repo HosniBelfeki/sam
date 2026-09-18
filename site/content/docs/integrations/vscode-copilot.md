@@ -162,8 +162,6 @@ Calls `discover_remote_services` with `{"type":"mcp"}`:
 
 ```json
 [
-  {"peer_id": "12D3KooWQ1hk…veSLS", "srv_name": "dummy-http",
-   "srv_description": "Canary HTTP tool (k8s agnhost)"},
   {"peer_id": "12D3KooWFQrX…9Uwe1V", "srv_name": "everything",
    "srv_description": "MCP everything test server (tools, resources, prompts)"},
   {"peer_id": "12D3KooWAjWy…RcZcs", "srv_name": "everything",
@@ -171,10 +169,10 @@ Calls `discover_remote_services` with `{"type":"mcp"}`:
 ]
 ```
 
-Note `everything` appearing twice under different peers, and `dummy-http` three
-times. Service names are not unique across the mesh and were never meant to be —
-the `peer_id` is the identity. Any step that remembers "the everything service"
-without remembering which peer will eventually talk to the wrong one.
+Note `everything` appearing twice under different peers. Service names are
+not unique across the mesh and were never meant to be — the `peer_id` is the
+identity. Any step that remembers "the everything service" without remembering
+which peer will eventually talk to the wrong one.
 
 ### Find tools, and read the failures
 
@@ -185,7 +183,7 @@ failures in one array:
 
 ```json
 [
-  {"peer_id": "12D3KooWQ1hk…veSLS", "tool_name": "mcp://dummy-http",
+  {"peer_id": "12D3KooWFQrX…9Uwe1V", "tool_name": "mcp://everything",
    "error": "failed to connect: failed to connect client: calling \"initialize\": EOF"},
   {"peer_id": "12D3KooWAjWy…RcZcs", "tool_name": "mcp://everything/get-sum",
    "description": "Returns the sum of two numbers"},
@@ -194,7 +192,7 @@ failures in one array:
 ]
 ```
 
-Discovery is best-effort per peer. Three peers advertising `dummy-http` were
+Discovery is best-effort per peer. One of the two `everything` peers was
 reachable enough to be listed but failed at `initialize`, and that is reported
 as an `error` field on the entry rather than failing the whole call. A partly
 broken mesh returns a partly populated array, so it is worth checking whether

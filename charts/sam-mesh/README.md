@@ -117,3 +117,26 @@ gateway:
 There is no bundled Dex. Point `controlPlane.oidcIssuer` at your identity
 provider and register `https://<control-plane-hostname><consolePath>/auth/callback` as
 a redirect URI for the OIDC client the control plane reports.
+
+## Metrics (`monitoring.*`)
+
+The control plane serves Prometheus metrics on its `http` port and the router
+on a dedicated `metrics` containerPort (`router.metricsPort`, default 9090),
+which also carries its `/healthz` and `/readyz` probes. Neither endpoint is
+authenticated, so the router port is deliberately never a hostPort or a
+Service.
+
+Scraping is off by default because both supported resources are CRDs:
+
+- `monitoring.podMonitoring.enabled: true` renders a
+  `monitoring.googleapis.com/v1` `PodMonitoring` per component for Google
+  Managed Prometheus, which GKE runs out of the box.
+- `monitoring.podMonitor.enabled: true` renders a `monitoring.coreos.com/v1`
+  `PodMonitor` per component for prometheus-operator; use
+  `monitoring.podMonitor.labels` for the selector your Prometheus matches on.
+
+Mesh size and state come from the control plane
+(`sam_control_plane_mesh_connected_peers`, `sam_control_plane_routers_active`,
+`sam_control_plane_enrolled_nodes{role,state}`); the router adds its live view
+(`sam_router_authenticated_peers`, `sam_router_auth_handshakes_total{result}`)
+alongside libp2p's own relay and connection metrics.

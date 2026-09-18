@@ -287,6 +287,14 @@ type Store interface {
 	// ListNodes retrieves all enrolled nodes.
 	ListNodes(ctx context.Context) ([]EnrolledNode, error)
 
+	// DeleteExpiredNodes removes enrolled nodes whose session expired before
+	// the given time and that are not banned, returning how many went. A
+	// lapsed session already refuses every refresh, so the row only records
+	// that the node once existed; a ban, by contrast, is the row, and must
+	// outlive the session it was placed on. Nodes with no session bound
+	// (zero ExpiresAt) are never removed.
+	DeleteExpiredNodes(ctx context.Context, before time.Time) (int64, error)
+
 	// ListBootstrapTokens retrieves all bootstrap tokens.
 	ListBootstrapTokens(ctx context.Context) ([]BootstrapToken, error)
 

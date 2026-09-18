@@ -55,6 +55,10 @@ spec:
           hostPort: 4501
           protocol: UDP
           name: p2p-udp
+        # Cluster-internal only: no hostPort, and nothing on it is authenticated.
+        - containerPort: 9090
+          protocol: TCP
+          name: metrics
         args:
         - "--control-plane=http://sam-control-plane-${ENV_NAME}.${NAMESPACE}.svc.cluster.local:8080"
         - "--insecure-control-plane"
@@ -63,6 +67,25 @@ spec:
         - "--external-addr=/dnsaddr/bootstrap.${ENV_NAME}.sam-mesh.dev"
         - "--jwt-path=/var/run/secrets/tokens/sam-token"
         - "--keys-path=/data/router.key"
+        - "--metrics-addr=0.0.0.0:9090"
+        # /healthz answers as soon as the process is up; /readyz once the
+        # router has enrolled and its libp2p host is online.
+        startupProbe:
+          httpGet:
+            path: /healthz
+            port: metrics
+          periodSeconds: 5
+          failureThreshold: 24
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: metrics
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: metrics
+          periodSeconds: 20
         resources:
           requests:
             cpu: 100m

@@ -28,6 +28,9 @@ The Control Plane is responsible for bridging user identities from trusted OIDC 
 | `--key-rotation-interval` | *None* | `24h` | Key rotation interval (e.g. `24h`). `0s` disables rotation. |
 | `--key-grace-period` | *None* | `1h` | How long a rotated-out signing key stays accepted. Once it is retired, Biscuits it signed can no longer be verified or refreshed; see [Signing-Key Retirement and Recovery](#signing-key-retirement-and-recovery). |
 | `--lease-duration` | *None* | `15m` | Router lease registration TTL. |
+| `--node-retention` | *None* | `720h` (30 days) | How long an enrolled node's record is kept after its session expired before it is deleted. Every restart without a persistent data directory enrolls a fresh identity, so without this the node table only grows. Banned nodes are always kept. `0s` keeps every record forever. |
+
+The Control Plane serves Prometheus metrics on `/metrics` alongside the API: mesh size (`sam_control_plane_mesh_connected_peers`, `sam_control_plane_routers_active`, `sam_control_plane_enrolled_nodes{role,state}`), per-route request counts and latencies, and the Go runtime.
 
 ---
 
@@ -49,6 +52,7 @@ The Router is a dedicated GossipSub helper that maintains stable network address
 | `--keys-sync-interval` | `5m` | Key synchronization polling interval. `GET /keys` returns the valid key set signed by every key in it; the router (and nodes, at start-up) accept the set only if one of those signatures verifies under a key they already trust, so the first key always comes from enrollment and a rotation is learned from the retiring key. |
 | `--lease-renew-interval` | `300s` | Lease renewal registration interval. |
 | `--allow-loopback` | `false` | Allow loopback and link-local addresses for discovery (development only). |
+| `--metrics-addr` | *None* | Serve Prometheus `/metrics`, `/healthz` and `/readyz` on this plain HTTP address (e.g. `0.0.0.0:9090`). Off by default: nothing on it is authenticated, so keep it off the libp2p ports and inside the cluster. `/readyz` turns `200` once the router is enrolled and its libp2p host is online. The same flag exists on `sam-node run`. |
 
 ---
 

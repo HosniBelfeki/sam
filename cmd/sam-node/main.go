@@ -62,6 +62,7 @@ var (
 	clientSecretFlag          string
 	controlPlanePublicKeyFlag string
 	bindAddrFlag              string
+	metricsAddrFlag           string
 	socketPathFlag            string
 	meshFlag                  string
 	discoveryIntervalFlag     string
@@ -644,6 +645,14 @@ func main() {
 				}
 			}()
 
+			if metricsAddrFlag != "" {
+				metricsSrv, err := node.StartMetricsServer(meshNode, metricsAddrFlag)
+				if err != nil {
+					logger.Fatalf("Failed to start metrics server: %v", err)
+				}
+				defer func() { _ = metricsSrv.Close() }()
+			}
+
 			fmt.Printf("SAM Node Online.\nPeerID: %s\nListening on: %v\n", meshNode.Host.ID(), meshNode.Host.Addrs())
 
 			// Block forever
@@ -836,6 +845,7 @@ func main() {
 	runCmd.Flags().StringVar(&controlPlanePublicKeyFlag, "control-plane-public-key", "", "Control plane public key (32-byte Hex)")
 	runCmd.Flags().StringVar(&bindAddrFlag, "bind-addr", "127.0.0.1:8080", "Local TCP address for the HTTP server (MCP and Sidecar API); pass an empty value to serve only on the Unix socket")
 	runCmd.Flags().StringVar(&socketPathFlag, "socket-path", "", "Unix socket serving the same API, where the socket's owner-only permissions replace the API token (defaults to <data-dir>/"+node.DefaultSocketName+"; pass an empty value to disable)")
+	runCmd.Flags().StringVar(&metricsAddrFlag, "metrics-addr", "", "Serve Prometheus /metrics, /healthz and /readyz on this address without authentication (e.g. 0.0.0.0:9090), for scrapers and probes that hold no API token; off by default")
 	runCmd.Flags().StringVar(&meshFlag, "mesh", node.DefaultMeshName, "Mesh federation name")
 	runCmd.Flags().StringVar(&discoveryIntervalFlag, "discovery-interval", node.DefaultDiscoveryInterval, "Polling interval for DHT discovery")
 	runCmd.Flags().DurationVar(&monitorBootstrapFlag, "monitor-bootstrap", 2*time.Minute, "Initial wait before monitoring router connection")

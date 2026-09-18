@@ -46,9 +46,37 @@ spec:
             - "--jwt-path=/var/run/secrets/tokens/sam-token"
             - "--api-token-path=/var/run/secrets/sam/api-token"
             - "--bind-addr={{ .Values.bindAddr }}"
+            {{- if .Values.metricsPort }}
+            - "--metrics-addr=0.0.0.0:{{ .Values.metricsPort }}"
+            {{- end }}
             {{- range .Values.extraArgs }}
             - {{ . | quote }}
             {{- end }}
+          {{- if .Values.metricsPort }}
+          ports:
+            # Cluster-internal and unauthenticated; the API token is never needed here.
+            - containerPort: {{ .Values.metricsPort }}
+              name: metrics
+              protocol: TCP
+          # /healthz answers as soon as the process is up; /readyz once the node
+          # holds an authenticated connection to a router.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+            periodSeconds: 5
+            failureThreshold: 24
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: metrics
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+            periodSeconds: 20
+          {{- end }}
           {{- with .Values.resources }}
           resources:
             {{- toYaml . | nindent 12 }}

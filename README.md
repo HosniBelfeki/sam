@@ -40,6 +40,8 @@ SAM provides the open protocols, cryptographic building blocks, and software to 
 > **About the Public Developer Testnets:**
 > The public endpoints (`bananas.sam-mesh.dev` and `hub.sam-mesh.dev`) are free testbeds created using community resources solely for developer testing, continuous integration, and rapid experimentation. They provide **no guarantees, no uptime commitments, zero SLA, and no sovereign guarantees**. Running on a shared community testnet delegates identity management to the testbed maintainers; true sovereignty requires deploying a dedicated control plane with customer-held keys.
 >
+> [![Testnet Health](https://github.com/google/sam/actions/workflows/testnet-health.yaml/badge.svg)](https://github.com/google/sam/actions/workflows/testnet-health.yaml) Every half hour a fresh node's view of each testnet is checked (enrollment surface, routers, canaries, and a cold-path probe that joins and calls a tool); a red badge means one of them is unhealthy and an issue labelled `testnet-health` says which check failed.
+>
 > 📖 **Deep Dive:** Read our full **[Digital & Data Sovereignty Architecture](site/content/docs/sovereignty.md)** covering the 5 pillars, fail-closed label gates, uncooperative sandbox confinement, and regulatory alignment (GDPR Chapter V, EU Cloud Sovereignty Framework SEAL-3, EU Data Act).
 
 ---

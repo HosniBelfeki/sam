@@ -30,6 +30,7 @@ spec:
     metadata:
       labels:
         app: everything-canary-${ENV_NAME}
+        sam-canary: "true"
     spec:
       serviceAccountName: sam-node-sa
       containers:
@@ -58,8 +59,11 @@ spec:
           - "--insecure-control-plane"
           - "--jwt-path=/var/run/secrets/tokens/sam-token"
           - "--bind-addr=127.0.0.1:8080"
+          - "--metrics-addr=0.0.0.0:9090"
         ports:
         - containerPort: 8080
+        - containerPort: 9090
+          name: metrics
         resources:
           requests:
             cpu: 50m

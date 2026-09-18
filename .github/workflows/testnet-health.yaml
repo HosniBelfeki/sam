@@ -1,0 +1,181 @@
+name: Testnet Health
+
+# Looks at each public testnet every half hour and says whether a new user
+# could join it right now. deploy.yaml only knows the moment of a rollout;
+# this is what watches in between. A red badge on the README and an open
+# "Testnet <env> is unhealthy" issue are the signals; the issue closes itself
+# on the next green run.
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: testnet-health
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: ${{ matrix.environment }}
+    runs-on: ubuntu-latest
+    # The same GitHub Environments deploy.yaml uses, for the same cluster
+    # credentials and per-testnet variables.
+    environment: ${{ matrix.environment }}
+    strategy:
+      fail-fast: false
+      matrix:
+        environment: [hub, bananas]
+    permissions:
+      contents: read
+      id-token: write
+      issues: write
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Google Auth
+        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER_NAME }}
+          service_account: ${{ vars.SERVICE_ACCOUNT_EMAIL }}
+
+      - name: Set up GKE credentials
+        uses: google-github-actions/get-gke-credentials@3da1e46a907576cefaa90c484278bb5b259dd395 # v3.0.0
+        with:
+          cluster_name: ${{ vars.CLUSTER_NAME }}
+          location: ${{ vars.CLUSTER_REGION }}
+
+      - name: Check the testnet
+        id: check
+        # Every check runs even after one fails, so the report is complete;
+        # the report step turns the outcome into the issue and the exit code.
+        continue-on-error: true
+        env:
+          ENV_NAME: ${{ vars.ENV_NAME }}
+        run: |
+          set -uo pipefail
+          NS="sam-${ENV_NAME}"
+          CNS="sam-canary-${ENV_NAME}"
+          HOST="${ENV_NAME}.sam-mesh.dev"
+          rows=()
+          fails=0
+          ok()  { rows+=("| :white_check_mark: | $1 | $2 |"); }
+          bad() { rows+=("| :x: | $1 | $2 |"); fails=$((fails + 1)); }
+
+          # 1. The public enrollment surface, as a new node sees it. /info is
+          #    protobuf; router peer ids are ASCII inside it.
+          code=$(curl -s -m 20 -o info.bin -w '%{http_code}' "https://${HOST}/info" || echo 000)
+          routers_public=$(grep -aoE '/p2p/12D3Koo[A-Za-z0-9]+' info.bin 2>/dev/null | sort -u | wc -l)
+          if [[ "${code}" == "200" && "${routers_public}" -ge 1 ]]; then
+            ok "Public \`/info\`" "HTTP 200, ${routers_public} router(s) advertised"
+          else
+            bad "Public \`/info\`" "HTTP ${code}, ${routers_public} router(s) advertised"
+          fi
+
+          # 2. What the control plane knows, read through the API server so no
+          #    port is opened to the internet for it.
+          if metrics=$(kubectl get --raw "/api/v1/namespaces/${NS}/services/sam-control-plane-${ENV_NAME}:8080/proxy/metrics" 2>&1); then
+            routers_active=$(awk '$1=="sam_control_plane_routers_active"{print int($2)}' <<<"${metrics}")
+            peers=$(awk '$1=="sam_control_plane_mesh_connected_peers"{print int($2)}' <<<"${metrics}")
+            scrape=$(awk '$1=="sam_control_plane_mesh_state_scrape_success"{print int($2)}' <<<"${metrics}")
+            if [[ "${scrape:-0}" -eq 1 && "${routers_active:-0}" -ge 2 ]]; then
+              ok "Routers holding a lease" "${routers_active}"
+            else
+              bad "Routers holding a lease" "${routers_active:-?} (store scrape success=${scrape:-?}; want >= 2)"
+            fi
+            if [[ "${peers:-0}" -ge 1 ]]; then
+              ok "Peers attached to the mesh" "${peers}"
+            else
+              bad "Peers attached to the mesh" "${peers:-?} (want >= 1)"
+            fi
+          else
+            bad "Control plane metrics" "$(head -c 200 <<<"${metrics}")"
+          fi
+
+          # 3. Routers and canaries are fully rolled out.
+          sts=$(kubectl get statefulset "sam-router-${ENV_NAME}" -n "${NS}" -o jsonpath='{.status.readyReplicas}/{.spec.replicas}' 2>&1 || echo "?/?")
+          if [[ "${sts%%/*}" == "${sts##*/}" && "${sts%%/*}" != "?" && "${sts%%/*}" != "" ]]; then
+            ok "Router StatefulSet" "${sts} ready"
+          else
+            bad "Router StatefulSet" "${sts} ready"
+          fi
+
+          unhealthy=""
+          total=0
+          while read -r name ready want; do
+            [[ -z "${name}" ]] && continue
+            total=$((total + 1))
+            [[ "${ready:-0}" == "${want}" ]] || unhealthy="${unhealthy} ${name}(${ready:-0}/${want})"
+          done < <(kubectl get deployments -n "${CNS}" -o jsonpath='{range .items[*]}{.metadata.name} {.status.availableReplicas} {.spec.replicas}{"\n"}{end}' 2>/dev/null)
+          if [[ "${total}" -gt 0 && -z "${unhealthy}" ]]; then
+            ok "Canaries" "${total} deployments fully available"
+          else
+            bad "Canaries" "${total} deployments; not available:${unhealthy:- (none found)}"
+          fi
+
+          # 4. The cold path: the probe CronJob enrolled a fresh node, found a
+          #    service and spoke MCP to it recently. Three schedules of slack.
+          last=$(kubectl get cronjob "sam-probe-${ENV_NAME}" -n "${CNS}" -o jsonpath='{.status.lastSuccessfulTime}' 2>/dev/null || true)
+          if [[ -n "${last}" ]]; then
+            age=$(( $(date +%s) - $(date -d "${last}" +%s) ))
+            if [[ "${age}" -le 2700 ]]; then
+              ok "Cold-path probe" "last success ${age}s ago"
+            else
+              bad "Cold-path probe" "last success ${age}s ago (want <= 2700s)"
+            fi
+          else
+            bad "Cold-path probe" "no successful run recorded"
+          fi
+
+          {
+            echo "## ${ENV_NAME}.sam-mesh.dev"
+            echo
+            echo "| | Check | Result |"
+            echo "|---|---|---|"
+            printf '%s\n' "${rows[@]}"
+          } > report.md
+          cat report.md >> "${GITHUB_STEP_SUMMARY}"
+          cat report.md
+          [[ "${fails}" -eq 0 ]]
+
+      - name: Report
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ENV_NAME: ${{ vars.ENV_NAME }}
+          OUTCOME: ${{ steps.check.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          title="Testnet ${ENV_NAME} is unhealthy"
+          label="testnet-health"
+          existing=$(gh issue list --state open --label "${label}" --json number,title \
+            --jq ".[] | select(.title == \"${title}\") | .number" | head -n1 || true)
+
+          if [[ "${OUTCOME}" == "success" ]]; then
+            if [[ -n "${existing}" ]]; then
+              gh issue close "${existing}" --comment "Healthy again: ${RUN_URL}"
+            fi
+            exit 0
+          fi
+
+          report=$(cat report.md 2>/dev/null || echo "The check step did not produce a report.")
+          body=$(printf '%s\n\nRun: %s\n_Updated by every failing run; closed automatically by the next healthy one._\n' "${report}" "${RUN_URL}")
+
+          if [[ -n "${existing}" ]]; then
+            # One open issue per testnet, kept current rather than commented on
+            # every half hour.
+            gh issue edit "${existing}" --body "${body}"
+          else
+            gh label create "${label}" --description "Opened by the Testnet Health workflow" --color B60205 2>/dev/null || true
+            gh issue create --title "${title}" --label "${label}" --body "${body}"
+          fi
+          exit 1
