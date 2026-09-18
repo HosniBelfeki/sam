@@ -51,8 +51,21 @@ trap 'rm -f "${auth_header}"' EXIT
 chmod 0600 "${auth_header}"
 printf 'Authorization: Bearer %s\n' "${PLAY_ACCESS_TOKEN}" > "${auth_header}"
 
+# Prints the response body on stdout. On a non-2xx the body is Play's own
+# explanation (a 403 says whether the service account is missing from the
+# console or the app does not exist yet), so it goes to stderr instead of
+# being swallowed by the jq that would otherwise consume it.
 play() {
-  curl --silent --show-error --fail-with-body --header "@${auth_header}" "$@"
+  local body status
+  body=$(curl --silent --show-error --write-out '\n%{http_code}' --header "@${auth_header}" "$@")
+  status=${body##*$'\n'}
+  body=${body%$'\n'*}
+  if [[ "${status}" -lt 200 || "${status}" -ge 300 ]]; then
+    echo "Play API returned HTTP ${status}:" >&2
+    echo "${body}" >&2
+    exit 1
+  fi
+  printf '%s' "${body}"
 }
 
 # A 2xx with the field missing would otherwise send us on to edits/null.
