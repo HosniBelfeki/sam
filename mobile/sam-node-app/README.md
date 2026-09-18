@@ -56,6 +56,41 @@ cd mobile/sam-node-app
 flutter run
 ```
 
+### 3. Publishing to Google Play
+
+Google Play takes an Android App Bundle (`.aab`) signed with an **upload key**; it rejects the debug key that `make mobile-app-apk` falls back to. Set the key up once:
+
+1.  Create the upload keystore outside the repository (`*.jks` and `key.properties` are git-ignored anyway, but keep it out of the tree). `keytool` prompts for the passwords, so they never appear in a shell history:
+    ```bash
+    keytool -genkey -v -keystore ~/upload-keystore.jks -keyalg RSA -keysize 2048 -validity 10000 -alias upload
+    ```
+    Back the file up: with [Play App Signing](https://support.google.com/googleplay/android-developer/answer/9842756) Google holds the app signing key and this is only the upload key, but losing it still means a key-reset request.
+2.  Tell Gradle where it is, in `mobile/sam-node-app/android/key.properties`:
+    ```properties
+    storeFile=/home/you/upload-keystore.jks
+    storePassword=...
+    keyAlias=upload
+    keyPassword=...
+    ```
+    CI uses the equivalent environment variables instead of a file: `ANDROID_KEYSTORE_PATH`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`.
+3.  Build from the repository root:
+    ```bash
+    make mobile-app-bundle MOBILE_BUILD_NAME=1.2.3 MOBILE_BUILD_NUMBER=42
+    ```
+    The bundle lands in `mobile/sam-node-app/build/app/outputs/bundle/release/app-release.aab`. `MOBILE_BUILD_NAME`/`MOBILE_BUILD_NUMBER` override the `version: X.Y.Z+N` in `pubspec.yaml`; Play refuses a `versionCode` (`N`) it has already seen, so bump it on every upload.
+4.  Upload the `.aab` in the Play Console (**Release → Testing/Production → Create new release**).
+
+#### From CI
+
+The **Mobile App** workflow ([`.github/workflows/mobile.yml`](../../.github/workflows/mobile.yml)) builds the APK and, when the upload key is configured, the bundle:
+
+*   **On every `v*` tag**, in parallel with the goreleaser workflow that ships the Go binaries; both artifacts are attached to the GitHub release, the tag supplies the version name.
+*   **On demand** (**Actions → Mobile App → Run workflow**) from any branch or tag. Pick a Google Play **track** (`internal`, `alpha`, `beta`, `production`) to publish the bundle after the build, or leave `none` to only build; the APK and `.aab` are always available as run artifacts. `build_number` overrides the versionCode, which otherwise is the workflow run number.
+
+Repository secrets for signing: `ANDROID_KEYSTORE_BASE64` (`base64 -w0 upload-keystore.jks`), `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD` — the values you chose when running `keytool` above. Without them the APK is debug-signed and the bundle is skipped. `GOOGLE_SERVICES_JSON_BASE64` is the base64 of the `google-services.json` downloaded from the Firebase Console (*Project settings → Your apps → dev.sammesh.connect*); without it the build uses the dummy template and Firebase features fail at runtime.
+
+Publishing is keyless: [`hack/publish-play.sh`](../../hack/publish-play.sh) drives the Play Developer API with a short-lived token minted through Workload Identity Federation from the repository variables `WIF_PROVIDER_NAME_APP_STORE` and `SERVICE_ACCOUNT_EMAIL_APP_STORE`. That service account must be invited in **Play Console → Users and permissions** with *Release to production / testing tracks* rights on the app, and the very first release of a new app still has to go through the console (the API cannot create the app listing).
+
 ---
 
 ## How to Use the Application

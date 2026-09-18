@@ -1,0 +1,212 @@
+name: Mobile App
+
+# Builds SAM Connect (Android) on every release tag, in parallel with the
+# goreleaser workflow that publishes the Go binaries, and on demand from any
+# ref. A dispatch may also publish the bundle to a Google Play track, keyless
+# via Workload Identity Federation: repository variables
+# WIF_PROVIDER_NAME_APP_STORE / SERVICE_ACCOUNT_EMAIL_APP_STORE name a
+# service account invited in Play Console with release rights.
+#
+# Play needs a strictly increasing versionCode. It defaults to this
+# workflow's run number, which is tied to this file's path: renaming the
+# file resets the counter, so override build_number if that ever happens.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      track:
+        description: 'Google Play track to publish to (none = build only)'
+        type: choice
+        options: [none, internal, alpha, beta, production]
+        default: none
+      build_number:
+        description: 'Android versionCode (default: this workflow run number)'
+        type: string
+        default: ''
+
+run-name: "mobile ${{ github.ref_name }}${{ inputs.track && format(' ({0})', inputs.track) || '' }} by ${{ github.actor }}"
+
+permissions: {}
+
+env:
+  APP_DIR: mobile/sam-node-app
+  PACKAGE_NAME: dev.sammesh.connect
+
+jobs:
+  build:
+    name: Build APK and bundle
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    outputs:
+      bundle: ${{ steps.upload-key.outputs.present }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: stable
+          cache: false
+      - name: Set up Java
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      - name: Set up Android NDK
+        run: |
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses
+          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "ndk;26.1.10909125"
+      - name: Set up Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Determine version
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_BUILD_NUMBER: ${{ inputs.build_number }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          if [[ "${REF_TYPE}" == "tag" ]]; then
+            name="${REF_NAME#v}"
+          else
+            name="$(git describe --tags --always)"; name="${name#v}"
+          fi
+          number="${INPUT_BUILD_NUMBER:-${RUN_NUMBER}}"
+          if ! [[ "${number}" =~ ^[0-9]+$ ]]; then
+            echo "::error::build_number must be a positive integer (got '${number}')"; exit 1
+          fi
+          echo "MOBILE_BUILD_NAME=${name}" >> "$GITHUB_ENV"
+          echo "MOBILE_BUILD_NUMBER=${number}" >> "$GITHUB_ENV"
+          echo "Building ${name} (versionCode ${number})"
+
+      - name: Install upload key
+        # Step-level `if` cannot read `secrets`, so surface presence as an output.
+        # The key signs both the APK and the bundle when present; without it the
+        # APK falls back to the debug key and the bundle is skipped.
+        id: upload-key
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [[ -z "${ANDROID_KEYSTORE_BASE64}" ]]; then
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::ANDROID_KEYSTORE_BASE64 not set; skipping the Google Play bundle."
+            exit 0
+          fi
+          path="$RUNNER_TEMP/upload-keystore.jks"
+          echo "${ANDROID_KEYSTORE_BASE64}" | base64 --decode > "${path}"
+          echo "ANDROID_KEYSTORE_PATH=${path}" >> "$GITHUB_ENV"
+          echo "present=true" >> "$GITHUB_OUTPUT"
+      - name: Refuse to publish without an upload key
+        if: github.event_name == 'workflow_dispatch' && inputs.track != 'none' && steps.upload-key.outputs.present != 'true'
+        run: |
+          echo "::error::Publishing to Google Play needs the ANDROID_KEYSTORE_BASE64 / ANDROID_KEYSTORE_PASSWORD / ANDROID_KEY_ALIAS / ANDROID_KEY_PASSWORD secrets."
+          exit 1
+
+      - name: Build APK
+        env:
+          GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: make mobile-app-apk
+      - name: Build Google Play bundle
+        if: steps.upload-key.outputs.present == 'true'
+        env:
+          GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: make mobile-app-bundle
+      - name: Remove upload key
+        if: always() && steps.upload-key.outputs.present == 'true'
+        run: rm -f "$ANDROID_KEYSTORE_PATH"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sam-connect-apk
+          path: ${{ env.APP_DIR }}/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+      - name: Upload bundle artifact
+        if: steps.upload-key.outputs.present == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sam-connect-aab
+          path: ${{ env.APP_DIR }}/build/app/outputs/bundle/release/app-release.aab
+          if-no-files-found: error
+
+  attach-to-release:
+    name: Attach to GitHub release
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          pattern: sam-connect-*
+          merge-multiple: true
+          path: dist
+      - name: Upload to release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          # The goreleaser workflow creates the release from the same tag push;
+          # wait for it rather than racing to create one ourselves.
+          for _ in $(seq 1 60); do
+            gh release view "$TAG_NAME" >/dev/null 2>&1 && break
+            echo "waiting for release $TAG_NAME to be created by goreleaser..."; sleep 30
+          done
+          gh release view "$TAG_NAME" >/dev/null
+          gh release upload "$TAG_NAME" dist/* --clobber
+
+  publish:
+    name: Publish to Google Play (${{ inputs.track }})
+    if: github.event_name == 'workflow_dispatch' && inputs.track != 'none'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: hack/publish-play.sh
+          sparse-checkout-cone-mode: false
+      - name: Download bundle
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: sam-connect-aab
+          path: dist
+      - name: Google Auth
+        id: auth
+        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER_NAME_APP_STORE }}
+          service_account: ${{ vars.SERVICE_ACCOUNT_EMAIL_APP_STORE }}
+          token_format: access_token
+          access_token_scopes: https://www.googleapis.com/auth/androidpublisher
+      - name: Upload to track
+        env:
+          PLAY_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+          TRACK: ${{ inputs.track }}
+        run: ./hack/publish-play.sh "$PACKAGE_NAME" "$TRACK" dist/app-release.aab

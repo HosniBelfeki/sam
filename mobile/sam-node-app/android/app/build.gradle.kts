@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
@@ -5,6 +7,23 @@ plugins {
     id("com.google.gms.google-services")
     id("com.google.devtools.ksp")
 }
+
+// Release (Play upload) signing: android/key.properties for a workstation,
+// ANDROID_KEYSTORE_* environment variables for CI. Both are git-ignored /
+// never committed; when neither is present the build falls back to the debug
+// key so `flutter run --release` and local APKs keep working.
+val keystoreProperties = Properties().apply {
+    val f = rootProject.file("key.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+fun signingValue(propertyKey: String, envKey: String): String? =
+    keystoreProperties.getProperty(propertyKey)?.takeIf { it.isNotBlank() } ?: System.getenv(envKey)?.takeIf { it.isNotBlank() }
+
+val releaseStoreFile = signingValue("storeFile", "ANDROID_KEYSTORE_PATH")
+val releaseStorePassword = signingValue("storePassword", "ANDROID_KEYSTORE_PASSWORD")
+val releaseKeyAlias = signingValue("keyAlias", "ANDROID_KEY_ALIAS")
+val releaseKeyPassword = signingValue("keyPassword", "ANDROID_KEY_PASSWORD")
+val hasReleaseSigning = listOf(releaseStoreFile, releaseStorePassword, releaseKeyAlias, releaseKeyPassword).all { it != null }
 
 android {
     namespace = "dev.sammesh.connect"
@@ -28,9 +47,18 @@ android {
 
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.maybeCreate("release").apply {
+                    // Relative storeFile paths resolve against android/, where key.properties lives.
+                    storeFile = rootProject.file(releaseStoreFile!!)
+                    storePassword = releaseStorePassword
+                    keyAlias = releaseKeyAlias
+                    keyPassword = releaseKeyPassword
+                }
+            } else {
+                logger.warn("No release signing configured (android/key.properties or ANDROID_KEYSTORE_*); signing release with the debug key.")
+                signingConfig = signingConfigs.getByName("debug")
+            }
         }
     }
 }

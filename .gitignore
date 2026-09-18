@@ -61,3 +61,9 @@ mobile/logcat.txt
 /rootfs.ext4
 /rootfs.tar
 
+# Android upload keystore and Firebase config: secrets, wherever they land.
+*.jks
+*.keystore
+key.properties
+google-services.json
+

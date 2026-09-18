@@ -39,7 +39,7 @@ build:
 	go -C cmd/sam-a2a-bridge build -v -o "$(OUT_DIR)/sam-a2a-bridge" .
 
 
-.PHONY: mobile-ffi-host mobile-ffi-android mobile-ffi-android-x86_64 mobile-ffi-ios mobile-ffi mobile-app-apk mobile-app-apk-emulator
+.PHONY: mobile-ffi-host mobile-ffi-android mobile-ffi-android-x86_64 mobile-ffi-ios mobile-ffi mobile-app-apk mobile-app-apk-emulator mobile-app-bundle
 mobile-ffi-host:
 	mkdir -p "$(OUT_DIR)"
 	CGO_ENABLED=1 go build -v -buildmode=c-shared -o "$(OUT_DIR)/libsam.so" ./mobile/sam-node-ffi
@@ -65,47 +65,59 @@ mobile-ffi-ios:
 
 mobile-ffi: mobile-ffi-host mobile-ffi-android mobile-ffi-android-x86_64 mobile-ffi-ios
 
-mobile-app-apk: mobile-ffi-android
-	@if [ -n "$$GOOGLE_SERVICES_JSON" ]; then \
-		echo "Decoding google-services.json from GOOGLE_SERVICES_JSON environment variable..."; \
-		echo "$$GOOGLE_SERVICES_JSON" | base64 --decode > mobile/sam-node-app/android/app/google-services.json; \
-	elif [ -n "$$GOOGLE_SERVICES_JSON_BASE64" ]; then \
-		echo "Decoding google-services.json from GOOGLE_SERVICES_JSON_BASE64 environment variable..."; \
-		echo "$$GOOGLE_SERVICES_JSON_BASE64" | base64 --decode > mobile/sam-node-app/android/app/google-services.json; \
-	elif [ ! -f mobile/sam-node-app/android/app/google-services.json ]; then \
-		if [ -f mobile/sam-node-app/android/app/google-services.json.tmpl ]; then \
-			echo "Copying google-services.json from template..."; \
-			cp mobile/sam-node-app/android/app/google-services.json.tmpl mobile/sam-node-app/android/app/google-services.json; \
-		else \
-			echo "Error: google-services.json is missing."; \
-			echo "Please set GOOGLE_SERVICES_JSON or GOOGLE_SERVICES_JSON_BASE64 environment variable with the base64-encoded configuration, or place the file directly at mobile/sam-node-app/android/app/google-services.json"; \
-			exit 1; \
-		fi; \
-	fi
-	mkdir -p mobile/sam-node-app/android/app/src/main/jniLibs/arm64-v8a
-	cp "$(OUT_DIR)/android/libsam.so" mobile/sam-node-app/android/app/src/main/jniLibs/arm64-v8a/libsam.so
-	cd mobile/sam-node-app && flutter build apk --release
+MOBILE_APP_DIR=mobile/sam-node-app
+# Optional overrides of pubspec.yaml's `version: X.Y.Z+N`. Google Play rejects
+# a bundle whose versionCode (N) it has already seen, so CI passes a fresh one.
+MOBILE_BUILD_NAME?=
+MOBILE_BUILD_NUMBER?=
+MOBILE_FLUTTER_BUILD_FLAGS=$(if $(MOBILE_BUILD_NAME),--build-name=$(MOBILE_BUILD_NAME)) $(if $(MOBILE_BUILD_NUMBER),--build-number=$(MOBILE_BUILD_NUMBER))
 
-mobile-app-apk-emulator: mobile-ffi-android-x86_64
+.PHONY: mobile-app-google-services
+mobile-app-google-services:
 	@if [ -n "$$GOOGLE_SERVICES_JSON" ]; then \
 		echo "Decoding google-services.json from GOOGLE_SERVICES_JSON environment variable..."; \
-		echo "$$GOOGLE_SERVICES_JSON" | base64 --decode > mobile/sam-node-app/android/app/google-services.json; \
+		echo "$$GOOGLE_SERVICES_JSON" | base64 --decode > $(MOBILE_APP_DIR)/android/app/google-services.json; \
 	elif [ -n "$$GOOGLE_SERVICES_JSON_BASE64" ]; then \
 		echo "Decoding google-services.json from GOOGLE_SERVICES_JSON_BASE64 environment variable..."; \
-		echo "$$GOOGLE_SERVICES_JSON_BASE64" | base64 --decode > mobile/sam-node-app/android/app/google-services.json; \
-	elif [ ! -f mobile/sam-node-app/android/app/google-services.json ]; then \
-		if [ -f mobile/sam-node-app/android/app/google-services.json.tmpl ]; then \
+		echo "$$GOOGLE_SERVICES_JSON_BASE64" | base64 --decode > $(MOBILE_APP_DIR)/android/app/google-services.json; \
+	elif [ ! -f $(MOBILE_APP_DIR)/android/app/google-services.json ]; then \
+		if [ -f $(MOBILE_APP_DIR)/android/app/google-services.json.tmpl ]; then \
 			echo "Copying google-services.json from template..."; \
-			cp mobile/sam-node-app/android/app/google-services.json.tmpl mobile/sam-node-app/android/app/google-services.json; \
+			cp $(MOBILE_APP_DIR)/android/app/google-services.json.tmpl $(MOBILE_APP_DIR)/android/app/google-services.json; \
 		else \
 			echo "Error: google-services.json is missing."; \
-			echo "Please set GOOGLE_SERVICES_JSON or GOOGLE_SERVICES_JSON_BASE64 environment variable with the base64-encoded configuration, or place the file directly at mobile/sam-node-app/android/app/google-services.json"; \
+			echo "Please set GOOGLE_SERVICES_JSON or GOOGLE_SERVICES_JSON_BASE64 environment variable with the base64-encoded configuration, or place the file directly at $(MOBILE_APP_DIR)/android/app/google-services.json"; \
 			exit 1; \
 		fi; \
 	fi
-	mkdir -p mobile/sam-node-app/android/app/src/main/jniLibs/x86_64
-	cp "$(OUT_DIR)/android-x86_64/libsam.so" mobile/sam-node-app/android/app/src/main/jniLibs/x86_64/libsam.so
-	cd mobile/sam-node-app && flutter build apk --release
+
+.PHONY: mobile-app-jnilibs-arm64
+mobile-app-jnilibs-arm64: mobile-ffi-android
+	mkdir -p $(MOBILE_APP_DIR)/android/app/src/main/jniLibs/arm64-v8a
+	cp "$(OUT_DIR)/android/libsam.so" $(MOBILE_APP_DIR)/android/app/src/main/jniLibs/arm64-v8a/libsam.so
+
+mobile-app-apk: mobile-app-jnilibs-arm64 mobile-app-google-services
+	cd $(MOBILE_APP_DIR) && flutter build apk --release $(MOBILE_FLUTTER_BUILD_FLAGS)
+
+mobile-app-apk-emulator: mobile-ffi-android-x86_64 mobile-app-google-services
+	mkdir -p $(MOBILE_APP_DIR)/android/app/src/main/jniLibs/x86_64
+	cp "$(OUT_DIR)/android-x86_64/libsam.so" $(MOBILE_APP_DIR)/android/app/src/main/jniLibs/x86_64/libsam.so
+	cd $(MOBILE_APP_DIR) && flutter build apk --release $(MOBILE_FLUTTER_BUILD_FLAGS)
+
+# Android App Bundle for Google Play. Play rejects debug-signed bundles, so an
+# upload key is required: either $(MOBILE_APP_DIR)/android/key.properties or
+# the ANDROID_KEYSTORE_PATH / ANDROID_KEYSTORE_PASSWORD / ANDROID_KEY_ALIAS /
+# ANDROID_KEY_PASSWORD environment variables (see mobile/sam-node-app/README.md).
+.PHONY: mobile-app-bundle
+mobile-app-bundle: mobile-app-jnilibs-arm64 mobile-app-google-services
+	@if [ ! -f $(MOBILE_APP_DIR)/android/key.properties ] && \
+	   { [ -z "$$ANDROID_KEYSTORE_PATH" ] || [ -z "$$ANDROID_KEYSTORE_PASSWORD" ] || [ -z "$$ANDROID_KEY_ALIAS" ] || [ -z "$$ANDROID_KEY_PASSWORD" ]; }; then \
+		echo "Error: no upload key configured; Google Play rejects debug-signed bundles." >&2; \
+		echo "Create $(MOBILE_APP_DIR)/android/key.properties or export ANDROID_KEYSTORE_PATH, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS and ANDROID_KEY_PASSWORD. See $(MOBILE_APP_DIR)/README.md#publishing-to-google-play." >&2; \
+		exit 1; \
+	fi
+	cd $(MOBILE_APP_DIR) && flutter build appbundle --release $(MOBILE_FLUTTER_BUILD_FLAGS)
+	@echo "Bundle: $(MOBILE_APP_DIR)/build/app/outputs/bundle/release/app-release.aab"
 
 .PHONY: proto
 proto:
