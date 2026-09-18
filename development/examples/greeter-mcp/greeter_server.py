@@ -1,7 +1,7 @@
 """Greeter MCP backend exposed by node C in the local dev mesh."""
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
-mcp = FastMCP("greeter", host="0.0.0.0", port=7778)
+mcp = MCPServer("greeter")
 
 
 @mcp.tool()
@@ -17,4 +17,4 @@ def shout(text: str) -> str:
 
 
 if __name__ == "__main__":
-    mcp.run(transport="streamable-http")
+    mcp.run(transport="streamable-http", host="0.0.0.0", port=7778)
