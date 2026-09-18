@@ -77,6 +77,13 @@ func main() {
 					golog.SetAllLoggers(lvl)
 				}
 			}
+			// Same as sam-node: go-libp2p-kad-dht logs routine small-mesh
+			// conditions (empty routing table, no closer peers) at INFO/ERROR,
+			// the latter through a malformed zap call inside the library.
+			if logLevel == "" || logLevel == "info" || logLevel == "warn" || logLevel == "error" {
+				_ = golog.SetLogLevel("dht", "fatal")
+				_ = golog.SetLogLevel("dht/RtRefreshManager", "fatal")
+			}
 
 			// Secrets arrive through a file or the environment, never as a
 			// flag value that would sit in `ps` and shell history. Env keeps

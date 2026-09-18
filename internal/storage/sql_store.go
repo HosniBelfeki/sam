@@ -461,6 +461,18 @@ func (s *SQLStore) initSchema() error {
 	return s.initSchemaDefault()
 }
 
+// logSchemaMigrated reports a migration run in one line; an up-to-date
+// database says nothing.
+func logSchemaMigrated(from, to int) {
+	switch {
+	case from == to:
+	case from == 0:
+		logger.Infof("Initialized database schema at version %d", to)
+	default:
+		logger.Infof("Migrated database schema from version %d to %d", from, to)
+	}
+}
+
 func (s *SQLStore) initSchemaDefault() error {
 	// Create schema_migrations table
 	createMigrationsTable := `CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY)`
@@ -473,6 +485,7 @@ func (s *SQLStore) initSchemaDefault() error {
 	if err != nil {
 		return fmt.Errorf("failed to check current schema version: %w", err)
 	}
+	startVersion := currentVersion
 
 	for _, m := range migrations {
 		if m.version <= currentVersion {
@@ -505,13 +518,15 @@ func (s *SQLStore) initSchemaDefault() error {
 			if err := tx.Commit(); err != nil {
 				return err
 			}
-			logger.Infof("Applied schema migration version %d successfully", m.version)
+			logger.Debugf("Applied schema migration version %d", m.version)
+			currentVersion = m.version
 			return nil
 		}()
 		if err != nil {
 			return err
 		}
 	}
+	logSchemaMigrated(startVersion, currentVersion)
 	return nil
 }
 
@@ -536,6 +551,7 @@ func (s *SQLStore) initSchemaPostgres() error {
 	if err != nil {
 		return fmt.Errorf("failed to check current schema version: %w", err)
 	}
+	startVersion := currentVersion
 
 	for _, m := range migrations {
 		if m.version <= currentVersion {
@@ -557,12 +573,14 @@ func (s *SQLStore) initSchemaPostgres() error {
 			return fmt.Errorf("failed to update schema_migrations version: %w", err)
 		}
 
-		logger.Infof("Applied schema migration version %d successfully", m.version)
+		logger.Debugf("Applied schema migration version %d", m.version)
+		currentVersion = m.version
 	}
 
 	if err := tx.Commit(); err != nil {
 		return err
 	}
+	logSchemaMigrated(startVersion, currentVersion)
 
 	return nil
 }
