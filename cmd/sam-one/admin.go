@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -182,6 +183,10 @@ func newAdminSubcommands() []*cobra.Command {
 	)
 
 	addSharedFlags := func(cmd *cobra.Command) {
+		// cobra's cmd.Print* goes to stderr unless told otherwise; results
+		// belong on stdout so `token create | awk` and $(...) capture them.
+		cmd.SetOut(os.Stdout)
+		cmd.SetErr(os.Stderr)
 		cmd.PersistentFlags().StringVar(&server, "server", "http://127.0.0.1:8080", "Base URL of the running sam-one server")
 		cmd.PersistentFlags().StringVar(&adminTokenPath, "admin-token-path", "", "File containing the admin API bearer token (or env SAM_ADMIN_TOKEN, or read from --data-dir)")
 		cmd.PersistentFlags().StringVar(&dataDir, "data-dir", ".", "sam-one data directory holding the persisted admin token")
@@ -209,7 +214,7 @@ func newAdminSubcommands() []*cobra.Command {
 			cmd.Printf("Token:    %s\n", created.Token)
 			cmd.Printf("Role:     %s\n", created.Role)
 			cmd.Printf("Expires:  %s\n", created.ExpiresAt)
-			cmd.Println("The plain token is shown only once; store it now.")
+			cmd.PrintErrln("The plain token is shown only once; store it now.")
 			return nil
 		},
 	}

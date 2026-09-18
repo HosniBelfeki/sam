@@ -20,11 +20,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"regexp"
 	"runtime"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -49,7 +52,8 @@ type Cloudflare struct {
 	// Binary is an explicit cloudflared executable; when set, nothing else
 	// is tried.
 	Binary string
-	// Timeout bounds how long Open waits for the URL; defaults to 30s.
+	// Timeout bounds how long Open waits for the URL and then for its
+	// hostname to be published in DNS; defaults to 30s.
 	Timeout time.Duration
 	// InstallDir is where a downloaded cloudflared is kept (sam-one uses
 	// <data-dir>/bin). Empty disables both the cache and downloads.
@@ -63,6 +67,10 @@ type Cloudflare struct {
 	ReleaseURL string
 	// HTTPClient performs the download; nil uses a 10 minute timeout.
 	HTTPClient *http.Client
+	// LookupHost asks whether the assigned hostname exists yet; nil asks
+	// the zone's authoritative nameserver (see authoritativeLookup). Tests
+	// stub it.
+	LookupHost func(ctx context.Context, host string) ([]string, error)
 }
 
 // quickTunnelURL matches the assigned hostname in cloudflared's banner. The
@@ -94,6 +102,7 @@ func (c *Cloudflare) Open(ctx context.Context, target string) (Tunnel, error) {
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
+	deadline := time.Now().Add(timeout)
 
 	// The process outlives Open: its lifetime is the tunnel's, ended by Close.
 	procCtx, cancel := context.WithCancel(context.Background())
@@ -120,6 +129,7 @@ func (c *Cloudflare) Open(ctx context.Context, target string) (Tunnel, error) {
 	select {
 	case u := <-urlCh:
 		t.url = u
+		c.awaitPublished(ctx, u, deadline)
 		return t, nil
 	case <-t.done:
 		return nil, fmt.Errorf("cloudflared exited before publishing a URL: %w", t.Err())
@@ -130,6 +140,76 @@ func (c *Cloudflare) Open(ctx context.Context, target string) (Tunnel, error) {
 		_ = t.Close()
 		return nil, ctx.Err()
 	}
+}
+
+// awaitPublished blocks until the tunnel hostname exists in DNS, the deadline
+// passes or ctx ends. A quick-tunnel record appears a few seconds after
+// cloudflared prints the URL, and a device that asks before then is told the
+// host does not exist, so the URL must not be announced earlier. Missing the
+// deadline is not an error: the tunnel works once DNS catches up.
+func (c *Cloudflare) awaitPublished(ctx context.Context, rawURL string, deadline time.Time) {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return
+	}
+	lookup := c.LookupHost
+	if lookup == nil {
+		lookup = authoritativeLookup
+	}
+	for {
+		lctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		_, err := lookup(lctx, u.Hostname())
+		cancel()
+		if err == nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			logger.Warnf("%s is not published in DNS yet; devices may need a moment before they can reach it", u.Hostname())
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+}
+
+// authoritativeLookup resolves host at its zone's own nameserver, bypassing
+// every cache in between. Asking a recursive resolver before the record
+// exists makes it cache the NXDOMAIN (the zone's SOA allows 30 minutes) and
+// strands every device behind that resolver, including a sam-node on this
+// very machine; the authoritative server has no cache to poison.
+func authoritativeLookup(ctx context.Context, host string) ([]string, error) {
+	zone := host[strings.IndexByte(host, '.')+1:]
+	nss, err := net.DefaultResolver.LookupNS(ctx, zone)
+	if err != nil {
+		return nil, err
+	}
+	if len(nss) == 0 {
+		return nil, fmt.Errorf("no nameservers for %s", zone)
+	}
+	addrs, err := net.DefaultResolver.LookupHost(ctx, nss[0].Host)
+	if err != nil {
+		return nil, err
+	}
+	if len(addrs) == 0 {
+		return nil, fmt.Errorf("no address for nameserver %s", nss[0].Host)
+	}
+	return lookupAt(ctx, net.JoinHostPort(addrs[0], "53"), host)
+}
+
+// lookupAt resolves host by asking only the nameserver at server.
+func lookupAt(ctx context.Context, server, host string) ([]string, error) {
+	r := &net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(ctx, network, server)
+		},
+	}
+	// The trailing dot makes the name absolute so no search domain is tried.
+	return r.LookupHost(ctx, host+".")
 }
 
 // resolveBinary picks the cloudflared to run; see the type doc for the order.

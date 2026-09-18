@@ -204,4 +204,4 @@ the generated tokens; pass `--port 8080` (and optionally
 `--bind-address`) for a fixed one, and `--external-url https://mesh.example.com`
 when fronted by a reverse proxy or DNS name. On a laptop behind NAT,
 `--tunnel cloudflare` publishes the port on a temporary public https URL
-instead; see [Device Enrollment](../device-enrollment/).
+instead; see [A Mesh in 30 Seconds](../device-enrollment/).

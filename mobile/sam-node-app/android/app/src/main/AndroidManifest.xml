@@ -67,7 +67,7 @@
         <property
             android:name="android.app.appfunctions.app_function_schema_version"
             android:value="1" />
-    <!-- Foreground Service for keeping SAM Node alive -->
+    <!-- Foreground Service that keeps the SAM Connect node alive -->
         <service 
             android:name=".SamNodeForegroundService"
             android:foregroundServiceType="connectedDevice|location"

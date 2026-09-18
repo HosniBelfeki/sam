@@ -1,229 +1,216 @@
 ---
-title: "Device Enrollment (QR Code)"
-linkTitle: "Device Enrollment"
+title: "A Mesh in 30 Seconds"
+linkTitle: "A Mesh in 30 Seconds"
 weight: 7
 ---
 
-# Enrolling Phones with a QR Code
+# A Mesh in 30 Seconds
 
-A phone joins the mesh the same way a `sam-node` does: it presents a
-bootstrap token to the control plane's `POST /enroll`, which spends the
-token and issues the device a Biscuit bound to its own key. The only thing
-a QR code adds is a way to hand the phone the two facts it needs without
-typing them:
+You have a laptop and a phone. Neither has a public IP address, they are
+not on the same network, and you want a program on the laptop to read a
+sensor on the phone, securely, without first setting up a server, a
+domain, a certificate or an identity provider.
+
+That is what `sam-one` is for: the whole SAM control plane, router and
+database in one binary on one port, and it prints a QR code the phone
+scans to join. Everything below was run exactly as written and timed from
+the moment `sam-one` started, on a fresh data directory:
 
 ```
-sam://enroll?server=<control-plane-url>&token=<bootstrap-token>
+ 10.3s  sam-one: banner + QR printed
+ 13.7s  phone: enrolled
+ 18.8s  phone: node running, phone-sensors advertised
+ 19.6s  laptop: enrolled
+ 24.9s  laptop -> phone: {"battery_level": 64, "charging": true}
 ```
 
-The token is an ordinary bootstrap token, so the code grants exactly what
-the token grants — one enrollment, in the token's role, until it expires —
-against any SAM control plane, `sam-one` or a full `sam-control-plane`.
+The taps on the phone were scripted; with a human reading the dialog it
+lands around half a minute. The output is real, only the tokens are
+shortened.
 
-## 1. Run `sam-one` on a public https URL
+You need the `sam-one` and `sam-node` binaries on the laptop (`make` from
+a checkout, or a [release](https://github.com/google/sam/releases)) and
+**SAM Connect** on the phone, the Android app from the same release.
 
-Phones only trust an **https** control plane (plaintext `http://` is
-accepted for loopback only): whoever answers that URL becomes the device's
-trust root, so `sam-one` refuses to draw a QR code for a plaintext address
-and tells you how to get one. Three ways, from a laptop to production:
-
-**Laptop behind NAT — a tunnel.** `sam-one` can publish its single port on
-a temporary public hostname through a tunnel provider. The first one is
-[Cloudflare Quick Tunnels](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/),
-which need no account:
+## 1. Start the control plane
 
 ```bash
 sam-one --data-dir ~/sam-one --tunnel cloudflare
 ```
 
-If `cloudflared` is not on your `PATH`, `sam-one` offers to download the
-pinned release from GitHub into `~/sam-one/bin`. The download is verified
-against a SHA-256 digest compiled into `sam-one`, re-verified before every
-launch, and only happens after you accept Cloudflare's license at the
-prompt (or pass `--tunnel-install` to accept up front, for scripts). Pass
-`--cloudflared-path` to use a copy you installed yourself.
+`--data-dir` holds the database, the router's identity and the generated
+tokens; delete it and you have a brand new mesh. `--tunnel cloudflare`
+publishes the single port on a temporary public `https` hostname through
+a [Cloudflare quick tunnel](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/),
+which needs no account. If `cloudflared` is not installed, `sam-one`
+offers to download the pinned release (checksum-verified, into
+`~/sam-one/bin`) once you accept Cloudflare's license at the prompt;
+`--tunnel-install` accepts it up front.
 
-Quick tunnels are for testing and demos: no uptime guarantee, a new
-hostname on every start, and no Server-Sent Events. Everything else works —
-enrollment, the web console, and the `wss` mesh transport nodes use to
-reach the embedded router.
-
-**Cloud Run** terminates TLS for you; follow the
-[Cloud Run deployment guide](../cloud-run-deployment/) and set
-`SAM_EXTERNAL_URL` to the service URL.
-
-**Your own VM and domain — a reverse proxy.** Put an ACME-capable proxy in
-front of the single port and tell `sam-one` its public name:
-
-```bash
-# Caddyfile: Let's Encrypt certificate, automatic renewal, WebSockets included.
-mesh.example.com {
-    reverse_proxy 127.0.0.1:8080
-}
-
-sam-one --data-dir /var/lib/sam-one --port 8080 --external-url https://mesh.example.com
-```
-
-## 2. Read the code
-
-With a public https URL, `sam-one` prints a device enrollment block under
-its startup banner whenever stdout is a terminal (`--enroll-qr=false` to
-suppress it, `--enroll-qr` to force it):
+A few seconds later (`sam-one` waits until the new hostname is actually
+published in DNS before it prints anything, so what you see is live):
 
 ```
-Scan with the SAM app to enroll a device into brave-otter-quick-1234.trycloudflare.com
+══════════════════════════════════════════════════════════════════
+SAM standalone mesh is ready!
+
+API URL:      https://fairy-museum-built-wing.trycloudflare.com
+Tunnel:       https://fairy-museum-built-wing.trycloudflare.com -> http://0.0.0.0:33775
+Web Console:  https://fairy-museum-built-wing.trycloudflare.com/console
+Router Peer:  12D3KooWBzUDQCkZhz2rWrYBhpjcCH8VnrRNcwCW6DoF36iADYrY
+Admin Token:  sam_adm_…
+Join Token:   sam_tok_…
+
+To enroll a node:
+  sam-node join https://fairy-museum-built-wing.trycloudflare.com --bootstrap-token-path /home/you/sam-one/join-token
+══════════════════════════════════════════════════════════════════
+
+Scan with the SAM app to enroll a device into fairy-museum-built-wing.trycloudflare.com
 (single use, valid for 1h0m0s):
 
-█████████████████████████████████████
-████ ▄▄▄▄▄ █▀ █▀▀▄▀▄▀▀ █ ▄▄▄▄▄ ████
-...
-
-sam://enroll?server=https%3A%2F%2Fbrave-otter-quick-1234.trycloudflare.com&token=sam_dev_...
+█████████████████████████████████████████████
+████ ▄▄▄▄▄ ██▄ █ █ ▀ █▀▄▄▄▀  ▄▄▄ ▄▀▀ ▄▄▄▄▄ ████
+████ █   █ █   ████ ▀▀▄▄█▀▀▀▄▀█▀▄▄ ▀ █   █ ████
+████ █▄▄▄█ █  ▄███▀▀▀▀▀▄ ▄ ▄▄▄ █▄ ▄▀ █▄▄▄█ ████
+                    …
+sam://enroll?server=https%3A%2F%2Ffairy-museum-built-wing.trycloudflare.com&token=sam_dev_…
+Token ID: 0b7acf609466 (revoke early with: sam-one token revoke 0b7acf609466)
 ```
 
-Each code carries a fresh node token, minted for that boot and valid for
-one hour. By default it is **single use**: once a device has spent it,
-`POST /enroll` refuses it for anyone else. It is never persisted, so a
-stale screenshot is worthless.
+That is a running mesh. The web console is live at the URL shown, the
+join token lets `sam-node` processes in, and the QR code carries a fresh
+**single-use** token for one phone.
 
-For more devices, or on a non-interactive deployment, mint a code on demand
-with the admin CLI:
+## 2. Enroll the phone
+
+Open SAM Connect, tap **Scan enrollment code** and point it at the
+terminal. The app shows where the code leads before it spends the token;
+tap **Join**.
+
+| Confirm the mesh | Running |
+|:---:|:---:|
+| ![Join this mesh?](/images/sam-connect-join.png) | ![Node is Running](/images/sam-connect-running.png) |
+
+On the **Services** tab switch **Battery Status** on, go back to the
+dashboard and tap **Start**. The phone is now a node: it generated its own
+key, was issued a credential bound to that key, connected to the router
+through the tunnel and advertised a `phone-sensors` service to the mesh.
+Note the **Node ID** on the dashboard; you will use it in a moment.
+
+Scanning with the phone's stock camera app works too: the `sam://` link
+opens SAM Connect with the same dialog. Without a camera, **Enter details
+manually** takes the printed `sam://enroll…` line pasted as text.
+
+## 3. Join the laptop and call the phone
 
 ```bash
-# Admin credential: env, or --admin-token-path <file>; never a flag value.
-export SAM_ADMIN_TOKEN=...      # from the banner, or <data-dir>/admin-token
-sam-one token qr --server https://brave-otter-quick-1234.trycloudflare.com
+sam-node run --control-plane https://fairy-museum-built-wing.trycloudflare.com \
+  --bootstrap-token-path ~/sam-one/join-token \
+  --data-dir ~/laptop-node --bind-addr=
 ```
 
-`--server` is both where the CLI talks to and the URL embedded in the code;
-pass `--enroll-url https://...` when devices reach the mesh on a different
-address than the admin does. `sam-one token list` shows every minted token
-with its usage count and status, and the standard `--role`/`--ttl-hours`
-tokens from `sam-one token create` work in the app's manual entry too.
-
-### One code for a whole room
-
-A demo with an audience does not want one code per phone. Give the code a
-usage budget instead, and every device that scans it joins until the
-budget, the TTL or you say otherwise:
+The node enrolls with the join token the banner pointed at. An empty
+`--bind-addr=` keeps its local API on a Unix socket only,
+`~/laptop-node/sam.sock`, so nothing on the laptop needs a token to use
+it. Now ask the phone for its battery, through the mesh:
 
 ```bash
-# Startup code good for 200 devices (projector-friendly).
-sam-one --data-dir ~/sam-one --tunnel cloudflare --enroll-qr-max-usages 200
+PHONE=12D3KooWSCnbUoZ8Jv3EKGv17LqEWtnTMfZ3XYJUg2WTm5Gz2hUK   # Node ID from the phone's dashboard
 
-# Or mint one for the afternoon on a running mesh.
-sam-one token qr --server "$URL" --max-usages 200 --ttl-hours 4
+curl -s --unix-socket ~/laptop-node/sam.sock \
+  -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_battery_status","arguments":{}}}' \
+  http://localhost/sam/$PHONE/mcp/phone-sensors/
 ```
 
-The caption under the code says how many devices it admits and prints the
-token id. Anyone who photographs a shared code can enroll until it is
-exhausted, so end it when the session ends:
+```json
+{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"{\"battery_level\": 46, \"charging\": true}"}]}}
+```
+
+That request left the laptop's socket, crossed the tunnel to the router
+inside `sam-one`, was relayed to the phone over a connection the phone had
+opened outbound, and came back the same way. Both devices are behind NAT;
+neither accepted an inbound connection. Every hop was authenticated with
+the credentials minted at enrollment, and the phone's node checked the
+mesh policy before letting the call through.
+
+Any MCP client can do the same: the path is
+`/sam/<node-id>/mcp/<service>/` over that socket, and `tools/list` on it
+shows what the phone offers (`get_battery_status`, and `get_location` once
+you enable Location).
+
+## 4. Add more devices
+
+A second phone is another QR code. `sam-one token qr` mints one on a
+running mesh, and `--max-usages 50` makes a single code, projected on a
+screen, admit a whole room:
 
 ```bash
-sam-one token list --server "$URL"          # STATUS: active / exhausted / expired / revoked
-sam-one token revoke 9c75ab4a3122 --server "$URL"
+sam-one token qr --server https://fairy-museum-built-wing.trycloudflare.com --data-dir ~/sam-one
 ```
 
-Revoking a token stops further enrollments only; the devices it already
-admitted keep their identity. Remove one of those with
-`sam-one admin ban <peer-id>`, or, for a throwaway demo mesh, simply stop
-`sam-one` (a fresh data dir is a fresh mesh).
+A second laptop gets a scoped, single-use token instead of the standing
+join token:
 
-On a full `sam-control-plane`, mint the token with
-`POST /admin/bootstrap-tokens` (`max_usages: 1`) and build the same
-`sam://enroll?...` string; the app does not care which binary is behind the
-URL.
+```bash
+# On the sam-one host: mint the token straight into a file.
+sam-one token create --server https://fairy-museum-built-wing.trycloudflare.com \
+  --data-dir ~/sam-one --description "second laptop" \
+  | awk '/^Token:/{print $2}' > enroll-token
 
-## 3. Enroll the phone
+# On the second laptop, with that file copied over:
+sam-node run --control-plane https://fairy-museum-built-wing.trycloudflare.com \
+  --bootstrap-token-path enroll-token --data-dir ~/node --bind-addr=
+```
 
-In **SAM Connect** (the Android app):
+The same `curl` from that laptop returns the same battery reading.
+`sam-one token list` shows every token with its usage and status, and
+`sam-one token revoke <id>` ends one early. A device that is already
+enrolled stays enrolled until you say otherwise:
+`sam-one admin ban <node-id>` removes it.
 
-1. Tap **Scan enrollment code** and point the camera at the terminal. The
-   app only accepts `sam://enroll` codes; any other QR is ignored with a
-   hint.
-2. Confirm the control plane hostname in the dialog and tap **Join**. Labels
-   set on the **Config** tab are attested into the device's Biscuit at this
-   point.
-3. Start the node from the dashboard.
+(`--data-dir` tells the CLI where to read the admin token; on another
+machine, export `SAM_ADMIN_TOKEN` or pass `--admin-token-path` instead. It
+is never a flag value.)
 
-Scanning with the phone's stock camera app works as well: the `sam://`
-link opens SAM Connect with the same confirmation dialog. **Enter details
-manually** covers everything else: paste the whole `sam://enroll` link or a
-bare token (with the control plane URL), or use the browser and device
-OIDC logins where the control plane is configured with an identity
-provider.
+## Why this is not a toy
 
-A device that joined with a token has no login session to refresh, so its
-labels cannot be re-attested in place: **Re-enroll** is disabled for it,
-and changing labels means unenrolling and scanning a new code.
+* **The phone's identity is a key it generated.** The token in the QR code
+  is spent once at `POST /enroll` and worthless afterwards; what the phone
+  keeps is a short-lived credential bound to its own key, renewed
+  automatically and revocable by node ID. The app runs the same renewal
+  loop as `sam-node`.
+* **The URL must be `https`.** The control plane is each device's trust
+  root, so SAM Connect refuses plaintext to anything but `localhost`, and
+  `sam-one` will not print a QR code for a plaintext address. The tunnel
+  is the zero-setup way to get `https` on a laptop; Cloud Run and a
+  reverse proxy with `--external-url` are the others (see the [Cloud Run
+  guide](../cloud-run-deployment/)).
+* **Nothing is routed by IP.** Services are found by name and called by
+  node ID; policy is evaluated on the service name, deny by default.
+* **`sam-one` is the real thing.** It runs the same control plane, router
+  and store as a Kubernetes deployment, in one process. What works here
+  works there.
 
-## What the token does and does not do
+## Before you take it beyond a demo
 
-* One usage, one device. `POST /enroll` consumes a usage atomically before
-  anything is minted, so devices racing on the last usage of a code cannot
-  both win. The loser sees "Bootstrap token expired, revoked or exhausted".
-* The device keeps its identity, not the token. Its Biscuit is bound to the
-  key it generated locally and is refreshed through `/refresh`; revoking it
-  later is `sam-one admin ban <peer-id>`, exactly as for any node.
-* The token is scoped to the `sam:role:node` role. It cannot mint other
-  tokens, approve enrollments or reach the admin API; the admin token never
-  leaves the operator's terminal.
-* The code binds server and token together but the control plane does not
-  pin a token to a hostname: a token is valid at whatever URL the same
-  control plane answers on. Treat the printed line like the join token —
-  it is a credential until it is spent or expires.
+A quick tunnel changes hostname every start and comes with no uptime
+promise, and the first boot seeds an *open* development policy (the log
+says so). For anything with more than a handful of devices:
 
-## From demo to fleet
+* Give the mesh a stable `https` name and keep `~/sam-one`, or point
+  `--db-driver postgres` at a database.
+* Seed a real policy with `--policy-file`, and run with `--no-join-token`
+  so devices enroll only with tokens you mint.
+* Read the admin token from `SAM_ADMIN_TOKEN` or `--admin-token-path`
+  rather than the banner; `--enroll-qr=false` keeps codes out of
+  non-interactive logs.
+* Decide what happens to devices that go dark for more than a day: widen
+  `--control-plane-key-grace-period`, or mint their tokens with
+  `--autonomous-recovery`. The trade-off is how long a lost device can
+  keep renewing.
+* Want OIDC instead of tokens? Give `sam-one` an issuer (`--issuer`,
+  `--allowed-audiences`, `--oidc-client-id`) and the app's **Login &
+  Enroll** and **Device Login** flows work unchanged.
 
-`sam-one` is the same control plane, router and store as the split
-deployment in one process, so a device enrolled through a QR code gets the
-production credential lifecycle: a Biscuit bound to its own key, renewed
-through `POST /refresh` with a signed challenge well before its 24 h
-expiry, verified against rotating signing keys, revocable with
-`sam-one admin ban`. The mobile app runs the same renewal loop as
-`sam-node`. What separates a demo from a fleet is configuration:
-
-* **Drop the standing join token.** The auto-generated join token is a
-  ten-year, unlimited-use secret meant for `sam-node join` on a laptop.
-  Run with `--no-join-token`; devices then enroll only with tokens you
-  mint (`token qr`, `token create`) or through OIDC.
-* **Seed a real policy.** Without `--policy-file` the first boot installs
-  an open development policy (any enrolled node may declare any label and
-  register any service) and says so in the log. Use
-  `--control-plane-manual-enrollment` if each device should be approved in
-  the console before it gets a credential.
-* **Pass secrets, don't read them off the screen.** Secrets are only ever
-  read from a file (`--admin-token-path`, `--token-path`) or the environment
-  (`SAM_ADMIN_TOKEN`, `SAM_TOKEN`); there is deliberately no flag that takes
-  the value, so it never lands in `ps` output or shell history. When you
-  supply them, the banner names the source instead of echoing the value into
-  your logs. `--enroll-qr=false` keeps startup codes out of non-interactive
-  logs.
-* **Give the mesh a stable https name.** A quick tunnel changes hostname on
-  every start, and enrolled devices remember the URL they enrolled at —
-  fine for an afternoon, fatal for a fleet. Use Cloud Run, a named tunnel
-  on your own domain, or a reverse proxy with `--external-url`.
-* **Decide what happens to devices that go dark.** The signing key rotates
-  every 24 h and stays valid for verification for a 1 h grace period. A
-  device that renews inside that window is fine indefinitely; one that
-  comes back later holds a Biscuit no current key can verify, and
-  `/refresh` refuses it — the node exits rather than run unverified. Two
-  knobs, and they are a trade-off:
-  * Mint its token with `--autonomous-recovery`. The device may then
-    recover on proof of possession of its key alone, whenever it returns.
-    The cost is that a lost device keeps renewing until you ban it.
-  * Or widen the window for everyone with
-    `--control-plane-key-grace-period` (e.g. `168h` for a weekly check-in
-    cadence). The cost is that a stolen credential also lives that long.
-  Toggle recovery per device later from the console
-  (`POST /admin/nodes/{peer-id}/autonomous-recovery`).
-* **Keep the data directory.** `router.key` is the mesh's identity;
-  `sam.db` holds enrollments, tokens and policy. Back it up, or point
-  `--db-driver postgres` at a managed database. `sam-one` is a singleton by
-  design; when you need more than one control plane, move to the split
-  components with the Helm chart.
-
-Want OIDC instead of tokens? Give `sam-one` an issuer (`--issuer`,
-`--allowed-audiences`, `--oidc-client-id`) and the app's **Login & Enroll**
-and **Device Login** flows work unchanged, as does signing in to the
-console as an OIDC admin.
+Those are flags, not a different product.
