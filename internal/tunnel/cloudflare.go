@@ -181,12 +181,16 @@ func (c *Cloudflare) awaitPublished(ctx context.Context, rawURL string, deadline
 // strands every device behind that resolver, including a sam-node on this
 // very machine; the authoritative server has no cache to poison.
 func authoritativeLookup(ctx context.Context, host string) ([]string, error) {
-	zone := host[strings.IndexByte(host, '.')+1:]
+	parts := strings.Split(host, ".")
+	if len(parts) < 2 {
+		return nil, fmt.Errorf("invalid host: %s", host)
+	}
+	zone := strings.Join(parts[len(parts)-2:], ".")
 	nss, err := net.DefaultResolver.LookupNS(ctx, zone)
 	if err != nil {
 		return nil, err
 	}
-	if len(nss) == 0 {
+	if len(nss) == 0 || nss[0] == nil {
 		return nil, fmt.Errorf("no nameservers for %s", zone)
 	}
 	addrs, err := net.DefaultResolver.LookupHost(ctx, nss[0].Host)
