@@ -43,6 +43,25 @@ securityContext:
 # pod-private; set 0.0.0.0:8080 to expose it on the pod IP.
 bindAddr: "127.0.0.1:8080"
 
+# Plain HTTP port for /metrics, /healthz and /readyz, separate from bindAddr
+# so neither the scraper nor the kubelet needs the API token. Unauthenticated,
+# so it is only ever a containerPort. Set to 0 to disable it and the probes.
+metricsPort: 9090
+
+# Scraping of the metrics port. Each is a CRD the cluster may not have, so
+# both are off until you pick the collector you run.
+monitoring:
+  interval: 30s
+  # Google Managed Prometheus (monitoring.googleapis.com/v1 PodMonitoring),
+  # present by default on GKE.
+  podMonitoring:
+    enabled: false
+  # prometheus-operator (monitoring.coreos.com/v1 PodMonitor).
+  podMonitor:
+    enabled: false
+    # Extra labels, e.g. the release selector a Prometheus instance matches on.
+    labels: {}
+
 # Extra sam-node args, e.g. ["--discovery-interval=200ms"].
 extraArgs: []
 

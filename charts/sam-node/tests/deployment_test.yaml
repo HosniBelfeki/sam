@@ -125,3 +125,48 @@ tests:
       - equal:
           path: spec.template.spec.serviceAccountName
           value: existing-sa
+
+  - it: serves metrics on a containerPort the probes use, apart from the API
+    template: templates/deployment.yaml
+    set:
+      controlPlaneUrl: http://sam-mesh-control-plane:8080
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--metrics-addr=0.0.0.0:9090"
+      - equal:
+          path: spec.template.spec.containers[0].ports[0].name
+          value: metrics
+      - equal:
+          path: spec.template.spec.containers[0].ports[0].containerPort
+          value: 9090
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.path
+          value: /readyz
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.port
+          value: metrics
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.path
+          value: /healthz
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.httpGet.path
+          value: /healthz
+
+  - it: metricsPort 0 drops the listener, the port and the probes together
+    template: templates/deployment.yaml
+    set:
+      controlPlaneUrl: http://sam-mesh-control-plane:8080
+      metricsPort: 0
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: "--metrics-addr=0.0.0.0:9090"
+      - notExists:
+          path: spec.template.spec.containers[0].ports
+      - notExists:
+          path: spec.template.spec.containers[0].readinessProbe
+      - notExists:
+          path: spec.template.spec.containers[0].livenessProbe
+      - notExists:
+          path: spec.template.spec.containers[0].startupProbe

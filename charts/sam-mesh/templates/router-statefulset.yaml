@@ -87,13 +87,27 @@ spec:
           hostPort: {{ .Values.router.hostPort }}
           {{- end }}
           protocol: UDP
+        # Cluster-internal: never given a hostPort, nothing on it is authenticated.
+        - containerPort: {{ .Values.router.metricsPort }}
+          name: metrics
+          protocol: TCP
+        # /healthz answers as soon as the process is up; /readyz once the
+        # router has enrolled and its libp2p host is online.
+        startupProbe:
+          httpGet:
+            path: /healthz
+            port: metrics
+          periodSeconds: 5
+          failureThreshold: 24
         readinessProbe:
-          tcpSocket:
-            port: p2p-tcp
+          httpGet:
+            path: /readyz
+            port: metrics
           periodSeconds: 5
         livenessProbe:
-          tcpSocket:
-            port: p2p-tcp
+          httpGet:
+            path: /healthz
+            port: metrics
           periodSeconds: 15
         resources:
           {{- toYaml .Values.router.resources | nindent 10 }}
@@ -112,6 +126,7 @@ spec:
         - "--insecure-control-plane"
         - "--listen=/ip4/0.0.0.0/tcp/4501"
         - "--listen=/ip4/0.0.0.0/udp/4501/quic-v1"
+        - "--metrics-addr=0.0.0.0:{{ .Values.router.metricsPort }}"
         {{- if .Values.router.externalAddrs }}
         {{- range .Values.router.externalAddrs }}
         - "--external-addr={{ . }}"
