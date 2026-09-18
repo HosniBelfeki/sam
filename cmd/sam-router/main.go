@@ -45,6 +45,7 @@ var (
 	dhtMaxRecordAge      time.Duration
 	lowWaterMark         int
 	highWaterMark        int
+	metricsAddr          string
 )
 
 var logger = golog.Logger("sam-router-cli")
@@ -84,6 +85,7 @@ func main() {
 				DHTMaxRecordAge:           dhtMaxRecordAge,
 				LowWaterMark:              lowWaterMark,
 				HighWaterMark:             highWaterMark,
+				MetricsAddr:               metricsAddr,
 			}
 
 			r, err := router.NewRouter(cmd.Context(), opts)
@@ -122,6 +124,7 @@ func main() {
 	rootCmd.Flags().DurationVar(&dhtMaxRecordAge, "dht-max-record-age", 0, "Maximum age for DHT records (0s uses library default)")
 	rootCmd.Flags().IntVar(&lowWaterMark, "low-watermark", 1000, "Connection manager low watermark limit")
 	rootCmd.Flags().IntVar(&highWaterMark, "high-watermark", 4000, "Connection manager high watermark limit")
+	rootCmd.Flags().StringVar(&metricsAddr, "metrics-addr", "", "Serve Prometheus /metrics, /healthz and /readyz on this address (e.g. 0.0.0.0:9090); unauthenticated, off by default")
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()

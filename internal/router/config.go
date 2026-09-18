@@ -57,6 +57,10 @@ type Options struct {
 	// to a non-loopback host. Off by default: whoever answers that URL is
 	// the trust root.
 	AllowInsecureControlPlane bool
+	// MetricsAddr, when set, serves /metrics, /healthz and /readyz on a
+	// plain HTTP listener separate from the libp2p ports. Off by default:
+	// the listener is unauthenticated, so the operator names where it binds.
+	MetricsAddr string
 }
 
 // Default sets default values for options.

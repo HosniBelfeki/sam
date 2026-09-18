@@ -136,6 +136,9 @@ type Router struct {
 	wg       sync.WaitGroup
 	isReady  atomic.Bool
 	shutdown bool
+
+	metricsServer *http.Server
+	metricsAddr   net.Addr
 }
 
 // NewRouter initializes the router.
@@ -236,6 +239,14 @@ func perIPConnResourceManager(limit int) (network.ResourceManager, error) {
 
 // Start performs enrollment, syncs keys, launches libp2p host, and starts tasks.
 func (r *Router) Start() error {
+	// The operator listener comes up first so /healthz answers while
+	// enrollment is still in flight; /readyz turns 200 at the end.
+	if r.config.MetricsAddr != "" {
+		if err := r.serveMetrics(r.config.MetricsAddr); err != nil {
+			return fmt.Errorf("failed to start metrics listener: %w", err)
+		}
+	}
+
 	// 1. Load or Generate persistent identity key
 	priv, err := getOrGeneratePeerKey(r.config.KeysDBPath)
 	if err != nil {
@@ -913,6 +924,7 @@ func (r *Router) renewLease() {
 		resp, err := client.Post(r.config.ControlPlaneURL+"/routers/lease", "application/x-protobuf", bytes.NewReader(data))
 		if err != nil {
 			logger.Errorf("Failed to renew lease with control plane: %v", err)
+			leaseRenewalsTotal.WithLabelValues(leaseUnreachable).Inc()
 			return
 		}
 
@@ -921,6 +933,7 @@ func (r *Router) renewLease() {
 
 		if resp.StatusCode == http.StatusUnauthorized && attempt == 0 {
 			logger.Warnf("Control plane lease renewal rejected (401 Unauthorized: %s), attempting recovery...", string(body))
+			leaseRenewalsTotal.WithLabelValues(leaseUnauthorized).Inc()
 			if err := r.recoverAfterLease401(); err != nil {
 				logger.Errorf("Recovery failed after 401 Unauthorized lease renewal: %v", err)
 				return
@@ -931,19 +944,23 @@ func (r *Router) renewLease() {
 
 		if resp.StatusCode != http.StatusOK {
 			logger.Errorf("Control plane lease renewal rejected, status %s: %s", resp.Status, string(body))
+			leaseRenewalsTotal.WithLabelValues(leaseRejected).Inc()
 			return
 		}
 
 		var leaseResp api.RouterLeaseResponse
 		if err := proto.Unmarshal(body, &leaseResp); err != nil {
 			logger.Errorf("Failed to parse lease response: %v", err)
+			leaseRenewalsTotal.WithLabelValues(leaseRejected).Inc()
 			return
 		}
 
 		if !leaseResp.Success {
 			logger.Errorf("Lease renewal failed: %s", leaseResp.Error)
+			leaseRenewalsTotal.WithLabelValues(leaseRejected).Inc()
 		} else {
 			logger.Debugf("Lease renewed successfully. Expires at: %s", time.Unix(leaseResp.ExpiresAt, 0))
+			leaseRenewalsTotal.WithLabelValues(leaseOK).Inc()
 		}
 		return
 	}
@@ -1137,12 +1154,14 @@ func (r *Router) HandleAuthHandshake(s network.Stream) {
 
 	if _, banned := r.bannedPeers.Load(remotePeer); banned {
 		logger.Warnf("[AuthN] Rejecting authentication for banned peer %s", remotePeer)
+		authHandshakesTotal.WithLabelValues(handshakeBanned).Inc()
 		_ = s.Reset()
 		return
 	}
 
 	if r.handshakeLimiter != nil && !r.handshakeLimiter.Allow(remotePeer.String()) {
 		logger.Warnf("[AuthN] Handshake rate limit exceeded for %s", remotePeer)
+		authHandshakesTotal.WithLabelValues(handshakeRateLimited).Inc()
 		_ = s.Reset()
 		return
 	}
@@ -1154,6 +1173,7 @@ func (r *Router) HandleAuthHandshake(s network.Stream) {
 	msg, err := reader.ReadMsg()
 	if err != nil {
 		logger.Errorf("[AuthN] Failed to read handshake from %s: %v", remotePeer, err)
+		authHandshakesTotal.WithLabelValues(handshakeReadFailed).Inc()
 		return
 	}
 	defer reader.ReleaseMsg(msg)
@@ -1161,6 +1181,7 @@ func (r *Router) HandleAuthHandshake(s network.Stream) {
 	var exchange api.AuthFrame
 	if err := proto.Unmarshal(msg, &exchange); err != nil {
 		logger.Warnf("[AuthN] Invalid protobuf from %s", remotePeer)
+		authHandshakesTotal.WithLabelValues(handshakeInvalidFrame).Inc()
 		return
 	}
 
@@ -1168,11 +1189,13 @@ func (r *Router) HandleAuthHandshake(s network.Stream) {
 	_, err = identity.VerifyBiscuit(exchange.Biscuit, remotePeer, r.getTrustedPublicKeys(), r.config.BiscuitTimeout)
 	if err != nil {
 		logger.Warnf("[AuthN] Authorization failed for peer %s: %v", remotePeer, err)
+		authHandshakesTotal.WithLabelValues(handshakeUnauthorized).Inc()
 		_ = s.Reset()
 		return
 	}
 
 	r.authenticatedPeers.Store(remotePeer, true)
+	authHandshakesTotal.WithLabelValues(handshakeOK).Inc()
 	logger.Infof("[AuthN] Successfully authenticated peer %s", remotePeer)
 
 	// Send mutual response (our biscuit)
@@ -1250,6 +1273,11 @@ func (r *Router) Close() error {
 	r.cancel()
 
 	var errs []error
+	if r.metricsServer != nil {
+		if err := r.metricsServer.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
 	if r.DHT != nil {
 		if err := r.DHT.Close(); err != nil {
 			errs = append(errs, err)
