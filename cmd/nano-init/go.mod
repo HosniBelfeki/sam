@@ -1,6 +1,6 @@
 module github.com/google/sam/cmd/nano-init
 
-go 1.26.5
+go 1.26.6
 
 require (
 	github.com/aojea/agents.net/tun2connect v0.0.1

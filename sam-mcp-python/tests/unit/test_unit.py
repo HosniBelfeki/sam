@@ -12,7 +12,7 @@ async def test_client_get_tools():
          
         mock_cm = AsyncMock()
         mock_sh_client.return_value = mock_cm
-        mock_cm.__aenter__.return_value = (MagicMock(), MagicMock(), MagicMock())
+        mock_cm.__aenter__.return_value = (MagicMock(), MagicMock())
         mock_cm.__aexit__ = AsyncMock()
         
         mock_session = MockClientSession.return_value
@@ -22,16 +22,17 @@ async def test_client_get_tools():
         
         mock_tool = MagicMock()
         mock_tool.name = "test_tool"
-        mock_tool.model_dump.return_value = {"name": "test_tool"}
+        mock_tool.model_dump.return_value = {"name": "test_tool", "inputSchema": {"type": "object"}}
         
         mock_resp = MagicMock()
         mock_resp.tools = [mock_tool]
         mock_session.list_tools = AsyncMock(return_value=mock_resp)
         
-        async with SamClient(server_url="http://localhost:8080/sse") as client:
+        async with SamClient(server_url="http://localhost:8080/mcp") as client:
             tools = await client.get_tools()
             assert len(tools) == 1
             assert tools[0]["name"] == "test_tool"
+            mock_tool.model_dump.assert_called_once_with(by_alias=True, mode="json")
 
 # Adapter Tests
 def test_langchain_adapter():

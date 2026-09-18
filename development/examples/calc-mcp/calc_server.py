@@ -1,7 +1,7 @@
 """Calculator MCP backend exposed by node B in the local dev mesh."""
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
-mcp = FastMCP("calculator", host="0.0.0.0", port=7777)
+mcp = MCPServer("calculator")
 
 
 @mcp.tool()
@@ -17,4 +17,4 @@ def multiply(a: float, b: float) -> float:
 
 
 if __name__ == "__main__":
-    mcp.run(transport="streamable-http")
+    mcp.run(transport="streamable-http", host="0.0.0.0", port=7777)

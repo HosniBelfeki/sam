@@ -26,67 +26,22 @@ import (
 // VerifyJWT parses and cryptographically validates a JWT token against a list of allowed audiences
 // and resolved OIDC providers.
 func VerifyJWT(ctx context.Context, jwtStr string, allowedAudiences []string, providers map[string]*oidc.Provider) (jwt.MapClaims, *oidc.IDToken, error) {
-	jwtParser := jwt.Parser{}
-	jwtToken, _, err := jwtParser.ParseUnverified(jwtStr, jwt.MapClaims{})
+	// The unverified parse exists only to pick the issuer whose keys will
+	// verify the token. Nothing read here is trusted: the audience and the
+	// returned claims come from the token Verify hands back, and a token that
+	// names an issuer it was not signed by fails there.
+	iss, err := issuerHint(jwtStr)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to parse JWT: %w", err)
+		return nil, nil, err
 	}
 
-	// 1. Defend against downgrade attacks immediately
-	alg, ok := jwtToken.Header["alg"].(string)
-	if !ok || alg == "" || strings.ToLower(alg) == "none" {
-		return nil, nil, fmt.Errorf("invalid or missing alg header")
-	}
-
-	claims, ok := jwtToken.Claims.(jwt.MapClaims)
-	if !ok {
-		return nil, nil, fmt.Errorf("invalid JWT claims")
-	}
-	iss, _ := claims["iss"].(string)
-
-	// 2. Extract all audiences; the aud claim may be a string or an array.
-	var auds []string
-	switch a := claims["aud"].(type) {
-	case string:
-		auds = []string{a}
-	case []any:
-		for _, v := range a {
-			if s, ok := v.(string); ok {
-				auds = append(auds, s)
-			}
-		}
-	}
-
-	if len(auds) == 0 {
-		return nil, nil, fmt.Errorf("missing aud claim")
-	}
-
-	// 3. Accept if any audience matches an allowed one: a multi-audience token
-	// only needs to be intended for us, whatever else it names.
-	validAudience := false
-	for _, aud := range auds {
-		for _, allowed := range allowedAudiences {
-			if aud == allowed {
-				validAudience = true
-				break
-			}
-		}
-		if validAudience {
-			break
-		}
-	}
-	if !validAudience {
-		return nil, nil, fmt.Errorf("untrusted audience(s): %s", strings.Join(auds, ", "))
-	}
-
-	// 4. Route to the correct provider
 	provider, ok := providers[iss]
 	if !ok {
 		return nil, nil, fmt.Errorf("unknown issuer: %s", iss)
 	}
 
-	// 5. Verify cryptographic signature, bypassing the strict single-clientID check
-	// because we already validated the audience against our allowed list above.
+	// SkipClientIDCheck because the verifier only knows how to match a single
+	// client ID; the allowed-audience check below runs on the verified token.
 	verifier := provider.Verifier(&oidc.Config{
 		SkipClientIDCheck: true,
 	})
@@ -96,12 +51,56 @@ func VerifyJWT(ctx context.Context, jwtStr string, allowedAudiences []string, pr
 		return nil, nil, fmt.Errorf("JWT validation failed: %w", err)
 	}
 
-	// Return claims decoded from the verified token, not the unverified
-	// pre-parse used above only to route to the right issuer.
+	if err := checkAudience(token.Audience, allowedAudiences); err != nil {
+		return nil, nil, err
+	}
+
 	var verifiedClaims jwt.MapClaims
 	if err := token.Claims(&verifiedClaims); err != nil {
 		return nil, nil, fmt.Errorf("failed to decode verified claims: %w", err)
 	}
 
 	return verifiedClaims, token, nil
+}
+
+// issuerHint reads the iss claim without verifying the signature. It also
+// refuses alg=none up front so a downgrade attempt never reaches a verifier.
+func issuerHint(jwtStr string) (string, error) {
+	jwtParser := jwt.Parser{}
+	jwtToken, _, err := jwtParser.ParseUnverified(jwtStr, jwt.MapClaims{})
+	if err != nil {
+		return "", fmt.Errorf("failed to parse JWT: %w", err)
+	}
+
+	alg, ok := jwtToken.Header["alg"].(string)
+	if !ok || alg == "" || strings.ToLower(alg) == "none" {
+		return "", fmt.Errorf("invalid or missing alg header")
+	}
+
+	claims, ok := jwtToken.Claims.(jwt.MapClaims)
+	if !ok {
+		return "", fmt.Errorf("invalid JWT claims")
+	}
+	iss, ok := claims["iss"].(string)
+	if !ok || iss == "" {
+		return "", fmt.Errorf("missing or invalid iss claim")
+	}
+	return iss, nil
+}
+
+// checkAudience accepts a token if any of its audiences is allowed: a
+// multi-audience token only needs to be intended for us, whatever else it
+// names.
+func checkAudience(auds, allowedAudiences []string) error {
+	if len(auds) == 0 {
+		return fmt.Errorf("missing aud claim")
+	}
+	for _, aud := range auds {
+		for _, allowed := range allowedAudiences {
+			if aud == allowed {
+				return nil
+			}
+		}
+	}
+	return fmt.Errorf("untrusted audience(s): %s", strings.Join(auds, ", "))
 }
