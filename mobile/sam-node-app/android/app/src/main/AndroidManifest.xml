@@ -37,6 +37,12 @@
               android:name="io.flutter.embedding.android.NormalTheme"
               android:resource="@style/NormalTheme"
               />
+            <!-- sam://enroll links are handled by MainActivity's enroll_link
+                 channel; without this the engine also pushes them as a
+                 Navigator route, which MaterialApp has no page for. -->
+            <meta-data
+              android:name="flutter_deeplinking_enabled"
+              android:value="false" />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
@@ -61,7 +67,7 @@
         <property
             android:name="android.app.appfunctions.app_function_schema_version"
             android:value="1" />
-    <!-- Foreground Service for keeping SAM Node alive -->
+    <!-- Foreground Service that keeps the SAM Connect node alive -->
         <service 
             android:name=".SamNodeForegroundService"
             android:foregroundServiceType="connectedDevice|location"

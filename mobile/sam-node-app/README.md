@@ -1,4 +1,4 @@
-# SAM Node Mobile (Flutter Client)
+# SAM Connect (Flutter Client)
 
 This folder contains a Flutter application that packages and runs the native Go-based `sam-node` mesh client on mobile devices (Android and iOS) using Go's CGO compiler and Dart FFI (Foreign Function Interface).
 
@@ -97,7 +97,7 @@ Publishing is keyless: [`hack/publish-play.sh`](../../hack/publish-play.sh) driv
 
 Once launched, the app (installed as **SAM Connect**, application id `dev.sammesh.connect`) asks you to enroll, then shows the dashboard:
 
-1.  **Scan enrollment code**: The primary path. `sam-one` prints a single-use `sam://enroll?server=...&token=...` QR code at startup (and on demand with `sam-one token qr`); scan it, confirm the control plane hostname, and the app enrolls through `POST /enroll` with no identity provider involved. The phone's stock camera app can scan it too: the `sam://` link opens SAM Connect. Only `https://` control planes are accepted (plaintext `http://` for loopback only), because the control plane is the device's trust root. See [Device Enrollment](../../site/content/docs/user/device-enrollment.md).
+1.  **Scan enrollment code**: The primary path. `sam-one` prints a single-use `sam://enroll?server=...&token=...` QR code at startup (and on demand with `sam-one token qr`); scan it, confirm the control plane hostname, and the app enrolls through `POST /enroll` with no identity provider involved. The phone's stock camera app can scan it too: the `sam://` link opens SAM Connect. Only `https://` control planes are accepted (plaintext `http://` for loopback only), because the control plane is the device's trust root. See [A Mesh in 30 Seconds](../../site/content/docs/user/device-enrollment.md).
 2.  **Enter details manually**: Paste a whole `sam://enroll` link or a bare bootstrap token together with the **Control plane URL**, then **Join with token**. On a full control plane, mint the token with `POST /admin/bootstrap-tokens` (see `development/kind/run-local-node.sh`); on `sam-one`, `sam-one token create`. Below it, **Login & Enroll (Browser)** and **Device Login** are the OIDC alternatives: the app reads the issuer from the control plane's `/info` endpoint and opens a login.
 3.  **Local API Token**: The bearer token that secures the local sidecar REST API. It is generated on first launch and kept in the app's private storage; view, copy or regenerate it on the **Config** tab. There is no default: Android loopback is shared by every installed app, so a fixed value would let any of them act as this node.
 4.  **Labels**: Set on the **Config** tab *before* enrolling; they are attested into the node's Biscuit at that point.

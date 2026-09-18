@@ -8,7 +8,6 @@ import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:firebase_core/firebase_core.dart';
-import 'package:firebase_ai/firebase_ai.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:qr_flutter/qr_flutter.dart';
@@ -81,7 +80,7 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'SAM Node Control',
+      title: 'SAM Connect',
       theme: ThemeData(
         primarySwatch: Colors.blue,
         useMaterial3: true,
@@ -99,8 +98,10 @@ class NodeControlPage extends StatefulWidget {
 }
 
 class _NodeControlPageState extends State<NodeControlPage> {
-  final _controlPlaneController =
-      TextEditingController(text: 'https://bananas.sam-mesh.dev');
+  // No default: a pre-filled public testnet would let a mistap enroll the
+  // device somewhere the user never chose. The QR code, a pasted link or
+  // the user fills it in.
+  final _controlPlaneController = TextEditingController();
   final _jwtController = TextEditingController();
   // Saved by the FFI at enrollment so Re-enroll can skip the browser.
   String _refreshToken = '';
@@ -135,7 +136,8 @@ class _NodeControlPageState extends State<NodeControlPage> {
   bool?
       _isEnrolled; // null = checking, false = show enrollment, true = show dashboard
   bool _running = false;
-  String _status = 'Disconnected';
+  // Empty until something happens; the enrollment screen shows it as a card.
+  String _status = '';
   String _nodeID = '';
   int _connectedPeers = 0;
   int _dhtSize = 0;
@@ -314,6 +316,20 @@ class _NodeControlPageState extends State<NodeControlPage> {
     return base64UrlEncode(values).replaceAll('=', '');
   }
 
+  // The OIDC paths need a control plane to ask for the issuer; there is no
+  // default one.
+  bool _requireControlPlaneUrl() {
+    final server = _controlPlaneController.text.trim();
+    if (isTrustedControlPlaneUrl(server)) return true;
+    setState(() {
+      _manualEntry = true;
+      _status = server.isEmpty
+          ? 'Enter the control plane URL first'
+          : 'Control plane URL must be https:// (plain http only for localhost)';
+    });
+    return false;
+  }
+
   String _generateCodeChallenge(String verifier) {
     final bytes = utf8.encode(verifier);
     final digest = sha256.convert(bytes);
@@ -322,6 +338,7 @@ class _NodeControlPageState extends State<NodeControlPage> {
 
   Future<void> _loginAndEnroll() async {
     debugPrint('DEBUG: _loginAndEnroll started');
+    if (!_requireControlPlaneUrl()) return;
     setState(() {
       _loggingIn = true;
       _status = 'Fetching control plane info...';
@@ -530,6 +547,7 @@ class _NodeControlPageState extends State<NodeControlPage> {
   }
 
   Future<void> _startDeviceLogin() async {
+    if (!_requireControlPlaneUrl()) return;
     setState(() {
       _loggingIn = true;
       _status = 'Fetching control plane info for device login...';
@@ -1167,7 +1185,7 @@ class _NodeControlPageState extends State<NodeControlPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('SAM Node Mobile')),
+      appBar: AppBar(title: const Text('SAM Connect')),
       body: _selectedTab == 0
           ? _buildBody()
           : _selectedTab == 1
@@ -1581,7 +1599,7 @@ class _NodeControlPageState extends State<NodeControlPage> {
               decoration: const InputDecoration(
                 labelText: 'Control plane URL',
                 border: OutlineInputBorder(),
-                hintText: 'https://bananas.sam-mesh.dev',
+                hintText: 'https://mesh.example.com',
               ),
             ),
             const SizedBox(height: 12),
@@ -1651,31 +1669,8 @@ class _NodeControlPageState extends State<NodeControlPage> {
               color: Colors.grey.shade100,
               child: Padding(
                 padding: const EdgeInsets.all(16.0),
-                child: Column(
-                  children: [
-                    Text('Status: $_status',
-                        style: const TextStyle(fontStyle: FontStyle.italic)),
-                    const SizedBox(height: 10),
-                    ElevatedButton(
-                      onPressed: () async {
-                        try {
-                          final model = FirebaseAI.googleAI().generativeModel(
-                            model: 'gemini-2.5-flash',
-                          );
-                          debugPrint('DEBUG: Model initialized: ${model.hashCode}');
-                          setState(() {
-                            _status = 'Debug: Model initialized';
-                          });
-                        } catch (e) {
-                          setState(() {
-                            _status = 'API Error: $e';
-                          });
-                        }
-                      },
-                      child: const Text('Debug API Connection'),
-                    ),
-                  ],
-                ),
+                child: Text('Status: $_status',
+                    style: const TextStyle(fontStyle: FontStyle.italic)),
               ),
             ),
         ],

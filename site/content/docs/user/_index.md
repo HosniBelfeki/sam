@@ -20,8 +20,8 @@ Welcome to the User & Operator Guides. This section provides detailed documentat
 4. **[Production Kubernetes Deployment](kubernetes-deployment/)**
    Deploy a production-grade mesh cluster in Kubernetes, including Dex OIDC setups, StatefulSet P2P routers, DNS A-record synchronizers, and Workload Identity ServiceAccount token projections.
 
-5. **[SAM Mobile App](mobile-app/)**
+5. **[SAM Connect](mobile-app/)**
    Turn your mobile device into a SAM node, exposing sensors and telemetry securely to the mesh, and integrating with native OS assistants.
 
-6. **[Device Enrollment (QR Code)](device-enrollment/)**
-   Enroll phones by scanning a single-use `sam://enroll` code printed by `sam-one`, including publishing a laptop on a public https URL through a tunnel.
+6. **[A Mesh in 30 Seconds](device-enrollment/)**
+   Run `sam-one` on a laptop, scan the QR code with SAM Connect, and call a sensor on the phone from the laptop through the mesh. Two devices behind NAT, no server, domain or identity provider to set up first.

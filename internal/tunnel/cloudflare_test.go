@@ -22,6 +22,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -31,6 +32,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"golang.org/x/net/dns/dnsmessage"
 )
 
 // stubCloudflared writes a shell script that mimics cloudflared's banner on
@@ -42,6 +45,61 @@ func stubCloudflared(t *testing.T, body string) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+// resolved is a LookupHost for tests whose fake hostnames exist nowhere.
+func resolved(context.Context, string) ([]string, error) { return []string{"192.0.2.1"}, nil }
+
+// fakeAuthoritative starts a UDP nameserver that answers NXDOMAIN for the
+// first misses queries and an A record afterwards, like the zone's own
+// server watching a record get created. It returns its address and the
+// query counter.
+func fakeAuthoritative(t *testing.T, misses int32) (string, *atomic.Int32) {
+	t.Helper()
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = pc.Close() })
+	var n atomic.Int32
+	go func() {
+		buf := make([]byte, 512)
+		for {
+			sz, from, err := pc.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			var q dnsmessage.Message
+			if err := q.Unpack(buf[:sz]); err != nil || len(q.Questions) != 1 {
+				continue
+			}
+			resp := dnsmessage.Message{
+				Header:    dnsmessage.Header{ID: q.ID, Response: true, Authoritative: true, RCode: dnsmessage.RCodeNameError},
+				Questions: q.Questions,
+			}
+			// Go asks A and AAAA in parallel; only A queries advance the
+			// record's existence, AAAA just mirrors the current state.
+			exists := n.Load() > misses
+			if q.Questions[0].Type == dnsmessage.TypeA {
+				exists = n.Add(1) > misses
+			}
+			if exists {
+				resp.RCode = dnsmessage.RCodeSuccess
+				if q.Questions[0].Type == dnsmessage.TypeA {
+					resp.Answers = []dnsmessage.Resource{{
+						Header: dnsmessage.ResourceHeader{Name: q.Questions[0].Name, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET, TTL: 300},
+						Body:   &dnsmessage.AResource{A: [4]byte{192, 0, 2, 1}},
+					}}
+				}
+			}
+			out, err := resp.Pack()
+			if err != nil {
+				continue
+			}
+			_, _ = pc.WriteTo(out, from)
+		}
+	}()
+	return pc.LocalAddr().String(), &n
 }
 
 func TestCloudflareOpenParsesQuickTunnelURL(t *testing.T) {
@@ -57,7 +115,7 @@ echo "INF +------------------------------------------------------------+" >&2
 trap 'exit 0' TERM
 while :; do sleep 1; done
 `)
-	p := &Cloudflare{Binary: bin, Timeout: 5 * time.Second}
+	p := &Cloudflare{Binary: bin, Timeout: 5 * time.Second, LookupHost: resolved}
 	tun, err := p.Open(context.Background(), "http://127.0.0.1:18080")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -103,6 +161,76 @@ func TestCloudflareOpenTimesOutWithoutURL(t *testing.T) {
 	p := &Cloudflare{Binary: bin, Timeout: 200 * time.Millisecond}
 	if _, err := p.Open(context.Background(), "http://127.0.0.1:1"); err == nil || !strings.Contains(err.Error(), "did not publish") {
 		t.Fatalf("Open error = %v, want timeout error", err)
+	}
+}
+
+// Open must not hand back a URL nobody can resolve yet: the phone that scans
+// the QR code in the next second would be told the host does not exist.
+func TestCloudflareOpenWaitsForHostnameToBePublished(t *testing.T) {
+	bin := stubCloudflared(t, idleConnector)
+	var lookups atomic.Int32
+	p := &Cloudflare{Binary: bin, Timeout: 5 * time.Second, LookupHost: func(_ context.Context, host string) ([]string, error) {
+		if host != "installed-quick-1234.trycloudflare.com" {
+			t.Errorf("lookup of %q, want the tunnel hostname", host)
+		}
+		if lookups.Add(1) <= 2 {
+			return nil, &net.DNSError{Err: "no such host", Name: host, IsNotFound: true}
+		}
+		return []string{"192.0.2.1"}, nil
+	}}
+	start := time.Now()
+	tun, err := p.Open(context.Background(), "http://127.0.0.1:1")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	_ = tun.Close()
+	if n := lookups.Load(); n != 3 {
+		t.Fatalf("lookups = %d, want 3 (two NXDOMAIN, then an answer)", n)
+	}
+	if waited := time.Since(start); waited < time.Second {
+		t.Fatalf("Open returned after %s, before the name was published", waited)
+	}
+}
+
+// A name that never shows up delays Open by at most Timeout; the tunnel is
+// still returned because DNS, not the tunnel, is what is lagging.
+func TestCloudflareOpenGivesUpOnDNSAtDeadline(t *testing.T) {
+	bin := stubCloudflared(t, idleConnector)
+	p := &Cloudflare{Binary: bin, Timeout: time.Second, LookupHost: func(_ context.Context, host string) ([]string, error) {
+		return nil, &net.DNSError{Err: "no such host", Name: host, IsNotFound: true}
+	}}
+	start := time.Now()
+	tun, err := p.Open(context.Background(), "http://127.0.0.1:1")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	_ = tun.Close()
+	if waited := time.Since(start); waited < time.Second || waited > 4*time.Second {
+		t.Fatalf("Open took %s, want about the 1s timeout", waited)
+	}
+	if tun.URL() != "https://installed-quick-1234.trycloudflare.com" {
+		t.Fatalf("URL = %q", tun.URL())
+	}
+}
+
+// lookupAt asks only the given server, so a recursive resolver in between
+// never sees (and never caches) a query for a name that does not exist yet.
+func TestLookupAtAsksOnlyTheGivenServer(t *testing.T) {
+	server, queries := fakeAuthoritative(t, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, err := lookupAt(ctx, server, "fresh-quick-1234.trycloudflare.com")
+	var dnsErr *net.DNSError
+	if !errors.As(err, &dnsErr) || !dnsErr.IsNotFound {
+		t.Fatalf("first lookup err = %v, want IsNotFound", err)
+	}
+	addrs, err := lookupAt(ctx, server, "fresh-quick-1234.trycloudflare.com")
+	if err != nil || len(addrs) != 1 || addrs[0] != "192.0.2.1" {
+		t.Fatalf("second lookup = %v, %v; want [192.0.2.1]", addrs, err)
+	}
+	if n := queries.Load(); n < 2 {
+		t.Fatalf("fake server saw %d queries, want the lookups to reach it", n)
 	}
 }
 
@@ -180,6 +308,7 @@ func TestCloudflareDownloadsPinnedReleaseWithConsent(t *testing.T) {
 				InstallDir: dir,
 				ReleaseURL: base,
 				Timeout:    5 * time.Second,
+				LookupHost: resolved,
 				Consent: func(version, url string) bool {
 					asked = append(asked, version+" "+url)
 					return true
@@ -238,7 +367,7 @@ func TestCloudflareRejectsTamperedDownloadAndCache(t *testing.T) {
 	base, _ := fakeRelease(t, idleConnector, false)
 	t.Setenv("PATH", t.TempDir())
 	dir := filepath.Join(t.TempDir(), "bin")
-	p := &Cloudflare{InstallDir: dir, ReleaseURL: base, Timeout: 5 * time.Second, Consent: func(string, string) bool { return true }}
+	p := &Cloudflare{InstallDir: dir, ReleaseURL: base, Timeout: 5 * time.Second, LookupHost: resolved, Consent: func(string, string) bool { return true }}
 
 	// A cached file with the right name but the wrong content is never run;
 	// it is replaced by a verified download.

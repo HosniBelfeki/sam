@@ -1,12 +1,12 @@
 ---
-title: "SAM Mobile App (Android/iOS)"
-linkTitle: "Mobile App"
+title: "SAM Connect (Android/iOS)"
+linkTitle: "SAM Connect"
 weight: 5
 ---
 
-# SAM Node Mobile (Flutter Client)
+# SAM Connect (Flutter Client)
 
-The SAM Mobile App is a Flutter application that packages and runs the native Go-based `sam-node` mesh client on mobile devices using Go's CGO compiler and Dart FFI (Foreign Function Interface).
+SAM Connect is a Flutter application that packages and runs the native Go-based `sam-node` mesh client on mobile devices using Go's CGO compiler and Dart FFI (Foreign Function Interface).
 
 It allows you to turn your phone into a fully functional node in the Sovereign Agent Mesh, exposing device sensors and capabilities securely to AI agents.
 
@@ -37,7 +37,7 @@ Exposes capabilities directly to the OS registry, allowing native assistants (li
 
 ## How to Use the Application
 
-1.  **Enrollment**: Tap **Scan enrollment code** and scan the `sam://enroll` QR code printed by `sam-one` (see [Device Enrollment](../device-enrollment/)), or open **Enter details manually** to paste a bootstrap token, or sign in through the control plane's identity provider (browser or device login) with its **Control plane URL** (e.g., `https://bananas.sam-mesh.dev`).
+1.  **Enrollment**: Tap **Scan enrollment code** and scan the `sam://enroll` QR code printed by `sam-one` (see [A Mesh in 30 Seconds](../device-enrollment/)), or open **Enter details manually** to paste a bootstrap token, or sign in through the control plane's identity provider (browser or device login) with its **Control plane URL** (e.g., `https://bananas.sam-mesh.dev`).
 2.  **API Token**: A local API token securing local access is generated on first launch; view or regenerate it on the Config tab.
 3.  **Start Node**: Launches the background Go node runtime.
 4.  **Dashboard**: Monitor connected peers and DHT size.

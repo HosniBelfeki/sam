@@ -91,32 +91,38 @@ mobile-app-google-services:
 		fi; \
 	fi
 
-.PHONY: mobile-app-jnilibs-arm64
+.PHONY: mobile-app-jnilibs-arm64 mobile-app-jnilibs-x86_64
 mobile-app-jnilibs-arm64: mobile-ffi-android
 	mkdir -p $(MOBILE_APP_DIR)/android/app/src/main/jniLibs/arm64-v8a
 	cp "$(OUT_DIR)/android/libsam.so" $(MOBILE_APP_DIR)/android/app/src/main/jniLibs/arm64-v8a/libsam.so
 
-mobile-app-apk: mobile-app-jnilibs-arm64 mobile-app-google-services
-	cd $(MOBILE_APP_DIR) && flutter build apk --release $(MOBILE_FLUTTER_BUILD_FLAGS)
-
-mobile-app-apk-emulator: mobile-ffi-android-x86_64 mobile-app-google-services
+mobile-app-jnilibs-x86_64: mobile-ffi-android-x86_64
 	mkdir -p $(MOBILE_APP_DIR)/android/app/src/main/jniLibs/x86_64
 	cp "$(OUT_DIR)/android-x86_64/libsam.so" $(MOBILE_APP_DIR)/android/app/src/main/jniLibs/x86_64/libsam.so
+
+mobile-app-apk: mobile-app-jnilibs-arm64 mobile-app-jnilibs-x86_64 mobile-app-google-services
+	cd $(MOBILE_APP_DIR) && flutter build apk --release --target-platform android-arm64,android-x64 $(MOBILE_FLUTTER_BUILD_FLAGS)
+
+mobile-app-apk-emulator: mobile-app-jnilibs-x86_64 mobile-app-google-services
 	cd $(MOBILE_APP_DIR) && flutter build apk --release $(MOBILE_FLUTTER_BUILD_FLAGS)
 
 # Android App Bundle for Google Play. Play rejects debug-signed bundles, so an
 # upload key is required: either $(MOBILE_APP_DIR)/android/key.properties or
 # the ANDROID_KEYSTORE_PATH / ANDROID_KEYSTORE_PASSWORD / ANDROID_KEY_ALIAS /
 # ANDROID_KEY_PASSWORD environment variables (see mobile/sam-node-app/README.md).
+#
+# Play serves each device the split for its own ABI, so the bundle must only
+# contain ABIs that have a libsam.so: Flutter's default set also includes
+# armeabi-v7a, which would install and then die opening the FFI library.
 .PHONY: mobile-app-bundle
-mobile-app-bundle: mobile-app-jnilibs-arm64 mobile-app-google-services
+mobile-app-bundle: mobile-app-jnilibs-arm64 mobile-app-jnilibs-x86_64 mobile-app-google-services
 	@if [ ! -f $(MOBILE_APP_DIR)/android/key.properties ] && \
 	   { [ -z "$$ANDROID_KEYSTORE_PATH" ] || [ -z "$$ANDROID_KEYSTORE_PASSWORD" ] || [ -z "$$ANDROID_KEY_ALIAS" ] || [ -z "$$ANDROID_KEY_PASSWORD" ]; }; then \
 		echo "Error: no upload key configured; Google Play rejects debug-signed bundles." >&2; \
 		echo "Create $(MOBILE_APP_DIR)/android/key.properties or export ANDROID_KEYSTORE_PATH, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS and ANDROID_KEY_PASSWORD. See $(MOBILE_APP_DIR)/README.md#publishing-to-google-play." >&2; \
 		exit 1; \
 	fi
-	cd $(MOBILE_APP_DIR) && flutter build appbundle --release $(MOBILE_FLUTTER_BUILD_FLAGS)
+	cd $(MOBILE_APP_DIR) && flutter build appbundle --release --target-platform android-arm64,android-x64 $(MOBILE_FLUTTER_BUILD_FLAGS)
 	@echo "Bundle: $(MOBILE_APP_DIR)/build/app/outputs/bundle/release/app-release.aab"
 
 .PHONY: proto
