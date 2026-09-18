@@ -8,8 +8,8 @@ import time
 from typing import Any, Dict
 
 from langchain_openai import ChatOpenAI
-from langchain.agents import AgentExecutor, create_tool_calling_agent
-from langchain_core.prompts import ChatPromptTemplate
+from langchain.agents import create_agent
+from langchain_core.messages import HumanMessage
 from langchain_core.tools import tool
 from openai import AsyncOpenAI
 
@@ -20,6 +20,32 @@ from mcp.client.streamable_http import streamable_http_client
 def tool_schema(spec):
     """MCP 2.x renamed inputSchema to input_schema; tolerate both."""
     return getattr(spec, "input_schema", None) or getattr(spec, "inputSchema", {})
+
+
+# AgentExecutor counted model+tool iterations; a LangGraph agent counts graph
+# steps, and one iteration is two of those.
+MAX_ITERATIONS = 500
+
+
+async def run_round(agent, prompt):
+    """Drive one agent run to completion, echoing each turn as it happens.
+
+    Streaming the updates is what verbose=True used to give us: the tool calls
+    and their results are the whole point of a chaos run, so they are printed
+    as they arrive rather than summarised at the end.
+    """
+    final = ""
+    async for step in agent.astream(
+        {"messages": [HumanMessage(content=prompt)]},
+        config={"recursion_limit": 2 * MAX_ITERATIONS},
+        stream_mode="updates",
+    ):
+        for update in step.values():
+            for msg in (update or {}).get("messages", []):
+                msg.pretty_print()
+                if msg.type == "ai" and not getattr(msg, "tool_calls", None):
+                    final = msg.content
+    return final
 
 
 async def pick_model(inference_url, requested):
@@ -101,27 +127,21 @@ async def main():
             print(f"mesh offered model: {model}", file=sys.stderr)
             llm = ChatOpenAI(
                 model=model,
-                openai_api_base=args.inference_url,
-                openai_api_key=args.auth if args.auth else "none",
+                base_url=args.inference_url,
+                api_key=args.auth if args.auth else "none",
                 default_headers=headers
             )
             
-            # Define the agent prompt
             # No system turn: Gemma and several other instruction-tuned models
             # reject the system role outright with a 400, and the mesh may hand
             # this agent any model at all. The persona goes in the human turn,
             # which every model accepts.
-            prompt_template = ChatPromptTemplate.from_messages([
-                ("human", "You are an autonomous adversarial AI agent. You have access to tools.\n\n{input}"),
-                ("placeholder", "{agent_scratchpad}"),
-            ])
+            prompt = f"You are an autonomous adversarial AI agent. You have access to tools.\n\n{args.prompt}"
             
-            # Create the LangChain Agent
+            # create_agent runs the model/tool loop until the model stops
+            # calling tools; it replaced AgentExecutor in LangChain 1.x.
             print("Initializing LangChain Tool-Calling Agent...")
-            agent = create_tool_calling_agent(llm, lc_tools, prompt_template)
-            
-            # AgentExecutor runs the ReAct/Tool loop automatically!
-            agent_executor = AgentExecutor(agent=agent, tools=lc_tools, verbose=True, max_iterations=500)
+            agent = create_agent(model=llm, tools=lc_tools)
             
             print(f"\n--- Starting Chaos Monkey Agent Loop ---")
             print(f"Instruction: {args.prompt}\n")
@@ -132,9 +152,9 @@ async def main():
                 print(f"\n--- Round {round_num} ---")
                 started = time.monotonic()
                 try:
-                    result = await agent_executor.ainvoke({"input": args.prompt})
+                    output = await run_round(agent, prompt)
                     print("\n--- Final Agent Result ---")
-                    print(result["output"])
+                    print(output)
                 except Exception as e:
                     # A crash is a data point, not a reason to stop: an agent
                     # that dies on the first refusal stops testing anything.
