@@ -75,10 +75,9 @@ func (b *StdioBridge) Start() {
 		} else {
 			logger.Warnf("[StdioBridge] backend closed stdout, refusing further requests")
 		}
-		if b.cmd != nil && b.cmd.Process != nil {
-			_ = b.cmd.Process.Kill()
-		}
 
+		// Refuse requests and release waiters before reaping: Wait blocks for
+		// as long as the killed process takes to die, and callers must not.
 		b.mu.Lock()
 		b.closed = true
 		for id, call := range b.calls {
@@ -86,6 +85,13 @@ func (b *StdioBridge) Start() {
 			delete(b.calls, id)
 		}
 		b.mu.Unlock()
+
+		if b.cmd != nil && b.cmd.Process != nil {
+			_ = b.cmd.Process.Kill()
+			// Reap here, the only stdout reader, so Wait cannot race a read on
+			// the pipe it closes; skipping it leaves a zombie until the node exits.
+			_ = b.cmd.Wait()
+		}
 	}()
 }
 

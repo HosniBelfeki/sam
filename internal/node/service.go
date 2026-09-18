@@ -16,9 +16,11 @@ package node
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httputil"
+	"os"
 	"os/exec"
 	"strings"
 
@@ -101,12 +103,17 @@ func (b *baseService) Init(ctx context.Context) error {
 	return nil
 }
 
-// Teardown kills the command backend's process, if any.
+// Teardown kills the command backend's process, if any. The bridge's stdout
+// reader reaps it, and has already done so for a backend that exited on its
+// own, so an already-finished process is not an error.
 func (b *baseService) Teardown() error {
 	if b.cmd == nil || b.cmd.Process == nil {
 		return nil
 	}
-	return b.cmd.Process.Kill()
+	if err := b.cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		return err
+	}
+	return nil
 }
 
 func NewServiceFromRequest(req *api.RegisterServiceRequest) (Service, error) {
