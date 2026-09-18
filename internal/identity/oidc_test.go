@@ -191,6 +191,17 @@ func TestVerifyJWT(t *testing.T) {
 		}
 	})
 
+	t.Run("missing iss claim is rejected", func(t *testing.T) {
+		claims := validClaims()
+		delete(claims, "iss")
+		tokenStr := signToken(t, key, testKID, claims)
+
+		_, _, err := VerifyJWT(ctx, tokenStr, allowedAudiences, providers)
+		if err == nil || !strings.Contains(err.Error(), "iss claim") {
+			t.Fatalf("expected missing iss error, got: %v", err)
+		}
+	})
+
 	t.Run("unknown issuer is rejected", func(t *testing.T) {
 		claims := validClaims()
 		claims["iss"] = "https://unknown-issuer.example"
