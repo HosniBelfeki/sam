@@ -16,10 +16,14 @@ package node
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
+	"os"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/google/sam/api"
 )
@@ -184,6 +188,39 @@ func TestBaseService_TeardownIsNilSafe(t *testing.T) {
 	}
 	if err := b.Teardown(); err != nil {
 		t.Fatalf("Teardown on uninitialised base: %v", err)
+	}
+}
+
+// A killed backend must also be reaped: kill(pid, 0) keeps succeeding on a
+// zombie, and Process.Signal only reports ErrProcessDone once Wait has run.
+func TestBaseService_TeardownReapsCommandBackend(t *testing.T) {
+	b := &baseService{
+		info: &api.ServiceInfo{Type: api.ServiceType_SERVICE_TYPE_MCP, Name: "demo"},
+		backend: &api.RegisterServiceRequest_Command{
+			Command: &api.CommandBackend{Command: []string{"/bin/cat"}},
+		},
+	}
+	if err := b.Init(context.Background()); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if err := b.Teardown(); err != nil {
+		t.Fatalf("Teardown: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		err := b.cmd.Process.Signal(syscall.Signal(0))
+		if errors.Is(err, os.ErrProcessDone) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("backend pid %d still not reaped after Teardown (Signal(0) = %v)", b.cmd.Process.Pid, err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if err := b.Teardown(); err != nil {
+		t.Errorf("Teardown on an already-reaped backend: %v", err)
 	}
 }
 
