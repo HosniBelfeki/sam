@@ -1,0 +1,53 @@
+# Scrape targets for Google Managed Prometheus, which GKE runs by default.
+# A PodMonitoring only sees pods in its own namespace, so the canaries get
+# their own below.
+apiVersion: monitoring.googleapis.com/v1
+kind: PodMonitoring
+metadata:
+  name: sam-control-plane-${ENV_NAME}
+  namespace: ${NAMESPACE}
+spec:
+  selector:
+    matchLabels:
+      app: sam-control-plane-${ENV_NAME}
+  endpoints:
+  - port: http
+    path: /metrics
+    interval: 30s
+---
+apiVersion: monitoring.googleapis.com/v1
+kind: PodMonitoring
+metadata:
+  name: sam-router-${ENV_NAME}
+  namespace: ${NAMESPACE}
+spec:
+  selector:
+    matchLabels:
+      app: sam-router-${ENV_NAME}
+  endpoints:
+  - port: metrics
+    path: /metrics
+    interval: 30s
+---
+# Every canary pod carries sam-canary=true; a pod without one of these named
+# ports is simply not a target for that endpoint.
+apiVersion: monitoring.googleapis.com/v1
+kind: PodMonitoring
+metadata:
+  name: sam-canaries-${ENV_NAME}
+  namespace: sam-canary-${ENV_NAME}
+spec:
+  selector:
+    matchLabels:
+      sam-canary: "true"
+  endpoints:
+  - port: metrics
+    path: /metrics
+    interval: 30s
+  - port: box-metrics
+    path: /metrics
+    interval: 30s
+  targetLabels:
+    fromPod:
+    - from: app
+      to: canary

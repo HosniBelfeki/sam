@@ -37,6 +37,7 @@ spec:
     metadata:
       labels:
         app: sam-canary-${ENV_NAME}
+        sam-canary: "true"
     spec:
       serviceAccountName: sam-node-sa
       containers:
@@ -51,8 +52,12 @@ spec:
           - "--control-plane=http://sam-control-plane-${ENV_NAME}.${NAMESPACE}.svc.cluster.local:8080"
           - "--insecure-control-plane"
           - "--jwt-path=/var/run/secrets/tokens/sam-token"
+          # 9091, not 9090: the agnhost container below owns 9090 in this pod.
+          - "--metrics-addr=0.0.0.0:9091"
         ports:
         - containerPort: 8080
+        - containerPort: 9091
+          name: metrics
         resources:
           requests:
             cpu: 50m

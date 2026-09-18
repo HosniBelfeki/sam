@@ -59,6 +59,7 @@ spec:
     metadata:
       labels:
         app: box-canary-${ENV_NAME}
+        sam-canary: "true"
     spec:
       serviceAccountName: sam-box-sa
       # nano-init ships as its own image with no shell in it, so the binary is
@@ -84,6 +85,11 @@ spec:
           # the socket's permissions are the credential.
           - "--bind-addr="
           - "--socket-path=/var/run/sam/node.sock"
+          # The one TCP port, and it carries nothing an API token would gate.
+          - "--metrics-addr=0.0.0.0:9090"
+        ports:
+        - containerPort: 9090
+          name: metrics
         resources:
           requests:
             cpu: 50m
@@ -107,6 +113,10 @@ spec:
           - "--sidecar-socket=/var/run/sam/node.sock"
           - "--egress-allow=example.com"
           - "--log-level=debug"
+          - "--metrics-addr=0.0.0.0:9091"
+        ports:
+        - containerPort: 9091
+          name: box-metrics
         resources:
           requests:
             cpu: 20m

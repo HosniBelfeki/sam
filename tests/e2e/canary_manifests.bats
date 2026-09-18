@@ -61,16 +61,16 @@ render() {
 
 # unservable reports whether every error is this cluster's missing CRDs rather
 # than the manifest's fault. The control plane template carries GKE Gateway and
-# HealthCheckPolicy resources, which no kind cluster serves and which nothing
-# here can install, so failing on them would only teach people to ignore this
-# test.
+# HealthCheckPolicy resources, and the monitoring template Managed Prometheus
+# PodMonitorings, which no kind cluster serves and which nothing here can
+# install, so failing on them would only teach people to ignore this test.
 #
 # The kinds are named rather than matched on "no matches for kind", because a
 # Deployment declared against a retired apiVersion fails with that same wording
 # -- which made an earlier version of this test pass a manifest whose
 # apps/v1beta1 would have broken the rollout it exists to protect.
 unservable() {
-  local kinds='Gateway|HTTPRoute|HealthCheckPolicy|GCPBackendPolicy'
+  local kinds='Gateway|HTTPRoute|HealthCheckPolicy|GCPBackendPolicy|PodMonitoring'
   ! grep -qvE "no matches for kind \"(${kinds})\"|ensure CRDs are installed|^[[:space:]]*$" <<<"$1"
 }
 

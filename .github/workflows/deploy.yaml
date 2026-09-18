@@ -374,6 +374,12 @@ jobs:
           envsubst '${ENV_NAME} ${NAMESPACE} ${GCP_PROJECT_ID} ${CLUSTER_NAME} ${CLUSTER_REGION} ${IMAGE_TAG}' < .github/k8s/sam-router-template.yaml | kubectl apply -f -
           envsubst '${ENV_NAME} ${NAMESPACE} ${GCP_PROJECT_ID} ${CLUSTER_NAME} ${CLUSTER_REGION} ${IMAGE_TAG}' < .github/k8s/sam-console-template.yaml | kubectl apply -f -
           envsubst '${ENV_NAME} ${NAMESPACE} ${GCP_PROJECT_ID}' < .github/k8s/dns-sync-cronjob-template.yaml | kubectl apply -f -
+          # Managed Prometheus ships with GKE; a cluster without it should not block the mesh rollout.
+          if kubectl get crd podmonitorings.monitoring.googleapis.com >/dev/null 2>&1; then
+            envsubst '${ENV_NAME} ${NAMESPACE}' < .github/k8s/sam-monitoring-template.yaml | kubectl apply -f -
+          else
+            echo "::warning::PodMonitoring CRD not found; managed collection is off on this cluster, metrics will not be scraped"
+          fi
           
           kubectl rollout status deployment/sam-control-plane-${ENV_NAME} -n ${NAMESPACE} --timeout=120s || {
             echo "Control Plane Deployment failed!"
