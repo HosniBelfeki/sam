@@ -45,7 +45,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/multiformats/go-multiaddr"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/prometheus/client_golang/prometheus"
 	"golang.org/x/time/rate"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
@@ -93,6 +93,10 @@ type Server struct {
 	catalogMu sync.RWMutex
 	catalog   map[string]nodeCatalogEntry
 
+	// metricsRegistry holds this server's store-backed mesh state collector;
+	// see metricsHandler.
+	metricsRegistry *prometheus.Registry
+
 	ctx      context.Context
 	cancel   context.CancelFunc
 	wg       sync.WaitGroup
@@ -108,15 +112,19 @@ func NewServer(config Options, store storage.Store) (*Server, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
+	reg := prometheus.NewRegistry()
+	reg.MustRegister(newMeshStateCollector(store))
+
 	return &Server{
-		config:    config,
-		store:     store,
-		mesh:      NewNopMeshAdapter(),
-		limiter:   rate.NewLimiter(rate.Limit(EnrollRateLimit), EnrollBurst),
-		providers: make(map[string]*oidc.Provider),
-		catalog:   make(map[string]nodeCatalogEntry),
-		ctx:       ctx,
-		cancel:    cancel,
+		config:          config,
+		store:           store,
+		mesh:            NewNopMeshAdapter(),
+		limiter:         rate.NewLimiter(rate.Limit(EnrollRateLimit), EnrollBurst),
+		providers:       make(map[string]*oidc.Provider),
+		catalog:         make(map[string]nodeCatalogEntry),
+		metricsRegistry: reg,
+		ctx:             ctx,
+		cancel:          cancel,
 	}, nil
 }
 
@@ -208,30 +216,35 @@ func (s *Server) Init() error {
 	return nil
 }
 
-// RegisterRoutes registers every control-plane HTTP handler on mux.
+// RegisterRoutes registers every control-plane HTTP handler on mux. Probes
+// and /metrics are left uncounted so scrapers do not dominate the figures.
 func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/healthz", s.HandleHealthz)
 	mux.HandleFunc("/readyz", s.HandleReadyz)
-	mux.Handle("/metrics", promhttp.Handler())
-	mux.HandleFunc("/info", s.HandleInfo)
-	mux.HandleFunc("/register", noStore(s.HandleRegister))
-	mux.HandleFunc("/keys", s.HandleKeys)
-	mux.HandleFunc("/routers/lease", s.HandleRouterLease)
-	mux.HandleFunc("/policies", s.HandlePolicies)
-	mux.HandleFunc("/enroll", noStore(s.HandleEnroll))
-	mux.HandleFunc("/enroll/status", noStore(s.HandleEnrollStatus))
-	mux.HandleFunc("/refresh", noStore(s.HandleRefresh))
-	mux.HandleFunc("/nodes/catalog", s.HandleNodeCatalog)
-	mux.HandleFunc("/admin/bootstrap-tokens", noStore(s.HandleAdminBootstrapTokens))
-	mux.HandleFunc("/admin/bootstrap-tokens/", noStore(s.HandleAdminBootstrapTokenAction))
-	mux.HandleFunc("/admin/enrollments", noStore(s.HandleAdminEnrollments))
-	mux.HandleFunc("/admin/enrollments/", noStore(s.HandleAdminEnrollmentAction))
-	mux.HandleFunc("/admin/nodes/", noStore(s.HandleAdminNodeAction))
-	mux.HandleFunc("/admin/revoke", noStore(s.HandleAdminRevoke))
-	mux.HandleFunc("/admin/status", noStore(s.HandleAdminStatus))
-	mux.HandleFunc("/user/status", noStore(s.HandleUserStatus))
-	mux.HandleFunc("/user/bootstrap-tokens", noStore(s.HandleUserBootstrapTokens))
-	mux.HandleFunc("/user/revoke", noStore(s.HandleUserRevoke))
+	mux.Handle("/metrics", s.metricsHandler())
+
+	handle := func(pattern string, h http.HandlerFunc) {
+		mux.Handle(pattern, observeRoute(pattern, h))
+	}
+	handle("/info", s.HandleInfo)
+	handle("/register", noStore(s.HandleRegister))
+	handle("/keys", s.HandleKeys)
+	handle("/routers/lease", s.HandleRouterLease)
+	handle("/policies", s.HandlePolicies)
+	handle("/enroll", noStore(s.HandleEnroll))
+	handle("/enroll/status", noStore(s.HandleEnrollStatus))
+	handle("/refresh", noStore(s.HandleRefresh))
+	handle("/nodes/catalog", s.HandleNodeCatalog)
+	handle("/admin/bootstrap-tokens", noStore(s.HandleAdminBootstrapTokens))
+	handle("/admin/bootstrap-tokens/", noStore(s.HandleAdminBootstrapTokenAction))
+	handle("/admin/enrollments", noStore(s.HandleAdminEnrollments))
+	handle("/admin/enrollments/", noStore(s.HandleAdminEnrollmentAction))
+	handle("/admin/nodes/", noStore(s.HandleAdminNodeAction))
+	handle("/admin/revoke", noStore(s.HandleAdminRevoke))
+	handle("/admin/status", noStore(s.HandleAdminStatus))
+	handle("/user/status", noStore(s.HandleUserStatus))
+	handle("/user/bootstrap-tokens", noStore(s.HandleUserBootstrapTokens))
+	handle("/user/revoke", noStore(s.HandleUserRevoke))
 }
 
 // noStore marks responses that carry credentials (biscuits, bootstrap tokens,
