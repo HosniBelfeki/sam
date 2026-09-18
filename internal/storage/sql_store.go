@@ -464,13 +464,14 @@ func (s *SQLStore) initSchema() error {
 // logSchemaMigrated reports a migration run in one line; an up-to-date
 // database says nothing.
 func logSchemaMigrated(from, to int) {
-	switch {
-	case from == to:
-	case from == 0:
-		logger.Infof("Initialized database schema at version %d", to)
-	default:
-		logger.Infof("Migrated database schema from version %d to %d", from, to)
+	if from == to {
+		return
 	}
+	if from == 0 {
+		logger.Infof("Initialized database schema at version %d", to)
+		return
+	}
+	logger.Infof("Migrated database schema from version %d to %d", from, to)
 }
 
 func (s *SQLStore) initSchemaDefault() error {

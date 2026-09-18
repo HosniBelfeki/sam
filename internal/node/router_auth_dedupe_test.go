@@ -131,7 +131,7 @@ func TestStartAuthenticatesEachRouterOnce(t *testing.T) {
 	if err := node.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	t.Cleanup(func() { _ = node.Host.Close() })
+	t.Cleanup(func() { _ = node.Teardown() })
 
 	if got := handshakes.Load(); got != 1 {
 		t.Fatalf("router saw %d handshakes for %d advertised addresses, want 1", got, len(routerAddrs))
