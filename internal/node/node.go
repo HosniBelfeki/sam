@@ -1529,6 +1529,7 @@ func (n *SamNode) validateMeshEvent(_ context.Context, from peer.ID, msg *pubsub
 }
 
 func (n *SamNode) startDiscovery(ctx context.Context, meshID string, interval time.Duration) {
+	awaitRoutingTable(ctx, n.DHT.RoutingTable().Size, interval)
 	routingDiscovery := routing.NewRoutingDiscovery(n.DHT)
 	util.Advertise(ctx, routingDiscovery, meshID)
 
@@ -1589,6 +1590,26 @@ func (n *SamNode) startDiscovery(ctx context.Context, meshID string, interval ti
 					}
 				}
 			}
+		}
+	}
+}
+
+// awaitRoutingTable blocks until the DHT routing table has a peer, ctx ends
+// or bound elapses. DHT.Bootstrap only triggers a refresh: the router enters
+// the table after an asynchronous FIND_NODE liveliness check that nothing
+// orders before the auth handshake returns. Advertising into an empty table
+// fails the lookup, and util.Advertise then backs off for two minutes with
+// the node invisible to its peers. Giving up after bound keeps the previous
+// behaviour when no router ever appears.
+func awaitRoutingTable(ctx context.Context, size func() int, bound time.Duration) {
+	deadline := time.After(bound)
+	for size() == 0 {
+		select {
+		case <-ctx.Done():
+			return
+		case <-deadline:
+			return
+		case <-time.After(100 * time.Millisecond):
 		}
 	}
 }
