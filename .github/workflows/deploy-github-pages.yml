@@ -44,9 +44,7 @@ jobs:
           check-latest: true
 
       - name: Install PostCSS dependencies
-        run: |
-          npm init --yes
-          npm install --save-dev autoprefixer@10.6.0 postcss-cli@12.0.0 postcss@8.5.28
+        run: npm ci --ignore-scripts --no-audit --no-fund
         working-directory: ./site
 
       - name: Build Hugo Site
