@@ -786,3 +786,49 @@ jobs:
             exit 1
           }
 
+      # A fresh node enrolls, reaches a router and calls the everything
+      # canary's MCP server through the mesh: what a new user does. The
+      # CronJob keeps doing it every 15 minutes; running it once here, after
+      # every canary is up, makes the rollout prove it before the deploy is
+      # called good.
+      - name: Deploy and run the cold-path probe
+        env:
+          VAR_ENV_NAME: ${{ vars.ENV_NAME }}
+          VAR_IMAGE_TAG: ${{ env.IMAGE_TAG }}
+        run: |
+          export ENV_NAME="${VAR_ENV_NAME}"
+          export CANARY_NAMESPACE="sam-canary-${ENV_NAME}"
+          export NAMESPACE="sam-${ENV_NAME}"
+          export IMAGE_TAG="${VAR_IMAGE_TAG}"
+          JOB="sam-probe-rollout-${ENV_NAME}"
+
+          envsubst '${ENV_NAME} ${NAMESPACE} ${IMAGE_TAG}' < .github/k8s/sam-probe-cronjob-template.yaml | kubectl apply -f -
+
+          kubectl delete job "${JOB}" -n "${CANARY_NAMESPACE}" --ignore-not-found
+          kubectl create job --from="cronjob/sam-probe-${ENV_NAME}" "${JOB}" -n "${CANARY_NAMESPACE}"
+
+          # `kubectl wait` can only wait for one condition; a failed Job would
+          # otherwise sit out the whole timeout.
+          for _ in $(seq 1 60); do
+            status=$(kubectl get job "${JOB}" -n "${CANARY_NAMESPACE}" -o jsonpath='{range .status.conditions[*]}{.type}={.status}{"\n"}{end}')
+            case "${status}" in
+              *Complete=True*) break ;;
+              *Failed=True*) break ;;
+            esac
+            sleep 5
+          done
+
+          echo "==== probe output ===="
+          kubectl logs "job/${JOB}" -n "${CANARY_NAMESPACE}" -c probe --tail=-1 || true
+
+          case "${status:-}" in
+            *Complete=True*) echo "Cold-path probe passed." ;;
+            *)
+              echo "Cold-path probe did not pass: a fresh node could not enroll, reach a router, or call a mesh service."
+              echo "==== sam-node sidecar log ===="
+              kubectl logs "job/${JOB}" -n "${CANARY_NAMESPACE}" -c sam-node --tail=200 || true
+              kubectl describe job "${JOB}" -n "${CANARY_NAMESPACE}" || true
+              exit 1
+              ;;
+          esac
+
