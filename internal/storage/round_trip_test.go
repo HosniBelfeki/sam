@@ -243,6 +243,61 @@ func TestReEnrollmentKeepsAnExistingBan(t *testing.T) {
 	}
 }
 
+// Expiry-based deletion must never take a ban with it, nor touch a node that
+// never had a session bound: the first is how a node is kept out, the second
+// has no expiry to have lapsed.
+func TestDeleteExpiredNodesSparesBannedAndUnbounded(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	now := time.Now()
+
+	enroll := func(id string, expiresAt time.Time) {
+		t.Helper()
+		if err := store.EnrollNode(ctx, &EnrolledNode{
+			PeerID: id, PublicKey: []byte("pub"), Biscuit: []byte("b"), Role: api.RoleNode,
+			EnrollmentType: "OIDC", EnrolledAt: now.Add(-48 * time.Hour), ExpiresAt: expiresAt,
+		}); err != nil {
+			t.Fatalf("enroll %s: %v", id, err)
+		}
+	}
+	enroll("lapsed-long-ago", now.Add(-24*time.Hour))
+	enroll("lapsed-just-now", now.Add(-time.Minute))
+	enroll("still-admitted", now.Add(time.Hour))
+	enroll("lapsed-but-banned", now.Add(-24*time.Hour))
+	enroll("never-bounded", time.Time{})
+	if err := store.SetNodeBanned(ctx, "lapsed-but-banned", true); err != nil {
+		t.Fatal(err)
+	}
+
+	deleted, err := store.DeleteExpiredNodes(ctx, now.Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("DeleteExpiredNodes: %v", err)
+	}
+	if deleted != 1 {
+		t.Errorf("deleted %d rows, want 1", deleted)
+	}
+
+	remaining, err := store.ListNodes(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, n := range remaining {
+		got[n.PeerID] = true
+	}
+	for _, want := range []string{"lapsed-just-now", "still-admitted", "lapsed-but-banned", "never-bounded"} {
+		if !got[want] {
+			t.Errorf("%s was deleted", want)
+		}
+	}
+	if got["lapsed-long-ago"] {
+		t.Error("lapsed-long-ago survived")
+	}
+	if banned, _ := store.IsNodeBanned(ctx, "lapsed-but-banned"); !banned {
+		t.Error("the ban did not survive the sweep")
+	}
+}
+
 func TestBootstrapTokenRoundTripsEveryField(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()

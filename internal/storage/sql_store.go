@@ -892,6 +892,17 @@ func (s *SQLStore) IsIdentityBanned(ctx context.Context, identity string) (bool,
 	return true, nil
 }
 
+// DeleteExpiredNodes implements Store.
+func (s *SQLStore) DeleteExpiredNodes(ctx context.Context, before time.Time) (int64, error) {
+	// A zero ExpiresAt round-trips as a negative UnixMilli, hence > 0.
+	query := s.rebind(`DELETE FROM nodes WHERE banned = ? AND expires_at > 0 AND expires_at < ?`)
+	res, err := s.db.ExecContext(ctx, query, false, before.UnixMilli())
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 // ListBannedPeerIDs implements Store.
 func (s *SQLStore) ListBannedPeerIDs(ctx context.Context) ([]string, error) {
 	query := s.rebind(`SELECT peer_id FROM nodes WHERE banned = ?`)

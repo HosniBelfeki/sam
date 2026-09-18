@@ -213,6 +213,9 @@ func (s *Server) Init() error {
 	s.wg.Add(1)
 	go s.runKeyRotationLoop()
 
+	s.wg.Add(1)
+	go s.runNodeGCLoop()
+
 	return nil
 }
 
