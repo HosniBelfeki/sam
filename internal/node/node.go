@@ -724,6 +724,16 @@ func (n *SamNode) IsConnected() bool {
 	return false
 }
 
+// isAuthenticatedAndConnected reports whether this router was authenticated
+// on a session that is still open. The router forgets a peer once its last
+// connection drops, so a stale entry must not skip the handshake.
+func (n *SamNode) isAuthenticatedAndConnected(router peer.ID) bool {
+	n.mu.Lock()
+	authed := n.authenticatedRouters[router]
+	n.mu.Unlock()
+	return authed && n.Host.Network().Connectedness(router) == network.Connected
+}
+
 func (n *SamNode) LoadMeshConfig() ([]byte, []string, error) {
 	return n.Store.LoadMeshConfig()
 }
@@ -851,6 +861,16 @@ func (n *SamNode) ConnectAndAuthWithRouter(ctx context.Context, addr multiaddr.M
 		addrInfo, err := peer.AddrInfoFromP2pAddr(resolved)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("failed to get AddrInfo from multiaddr %s: %w", resolved, err))
+			continue
+		}
+
+		// A router advertises one multiaddr per interface, all the same peer.
+		// Host.Connect is a no-op on an existing connection, but the
+		// handshake is not: repeating it per address trips the router's
+		// per-peer handshake limiter and logs a failure for every extra
+		// address. One live authenticated session per router is enough.
+		if n.isAuthenticatedAndConnected(addrInfo.ID) {
+			connected = true
 			continue
 		}
 

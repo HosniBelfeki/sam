@@ -71,11 +71,20 @@ func main() {
 			if os.Getenv("LOG_FORMAT") == "json" {
 				_ = os.Setenv("GOLOG_LOG_FMT", "json")
 			}
-			golog.SetAllLoggers(golog.LevelInfo)
+			lvl := golog.LevelInfo
 			if logLevel != "" {
-				if lvl, err := golog.LevelFromString(logLevel); err == nil {
-					golog.SetAllLoggers(lvl)
+				if parsed, err := golog.LevelFromString(logLevel); err == nil {
+					lvl = parsed
 				}
+			}
+			golog.SetAllLoggers(lvl)
+			// Same as sam-node: go-libp2p-kad-dht logs routine small-mesh
+			// conditions (empty routing table, no closer peers) at INFO/ERROR,
+			// the latter through a malformed zap call inside the library.
+			// Only an explicit debug level keeps them.
+			if lvl > golog.LevelDebug {
+				_ = golog.SetLogLevel("dht", "fatal")
+				_ = golog.SetLogLevel("dht/RtRefreshManager", "fatal")
 			}
 
 			// Secrets arrive through a file or the environment, never as a
