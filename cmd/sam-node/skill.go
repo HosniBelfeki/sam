@@ -179,7 +179,7 @@ Next steps:
                        --header "X-Sam-Authentication: Bearer <token>"
        Antigravity   add that URL as "serverUrl", with the same header, to
                        ~/.gemini/config/mcp_config.json
-     Other agents: https://sam-mesh.dev/docs/integrations/
+     Other agents: https://sam-mesh.dev/docs/guides/connecting-agents/
   3. Restart your agent so it picks up the skill and the mesh tools.
 `)
 }

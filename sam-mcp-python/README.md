@@ -1,6 +1,6 @@
 # SAM Python SDK (sam-mcp-python)
 
-The official Python SDK for the Sovereign Agent Mesh (SAM).
+The official Python SDK for SAM.
 
 This SDK acts as a "Thin Client" that connects to the local Go node via a Unix Domain Socket and communicates using the Model Context Protocol (MCP) over JSON-RPC 2.0.
 

@@ -5,69 +5,69 @@ weight: 30
 ---
 
 Hold a multi-turn conversation with an [A2A](https://a2a-protocol.org/)
-(Agent2Agent) agent hosted on a remote mesh node — using a **stock,
-unmodified `a2a-sdk` client**. No SAM-specific client code: the mesh's
-agent-card regeneration makes the standard SDK work as-is.
+(Agent2Agent) agent hosted on a remote mesh node, using a stock, unmodified
+`a2a-sdk` client. There is no SAM-specific client code. The mesh regenerates
+the agent card, and that is enough for the standard SDK to work as it is.
 
 Source: [`development/examples/chat-a2a/`](https://github.com/google/sam/tree/main/development/examples/chat-a2a).
 
 ## The idea
 
-A2A is the mesh's southbound agent-to-agent wire: an agent process speaking
-A2A over HTTP registers on its node as a `type: a2a` service, and remote
-peers reach it through the raw egress path
-`/sam/{peer}/a2a/{service}/...` (see
-[A2A Service Routing](../../user/node-configuration/#a2a-service-routing)).
+A2A is how agents talk to each other on the mesh. An agent process that
+speaks A2A over HTTP is declared on its node as a `type: a2a` service, and
+remote peers reach it through the proxy path `/sam/{peer}/a2a/{service}/...`
+(see [A2A agents](../../guides/exposing-services/#a2a-agents)).
 
-The problem with proxying A2A naively is the **agent card**. A2A clients
-bootstrap from `/.well-known/agent-card.json`, and the card contains the
-agent's own interface URLs — addresses that are only reachable on the
+The problem with proxying A2A directly is the agent card. A2A clients start
+from `/.well-known/agent-card.json`, and the card contains the agent's own
+interface URLs, which are addresses that are only reachable on the
 provider's machine. A stock client would fetch the card through the mesh,
 then try to talk to `http://127.0.0.1:7777/` and fail.
 
-So the caller's node **impersonates the card endpoint**: it holds the
-client's request, fetches the card from the agent over the mesh, and serves
-a regenerated card — interface URLs point back at the mesh path the client
-fetched from, protocol bindings the mesh cannot carry (gRPC needs its own
-end-to-end connection) are dropped, and streaming is advertised off. The
-client follows the regenerated card like it would for any A2A server —
-discovery, JSON-RPC `message/send`, and `contextId` round-tripping all work
-unmodified, while the traffic actually flows over libp2p between the nodes.
+So the caller's node stands in for the card endpoint. It holds the client's
+request, fetches the card from the agent over the mesh, and serves a
+regenerated card whose interface URLs point back at the mesh path that the
+client fetched from. Protocol bindings that the mesh cannot carry are
+dropped (gRPC needs its own end-to-end connection), and streaming is
+advertised as off. The client follows the regenerated card as it would for
+any A2A server. Discovery, sending messages and `contextId` round-tripping
+all work without changes, while the traffic flows over libp2p between the
+nodes.
 
-This example proves both halves:
+This example demonstrates both halves:
 
-- **Card regeneration** — the bundled REPL is a plain `a2a-sdk` client; it
+- **Card regeneration**: the bundled REPL is a plain `a2a-sdk` client. It
   works only because the regenerated card sends it back through the mesh.
-- **Conversation continuity** — the agent keeps one Gemini chat session per
-  A2A `contextId`. Tell it your name, ask for it back two turns later: the
-  answer shows the context survived the mesh hop. Each turn is still its own
-  short-lived A2A **task** (`taskId` changes every turn, created and
-  completed by each `message/send`); `contextId` is what persists and groups
-  them into one conversation.
+- **Conversation continuity**: the agent keeps one Gemini chat session per
+  A2A `contextId`. Tell it your name, then ask for it back two turns later.
+  The answer shows that the context survived the mesh hop. Each turn is
+  still its own short-lived A2A task (`taskId` changes every turn). The
+  `contextId` is what persists and groups the turns into one conversation.
 
 ## The pieces
 
-- **`chat` service** (`agent.py`) — a Gemini-backed A2A agent built on the
-  Python `a2a-sdk`: serves its agent card, answers `message/send`, and holds
-  history server-side, one Gemini chat session per `contextId`. The node
-  proxies to it via `target_url`; the agent itself knows nothing about SAM.
-- **REPL client** (`chat.py`) — a ~40-line stock `a2a-sdk` client: resolves
-  the card through the mesh, then loops `input()` → `message/send`, echoing
-  the `contextId` the server minted on the first reply.
+- **`chat` service** (`agent.py`): a Gemini-backed A2A agent built on the
+  Python `a2a-sdk`. It serves its agent card, answers messages, and holds
+  history on the server side, one Gemini chat session per `contextId`. The
+  node proxies to it through `target_url`. The agent knows nothing about
+  SAM.
+- **REPL client** (`chat.py`): a stock `a2a-sdk` client of about forty lines
+  that resolves the card through the mesh, then loops `input()` to a message
+  send, echoing the `contextId` that the server created on the first reply.
 
 ## What you can do with it
 
-- **Bring any A2A agent onto the mesh unchanged** — the example agent is
-  deliberately vanilla `a2a-sdk`; anything speaking A2A over HTTP (ADK,
-  LangGraph, a hosted agent) plugs in the same way, one `target_url` line in
-  the node config.
-- **Use any stock A2A client** — `chat.py` is just the smallest one. The
-  regenerated card means SDKs, CLIs, and other agents resolve and call the
-  service without knowing SAM exists.
-- **Let the agent own the conversation** — the same pattern as
-  [Gemini Buddy](../gemini-buddy/), but on the standard A2A wire instead of a
-  custom MCP tool: state lives with the agent, keyed by `contextId`, and
-  callers only ever send the next message.
+- **Bring any A2A agent onto the mesh unchanged.** The example agent is
+  plain `a2a-sdk` on purpose. Anything that speaks A2A over HTTP (ADK,
+  LangGraph, a hosted agent) plugs in the same way, with one `target_url`
+  line in the node configuration.
+- **Use any stock A2A client.** `chat.py` is the smallest one. Because of the
+  regenerated card, SDKs, CLIs and other agents resolve and call the service
+  without knowing that SAM exists.
+- **Let the agent own the conversation.** This is the same pattern as
+  [Gemini Buddy](../gemini-buddy/), on the standard A2A protocol instead of
+  a custom MCP tool. State lives with the agent, keyed by `contextId`, and
+  callers only send the next message.
 
 ## Try it on kind
 
@@ -77,8 +77,8 @@ that brings the agent up with one command.
 ### 1. Set a Gemini key for the agent image
 
 `agent.py` calls Gemini, so set your API key on the `ENV GEMINI_API_KEY`
-line in `development/examples/chat-a2a/Dockerfile` before building (a free
-Google AI Studio key is fine for the demo).
+line in `development/examples/chat-a2a/Dockerfile` before building. A free
+Google AI Studio key is enough for the demo.
 
 ### 2. Bring the mesh up and deploy the agent
 
@@ -95,11 +95,11 @@ helm --kube-context kind-sam-kind -n sam-kind install chat-a2a charts/sam-node \
 ### 3. Enroll a local caller node
 
 ```bash
-make kind-local-node  # local sam-node enrolled in the mesh — LEAVE RUNNING
+make kind-local-node  # a local sam-node enrolled in the mesh; leave it running
 ```
 
-The local node is your entry point: its sidecar API listens on
-**`http://127.0.0.1:9099`** (bearer token `devtoken`), MCP tools at `/mcp`.
+The local node is your entry point. Its API listens on
+`http://127.0.0.1:9099` (token `devtoken`), with the MCP tools at `/mcp`.
 
 ### 4. Find the provider peer
 
@@ -108,12 +108,12 @@ The local node is your entry point: its sidecar API listens on
   -tool discover_remote_services -args '{"type":"a2a","name":"chat"}'
 ```
 
-Note the peer ID and export it as `PEER`. Discovery is gossip-fed; retry for
-a few seconds after startup if the list comes back empty.
+Note the peer ID and export it as `PEER`. Discovery is fed by gossip, so
+retry for a few seconds after startup if the list comes back empty.
 
 ### 5. Watch the card regeneration happen
 
-Fetch the agent card through the mesh with nothing but `curl`:
+Fetch the agent card through the mesh with `curl`:
 
 ```bash
 curl -s -H 'X-Sam-Authentication: Bearer devtoken' \
@@ -121,9 +121,9 @@ curl -s -H 'X-Sam-Authentication: Bearer devtoken' \
 ```
 
 The interface URLs in the response point back at this
-`/sam/{peer}/a2a/chat` path — not at the agent's own `127.0.0.1:7777` — and
-`capabilities.streaming` is `false`. That regenerated card is the whole
-trick.
+`/sam/{peer}/a2a/chat` path, and not at the agent's own `127.0.0.1:7777`.
+`capabilities.streaming` is `false`. That regenerated card is what makes the
+example work.
 
 ### 6. Chat
 
@@ -135,16 +135,16 @@ uv run --with-requirements requirements.txt chat.py \
   "http://127.0.0.1:9099/sam/$PEER/a2a/chat"
 ```
 
-Prove the continuity: introduce yourself in one turn, chat about something
-else, then ask the agent what your name is. It answers from its own
-server-side session — the client never re-sent the history, only the
+To check the continuity: introduce yourself in one turn, chat about
+something else, then ask the agent what your name is. It answers from its
+own server-side session. The client never sent the history again, only the
 `contextId`.
 
 ## Configuration
 
 | var | default | used by |
 |-----|---------|---------|
-| `GEMINI_API_KEY` | *(placeholder — set in the Dockerfile)* | agent |
+| `GEMINI_API_KEY` | *(placeholder, set in the Dockerfile)* | agent |
 | `GEMINI_MODEL` | `models/gemini-3.5-flash-lite` *(set in the Dockerfile)* | agent |
 
 The listen port (`7777`) is a constant at the top of `agent.py`.

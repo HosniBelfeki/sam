@@ -82,7 +82,7 @@ image that has nothing else in it.
 
 ## See also
 
-- [Running agents on SAM](https://sam-mesh.dev/docs/user/running-agents/) — the
+- [Sandboxed agents](https://sam-mesh.dev/docs/preview/sandboxed-agents/) — the
   full picture, including the microVM arrangement
-- [Agent architecture](https://sam-mesh.dev/docs/agent-architecture/) — why the
+- [Agent architecture](https://sam-mesh.dev/docs/preview/agent-architecture/) — why the
   boundary speaks named HTTP tunnels

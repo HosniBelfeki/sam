@@ -1,83 +1,71 @@
-# SAM: Sovereign Agent Mesh
+# SAM
 
-<img alt="SAM" src="site/content/docs/sam_logo.png" />
+<img alt="SAM" src="site/content/docs/sam_logo.png" width="160" />
 
-SAM is a smart network built for autonomous AI agents:
+SAM is a private network for AI agents. A node runs next to an agent and
+gives it three things: a way to publish tools and models to the network, a
+way to find and call what other nodes publish, and an identity every other
+node can verify. Nodes connect directly when they can and through relays when
+they cannot, so the network works across laptops, containers, clusters and
+phones behind NAT.
 
-*   **Zero Config:** Nodes discover each other and build the P2P network automatically.
-*   **Zero Trust:** Every connection, node, and packet is strictly authenticated.
-*   **Agentic Network:** Formed by lightweight nodes (`sam-node`) that provide self-healing, P2P connectivity, allowing autonomous agents to plug in, communicate, and invoke tools dynamically.
-*   **Portability:** Cryptographic identities are environment-agnostic, allowing seamless node mobility across cloud, local, and edge environments.
+Two properties hold everywhere:
 
-Getting started is a one-liner (see the [Quick Start Guide](site/content/docs/quickstart.md)): install, add the skill, and your agent is on the mesh.
+- **Nothing is reachable by default.** A node exposes no services until its
+  configuration says so, and no node may call a service the mesh policy has
+  not granted. Grants are evaluated on service names, never on addresses.
+- **Identity comes from your identity provider.** A node enrolls with an
+  OpenID Connect token or a one-time bootstrap token, and the control plane
+  turns that into a short-lived, offline-verifiable credential bound to the
+  node's own key.
 
-<img src="site/static/demo.gif" alt="Demo: installing SAM, adding the sam-mesh skill, and an agent discovering and calling tools across the mesh" width="100%" />
+<img src="site/static/demo.gif" alt="Installing sam-node, adding the skill, and an agent discovering and calling tools across the mesh" width="100%" />
 
-<details>
-<summary><b>Advanced demo</b>: an agent fans a batch of work across a warm pool of reviewer agents on the mesh</summary>
+## Try it
 
-<video src="https://github.com/user-attachments/assets/f1a61b6f-efcd-46d8-a6e6-659fb29dd1ce" width="100%" autoplay loop muted playsinline controls></video>
+```bash
+curl -sL https://sam-mesh.dev/install.sh | bash   # sam-node, mcp-client and friends
+sam-node join https://bananas.sam-mesh.dev        # one-time login
+sam-node run --daemonize                          # local MCP server on 127.0.0.1:8080
+sam-node skill install                            # teach your agent to use it
+```
 
-Full walkthrough: [Warm Agent Pool use case](site/content/docs/use-cases/warm-agent-pool.md).
+Your agent now has tools that discover and call services across the mesh,
+and an OpenAI-compatible endpoint that routes model requests to whoever
+serves the model. `bananas.sam-mesh.dev` is a shared developer testnet with
+no uptime promise; the [quick start](https://sam-mesh.dev/docs/getting-started/quickstart/)
+walks through it, and [your own mesh](https://sam-mesh.dev/docs/getting-started/your-own-mesh/)
+runs a control plane on your laptop in one command.
 
-</details>
+## What is in a mesh
 
----
-
-## What "Sovereign" Means in SAM
-
-SAM is an **open-source software project (Apache-2.0)** providing decentralized networking and cryptographic building blocks for autonomous AI agents. It carries no vendor telemetry and has no hardcoded dependencies on proprietary cloud services or model providers.
-
-SAM provides the open protocols, cryptographic building blocks, and software to build **sovereign, zero-trust agent meshes**. In SAM, digital sovereignty is built on architectural and cryptographic control—custody of root keys, independent identity federation, and policy-enforced data boundaries. In a sovereign deployment, operators:
-
-1. **Deploy Dedicated Mesh Infrastructure:** Run a dedicated control plane (`sam-control-plane`) and routing relays (`sam-router`) on your chosen infrastructure (managed cloud environments like Google Cloud, private Kubernetes clusters, or air-gapped datacenters) using our [Helm chart](charts/sam-mesh/README.md) or Kubernetes manifests.
-2. **Maintain Root Cryptographic Key Custody:** Generate, manage, and hold your own Ed25519 root signing keys (via local HSMs, KMS, or Cloud EKM). You maintain 100% of the cryptographic authority—no external party can mint credentials, revoke nodes, or alter policies.
-3. **Bring Your Own Identity Provider:** Bridge agent and user identities through your own OIDC identity provider (such as Dex, Keycloak, or corporate IdP).
-4. **Enforce Territorial & Jurisdictional Boundaries:** Use cryptographically attested label gates (`labels: {jurisdiction: eu}` in the node config, `X-Sam-Required-Labels`) to mathematically guarantee prompts and tool invocations never leave authorized geographic scopes.
-5. **Retain Autonomous Local Vetoes:** Configure local node attenuation policies (`sam-node.yaml`) to evaluate access rules *before* control plane grants, ensuring local nodes retain absolute veto authority.
-
-> [!NOTE]
-> **About the Public Developer Testnets:**
-> The public endpoints (`bananas.sam-mesh.dev` and `hub.sam-mesh.dev`) are free testbeds created using community resources solely for developer testing, continuous integration, and rapid experimentation. They provide **no guarantees, no uptime commitments, zero SLA, and no sovereign guarantees**. Running on a shared community testnet delegates identity management to the testbed maintainers; true sovereignty requires deploying a dedicated control plane with customer-held keys.
->
-> [![Testnet Health](https://github.com/google/sam/actions/workflows/testnet-health.yaml/badge.svg)](https://github.com/google/sam/actions/workflows/testnet-health.yaml) Every half hour a fresh node's view of each testnet is checked (enrollment surface, routers, canaries, and a cold-path probe that joins and calls a tool); a red badge means one of them is unhealthy and an issue labelled `testnet-health` says which check failed.
->
-> 📖 **Deep Dive:** Read our full **[Digital & Data Sovereignty Architecture](site/content/docs/sovereignty.md)** covering the 5 pillars, fail-closed label gates, uncooperative sandbox confinement, and regulatory alignment (GDPR Chapter V, EU Cloud Sovereignty Framework SEAL-3, EU Data Act).
-
----
-
-## Architecture Components
-
-*   `sam-control-plane`: The registry control plane for node identity registration, authorization policies, and router coordinating.
-*   `sam-router`: The libp2p bootstrap nodes and relays providing data-plane connectivity and forwarding.
-*   `sam-node`: The local node clients providing mesh transport integration and MCP sidecar routing.
-
----
+| Program | Role |
+|---|---|
+| `sam-control-plane` | Verifies who is joining, issues each node a signed credential, and holds the policy that says who may call what. |
+| `sam-router` | A well-known peer that nodes connect to first. Relays traffic between nodes that cannot reach each other and hosts the discovery table. |
+| `sam-node` | Runs next to your agent or service. Enrolls, connects, serves your local backends to the mesh, and exposes the mesh to your agent as a local MCP server and OpenAI-compatible API. |
+| `sam-one` | The control plane, a router and a web console in one binary, for laptops and small deployments. |
 
 ## Documentation
 
-Start exploring the Sovereign Agent Mesh:
+[sam-mesh.dev/docs](https://sam-mesh.dev/docs/) is built from `site/`.
 
-### Digital & Data Sovereignty
-- 🏛️ **[Digital & Data Sovereignty Architecture](site/content/docs/sovereignty.md)**: How SAM enforces data residency, territorial label gates, autonomous local vetoes, and regulatory compliance (GDPR, EU Cloud Sovereignty Framework SEAL-3, EU Data Act).
+- [Getting started](https://sam-mesh.dev/docs/getting-started/): one node on the testnet, then a mesh of your own.
+- [Concepts](https://sam-mesh.dev/docs/concepts/): architecture, identity and enrollment, authorization, networking.
+- [Guides](https://sam-mesh.dev/docs/guides/): exposing services, connecting agent clients, headless enrollment, Kubernetes, Cloud Run.
+- [Reference](https://sam-mesh.dev/docs/reference/): every flag, configuration key, HTTP route and policy field.
+- [Preview](https://sam-mesh.dev/docs/preview/): sandboxed agents and the mobile app, which work but are still settling.
+- [Contributing](https://sam-mesh.dev/docs/contributing/): building, testing and the local kind environment.
 
-### For Users & Operators
-- 🚀 **[User Quick Start Guide](site/content/docs/quickstart.md)**: Connect and run a SAM node on the community-hosted developer testnet (`bananas.sam-mesh.dev`, strictly for testing with no guarantees) using binaries or Docker.
-- 🎛️ **[Dedicated Sovereign Deployment](site/content/docs/user/kubernetes-deployment.md)**: Run your own private sovereign hub (control plane, router, console) via the [sam-mesh Helm chart](charts/sam-mesh/README.md) or Kubernetes manifests.
-- 🤖 **[Agent Integration Guides](site/content/docs/integrations/_index.md)**: Connect Google Gemini, Claude, and other AI agents to your SAM node to dynamically discover and call tools across the mesh.
-- 📡 **[Testnet Validation Tutorial](site/content/docs/development/testnet-validation.md)**: Real-time verification, remote tool invocation, and HTTP stream proxies on public developer testnets.
+## Status
 
-### For Developers & Contributors
-Compile from source, run local clusters, or execute tests:
-- 🛠️ **[Developer Guide](site/content/docs/development/_index.md)**: Prereqs, compilation, local control plane setup, and Kubernetes Kind deployment.
-- 🧪 **[Testing Guide](site/content/docs/development/testing.md)**: Go tests, E2E BATS, and containerized mesh execution.
+SAM is pre-1.0. The node, routers, control plane, identity and policy model
+are stable in shape and exercised by the test suite and two public testnets;
+see [ROADMAP.md](ROADMAP.md) for the release plan. Sandboxed agents
+(`sam-box`, `nano-init`) and the mobile app are in preview.
 
----
+## License and disclaimer
 
-## License
-
-See [LICENSE](LICENSE).
-
-## Disclaimer
-
-This is not an officially supported Google product. This project is not eligible for the [Google Open Source Software Vulnerability Rewards Program](https://bughunters.google.com/open-source-security).
+Apache-2.0; see [LICENSE](LICENSE). This is not an officially supported
+Google product, and it is not eligible for the
+[Google Open Source Software Vulnerability Rewards Program](https://bughunters.google.com/open-source-security).

@@ -1,6 +1,6 @@
 ---
 name: sam-a2a-bridge
-description: "Use when the task should be delegated to a remote A2A agent on the SAM (Sovereign Agent Mesh) network: send it work with send_agent_task (with text, structured data, or file attachments), check agent capabilities with get_agent_card, poll results with get_agent_task, hold multi-turn conversations, and enforce data-sovereignty labels on every call. Also use to set up the sam-a2a-bridge MCP server when those tools are not callable yet."
+description: "Use when the task should be delegated to a remote A2A agent on the SAM agent mesh: send it work with send_agent_task (with text, structured data, or file attachments), check agent capabilities with get_agent_card, poll results with get_agent_task, hold multi-turn conversations, and enforce data-residency labels on every call. Also use to set up the sam-a2a-bridge MCP server when those tools are not callable yet."
 ---
 
 # SAM A2A Bridge Skill
@@ -71,7 +71,7 @@ input schema) and `file_path` attachments appropriately.
   - `data` (optional) contains structured JSON returned inline.
   - `files` (optional) is a list of paths where agent-returned files are saved
     under the download directory.
-- **Sovereignty**: when the task involves data that must stay in a region or
+- **Data residency**: when the task involves data that must stay in a region or
   jurisdiction, set `required_labels` (comma-separated `key=value`, e.g.
   `region=eu-west-1`). The local node then refuses fail-closed before any data
   leaves it unless the peer's control-plane-attested labels match. Never drop
@@ -96,7 +96,7 @@ message while running and its answer or artifacts when completed. `data` and
 
 ## Interpret Errors
 
-- `403: Required labels not attested by provider` — the sovereignty gate
+- `403: Required labels not attested by provider` — the label gate
   refused before egress. Expected for non-matching regions; report it to the
   user, do not retry with weaker labels on your own.
 - `400: Invalid X-Sam-Required-Labels header ...` — malformed labels; fix the

@@ -1,0 +1,185 @@
+---
+title: "Identity and enrollment"
+linkTitle: "Identity"
+weight: 2
+---
+
+Every participant in a mesh, node or router, has a key that it generated
+itself and a credential that the control plane issued for that key. This page
+follows the credential from enrollment to expiry: how a node gets it, what it
+contains, how it is renewed, and how it is revoked.
+
+## Keys and peer IDs
+
+The first thing a node does is generate an Ed25519 key pair and store it in
+its data directory (`~/.config/sam-mesh/agent.db` by default). Its **peer
+ID**, the `12D3KooW...` string that appears in logs, discovery results and
+proxy URLs, is derived from the public key. The key never leaves the machine.
+The credential is bound to the key, so a copied credential is useless without
+it, and every peer-to-peer connection proves possession of the key as part
+of the libp2p handshake.
+
+`sam-node reset --all` deletes the key and gives the node a new peer ID.
+`sam-node reset` without `--all` keeps the key and deletes only the
+credential.
+
+## Enrollment
+
+Enrollment is a request to the control plane: "here is my public key, here is
+who I am, please issue me a credential for role *X* with labels *Y*". There
+are three ways to say who you are.
+
+**Interactive OIDC login.** `sam-node join <control-plane-url>` fetches the
+control plane's `/info`, learns which identity provider it trusts, and runs an
+OpenID Connect login. If a browser is available, it uses the loopback flow.
+On a headless machine it uses the device flow (a URL and a code that you enter
+on another device), or falls back to pasting a code. `--auth-mode` selects
+one of these explicitly. The ID token from the login is sent to
+`POST /register` together with the public key and a signature over a fresh
+challenge. This is how a person enrolls a laptop.
+
+**Non-interactive OIDC.** A workload that already has an OIDC token does not
+need a login. `sam-node run --jwt-path <file>` enrolls with the token in that
+file. On Kubernetes this is a projected service account token with the
+audience the control plane expects. `--client-id` and `--client-secret-path`
+do the same with an OAuth client-credentials grant. Routers enroll in the
+same way with `sam-router --jwt-path`.
+
+**Bootstrap token.** An operator mints a token with the admin API, the
+console, or `sam-one token create`, and copies it to the machine. The node
+sends it to `POST /enroll`. Unless the control plane runs with
+`--auto-approve-enrollment`, the request waits in a queue until an
+administrator approves it, and the node polls `GET /enroll/status` while it
+waits. A token has a role, an expiry and a usage count. A single-use token is
+spent as soon as one node is approved with it. This is how machines without
+an identity of their own enroll, and how `sam-one` enrolls devices by QR
+code.
+
+For all three paths, the control plane checks the same things before it
+mints a credential:
+
+1. The peer ID matches the submitted public key, and the challenge signature
+   verifies under that key. This proves that the requester holds the key it
+   is registering.
+2. Neither the peer ID nor the identity behind it is banned.
+3. The identity resolves, through the bindings in the mesh policy, to the
+   role being requested. `sam-node` requests `sam:role:node`, `sam-router`
+   requests `sam:role:router`, and `sam-box` requests `sam:role:sambox`. If
+   the policy binds nobody to `sam:role:node`, no node can enroll.
+4. Every label the node declared is permitted by the `allowed_labels` of a
+   role it holds. A role without `allowed_labels` permits no labels.
+
+The node stores the credential, the control plane's public key, the control
+plane URL and the router addresses it received. From then on it is a member
+of that mesh only. If you point it at a different control plane later, it
+refuses until you reset it, because a credential is only valid for the mesh
+that issued it.
+
+## The credential
+
+The credential is a [Biscuit](https://www.biscuitsec.org/), a signed
+authorization token. Its authority block holds facts written in Datalog, a
+small logic language in which a fact looks like `role("sam:role:node")`. The
+block is signed by the control plane's Ed25519 key. Any node with the public
+key can verify it without contacting anyone. The block contains:
+
+| Fact | Meaning |
+|---|---|
+| `node("12D3KooW...")`, `client_peer_id("12D3KooW...")` | The peer ID the token belongs to. Every verifier checks that the connection it arrived on was authenticated as this peer. |
+| `expiration(<time>)` | When the token stops being valid. |
+| `role("sam:role:node")`, `role("developer")` | The roles the identity resolved to, one fact each. |
+| `user("...")`, `email("...")`, `group("...")`, `idp_role("...")` | Claims copied from the OIDC token: subject, verified email, each group, each entry of the issuer's `roles` claim. Absent for bootstrap enrollments. |
+| `label("region", "eu")` | One fact per declared and permitted label. |
+| `granted_service_*`, `granted_target_*`, `granted_agent_*` | What the roles allow, compiled from `allowed_services`, `allowed_targets` and `allowed_agents`. [Authorization](../authorization/) describes them. |
+
+The node does not set any of these facts. Roles come from the bindings in
+the mesh policy, not from the identity provider: an issuer's `roles` claim
+is stored as `idp_role()`, which grants nothing by itself. Labels are the
+ones the node asked for and the policy allowed. Grants come from the policy.
+
+Tokens carry no appended blocks. Biscuit lets a holder attenuate a token by
+appending blocks, but SAM verifiers reject any token that has one. A request
+that needs to carry an extra claim (for example, which agent a node is acting
+for) sends it next to the token instead.
+
+## Lifetime and refresh
+
+A credential is valid for `--biscuit-ttl`, 24 hours by default. If the OIDC
+token expires sooner, the credential expires with it. Nodes and routers check
+every ten minutes, and when less than a fifth of the lifetime remains they
+call `POST /refresh` with the current token and a signature over a fresh
+challenge. The control plane verifies both, resolves the identity's roles
+against the current policy again, and mints a new token with the same
+identity facts and labels.
+
+Refresh is limited by the **session**, which is a record on the control
+plane, not a field in the token. The session of an OIDC enrollment lasts
+`--oidc-session-ttl`, 90 days by default. After that, the node has to log in
+again. A bootstrap enrollment has no session expiry. A ban also acts on the
+session record.
+
+A node that enrolled interactively with `--offline-access` also keeps an OIDC
+refresh token. If its credential expires completely, it uses the refresh
+token to obtain a new ID token and re-enrolls under the same peer ID without
+any user action.
+
+## Signing keys and rotation
+
+The control plane rotates its signing key every `--key-rotation-interval`
+(24 hours by default). The previous key stays valid for `--key-grace-period`
+(1 hour by default) and is then retired. `GET /keys` returns the current set
+of keys, signed by each key in the set. Routers poll it every
+`--keys-sync-interval`. Nodes fetch it at start and when they receive a
+rotation event. Both accept a new set only if one of its signatures verifies
+under a key they already trust. The first key comes from enrollment, and
+each later key is vouched for by the key it replaces.
+
+Nobody can verify a credential signed by a retired key, including the
+control plane. A node that was offline for a whole grace period therefore
+cannot refresh. This is intentional. The grace period is the deadline after
+which a machine that went quiet cannot come back unnoticed. How it comes back
+depends on how it enrolled:
+
+- An OIDC node with a refresh token re-enrolls on its own.
+- A bootstrap node needs an operator to mint a new token and run
+  `sam-node join` again (or to restart the router with the new token). The
+  node keeps its peer ID. The control plane recognises the approved peer and
+  mints a new credential without going through the approval queue.
+- A bootstrap node whose record has `autonomous_recovery` set may refresh on
+  proof of possession of its key alone. This is off by default, and an
+  administrator sets it per token or per node. A node that can always
+  recover holds a credential that never expires, and only a ban stops it.
+
+## Revocation
+
+`POST /admin/revoke` with a peer ID (or `sam-one admin ban`, or the console)
+marks the node as banned. Its next refresh is refused and the node daemon
+exits. The control plane publishes the peer ID in `/info`, which routers and
+nodes read, so peers stop accepting connections from it before its current
+token expires. If the node was enrolled through OIDC, the identity behind it
+(`issuer|subject`) is banned too. It can no longer register a new key, and
+bootstrap tokens it minted stop working. `POST /admin/nodes/{peer_id}/unban`
+reverses both bans.
+
+A bootstrap token can be revoked before it expires with
+`DELETE /admin/bootstrap-tokens/{id}`. The token stays in the list, marked
+as revoked, so the record of what it enrolled is kept.
+
+## What a node proves on every connection
+
+The control plane's HTTP API is protected by challenge signatures, because a
+peer ID in a request body is otherwise only a claim. On the mesh, the libp2p
+secure channel already proves which key is on the other end, so the handshake
+between two nodes is simpler. Each side sends its credential. Each side
+verifies the other's signature and expiry, checks that the credential's
+`node()` fact matches the authenticated peer, and checks the ban list. Only
+then is the requested service name evaluated against policy. Routers perform
+the same handshake on every connection they accept, so a banned or unenrolled
+peer cannot reach the DHT.
+
+## See also
+
+- [Headless enrollment](../../guides/headless-enrollment/) for the bootstrap
+  token workflow step by step.
+- [Control plane reference](../../reference/control-plane/) for the flags
+  and HTTP routes named here.
