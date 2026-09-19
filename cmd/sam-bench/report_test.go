@@ -15,6 +15,12 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -101,6 +107,38 @@ func TestGaugeIgnoresSourcesThatNeverReportedIt(t *testing.T) {
 	total, sources := gauge(obs, "process_resident_memory_bytes")
 	if total != 10 || sources != 1 {
 		t.Errorf("gauge = (%v, %v), want (10, 1)", total, sources)
+	}
+}
+
+func TestWriteObservationWithNonFiniteMetrics(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("unavailable NaN\npositive +Inf\nnegative -Inf\nfinite 3\n"))
+	}))
+	defer server.Close()
+
+	metrics, err := scrapeAll(context.Background(), []string{server.URL})
+	if err != nil {
+		t.Fatalf("scrapeAll: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "observation.json")
+	wantReport := &bench.Report{Requests: 1, Succeeded: 1}
+	if err := write(path, observation{Report: wantReport, After: metrics}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	var got observation
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+	if got.Report == nil || got.Report.Requests != 1 || got.Report.Succeeded != 1 {
+		t.Errorf("report = %+v, want %+v", got.Report, wantReport)
+	}
+	if values := got.After[server.URL]; len(values) != 1 || values["finite"] != 3 {
+		t.Errorf("metrics = %v, want only finite=3", values)
 	}
 }
 
