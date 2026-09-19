@@ -5,7 +5,7 @@ conversation and the tool loop, and nothing else. No model endpoint to
 configure, no API key, no tool servers deployed alongside it, and no network
 beyond what its policy names.
 
-Full walkthrough: [Running agents on SAM](https://sam-mesh.dev/docs/user/running-agents/).
+Full walkthrough: [Sandboxed agents](https://sam-mesh.dev/docs/preview/sandboxed-agents/).
 
 ## What it demonstrates
 

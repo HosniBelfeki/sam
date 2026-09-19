@@ -4,10 +4,9 @@ Deploys a self-contained SAM mesh (control plane, router, console, and an
 in-cluster Postgres) for local development, testing, or self-hosting your
 own mesh.
 
-> For large-scale production deployments (GKE/EKS/AKS) using externally
-> managed Postgres/DNS/OIDC, see the
-> [Production Kubernetes Deployment guide](https://sam-mesh.dev/docs/user/kubernetes-deployment/),
-> which uses plain manifests instead of this chart.
+> For deployments on GKE/EKS/AKS with externally managed Postgres, DNS and
+> OIDC, see the
+> [Kubernetes guide](https://sam-mesh.dev/docs/guides/kubernetes/).
 
 ## Install
 
@@ -65,7 +64,7 @@ Defaults to `true` (any node/router presenting a valid identity token is
 enrolled immediately, no manual step). Set to `false` if you want an
 administrator to approve each enrollment via `/admin/enrollments` before a
 node can join — see the
-[Control Plane Configuration guide](https://sam-mesh.dev/docs/user/control-plane-configuration/#6-headless-node-enrollment-bootstrap-token-flow).
+[Headless enrollment guide](https://sam-mesh.dev/docs/guides/headless-enrollment/).
 
 ## Gateway API (`gateway.enabled`)
 

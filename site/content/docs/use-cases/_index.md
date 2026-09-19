@@ -1,17 +1,17 @@
 ---
-title: "Use Cases"
-linkTitle: "Use Cases"
+title: "Use cases"
+linkTitle: "Use cases"
 weight: 5
 ---
 
-Worked examples of what you can build **on top of the mesh** — patterns that
-combine ordinary `sam-node` MCP services (discovery, remote tool calls, leasing)
-into something larger, with no changes to the node itself.
+Worked examples of things built on top of the mesh. Each pattern combines
+ordinary `sam-node` features (discovery, remote tool calls, leasing) into
+something larger, without changes to the node itself.
 
-Each use case is harness-agnostic: the orchestrator is any MCP client — an agent
-harness (Claude Code, Codex, Antigravity, …) or a custom program — talking to the
-mesh MCP tools exposed by a local node.
+None of the examples depends on a specific harness. The orchestrator is any
+MCP client, whether an agent harness (Claude Code, Codex, Antigravity) or a
+custom program, talking to the tools that a local node exposes.
 
-The runnable source for every example lives under
+The runnable source for every example is under
 [`development/examples/`](https://github.com/google/sam/tree/main/development/examples)
-in the repository; each page here links to its example directory.
+in the repository. Each page links to its directory.

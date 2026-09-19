@@ -4,8 +4,9 @@ linkTitle: "Warm Agent Pool"
 weight: 10
 ---
 
-Fan a batch of work across a pool of identical, already-running worker agents —
-built entirely from ordinary mesh MCP services, no gossip and no node changes.
+Spread a batch of work across a pool of identical, already-running worker
+agents. The pool is built from ordinary mesh MCP services, with no gossip and
+no changes to the node.
 
 <video autoplay loop muted playsinline controls style="width: 100%; border-radius: 8px;">
   <source src="../../../demo-warm-agent-pool.mp4" type="video/mp4">
@@ -15,85 +16,91 @@ Source: [`development/examples/code-reviewer-pool/`](https://github.com/google/s
 
 ## The idea
 
-Some agent tools are expensive to stand up but cheap to reuse — a reviewer that
-shells out to an LLM, a sandbox that boots a runtime, a service holding a warm
-model in memory. You don't want to spawn one per request, and you don't want a
-single instance serialising all your work. What you want is a **pool of
-identical, already-running workers** and something that hands them out one job at
-a time.
+Some agent tools are expensive to start but cheap to reuse: a reviewer that
+calls an LLM, a sandbox that boots a runtime, a service that holds a warm
+model in memory. You do not want to start one per request, and you do not
+want a single instance that handles all your work one job at a time. What
+you want is a pool of identical, already-running workers, and something that
+hands them out one job at a time.
 
-This use case builds exactly that on the mesh, using **nothing but ordinary MCP
-services**. The worked example is a *code reviewer*: several identical reviewer
-workers, a manager that leases them, and an orchestrator that fans a batch of
-files across the pool in parallel.
+This use case builds that on the mesh, using only ordinary MCP services. The
+worked example is a code reviewer: several identical reviewer workers, a
+manager that leases them, and an orchestrator that spreads a batch of files
+across the pool in parallel.
 
 ## The pieces
 
-- **Workers** — plain `code-reviewer` MCP services. Each exposes a single
-  `review_code` tool that pipes the snippet to an LLM and returns comments
-  grouped by severity. They're stateless and interchangeable; the pool's job is
-  to keep them busy.
-- **Manager** — a normal MCP service exposing `acquire_worker` /
-  `release_worker` / `list_workers`. It's also a *northbound MCP client of its
-  own node*: every few seconds it calls `find_remote_tools(code-reviewer)` to
-  learn which worker peers exist (via the DHT), and it tracks which of them are
-  free or busy using **leases**.
-- **Orchestrator** — any mesh MCP client (an agent harness or a custom program).
-  The loop per file is: `acquire_worker` → `call_remote_tool(peer, review_code)`
-  → `release_worker`. Run those chains concurrently and each acquire hands back a
-  *different* free worker, so parallel dispatch never collides.
+- **Workers**: plain `code-reviewer` MCP services. Each exposes a single
+  `review_code` tool that sends the snippet to an LLM and returns comments
+  grouped by severity. They are stateless and interchangeable. The pool's job
+  is to keep them busy.
+- **Manager**: a normal MCP service that exposes `acquire_worker`,
+  `release_worker` and `list_workers`. It is also an MCP client of its own
+  node. Every few seconds it calls `find_remote_tools` to learn which worker
+  peers exist (through the DHT), and it tracks which of them are free or busy
+  with leases.
+- **Orchestrator**: any mesh MCP client (an agent harness or a custom
+  program). The loop per file is `acquire_worker`, then
+  `call_remote_tool(peer, review_code)`, then `release_worker`. Run those
+  chains concurrently and each acquire returns a different free worker, so
+  parallel dispatch never collides.
 
-## Why there's no readiness broadcast
+## Why there is no readiness broadcast
 
-A classic worker pool needs to know two things: *who exists* and *who's busy*.
-The manager gets the first from **DHT discovery** and the second from **its own
-leases** — the exact two facts a gossip/readiness broadcast would otherwise
-provide. So the whole thing runs on discovery + leasing, no pub/sub. The
-tradeoff: leasing is authoritative only while the manager is the *sole*
-dispatcher — perfect for a single-manager pool, and the point at which you'd
-reach for real coordination if you needed multiple managers.
+A classic worker pool needs to know two things: who exists and who is busy.
+The manager gets the first from DHT discovery and the second from its own
+leases. These are exactly the two facts that a readiness broadcast would
+otherwise provide. So the whole pool runs on discovery and leasing, without
+pub/sub. The trade-off is that leasing is authoritative only while the
+manager is the only dispatcher. That fits a single-manager pool. If you
+needed several managers, that is the point where you would need real
+coordination.
 
 ## What makes it correct under concurrency
 
-The interesting part is that "hand out a warm worker, one job at a time" stays
-true even when acquires race and workers come and go:
+"Hand out a warm worker, one job at a time" stays true even when acquires
+race and workers come and go:
 
-- **No double-lease** — the manager is single-threaded and `leaseFree()` is fully
-  synchronous (no `await` between picking a worker and marking it busy), so two
-  concurrent `acquire_worker` calls can never be handed the same peer.
-- **Grace eviction** — discovery never drops a *leased* worker on a transient
-  miss, and only drops a *free* one after `SAM_GRACE_MISSES` consecutive misses.
-  A slow, busy worker won't get evicted and re-handed-out mid-review.
-- **Fencing tokens** — `acquire_worker` returns a `lease_id`; `release_worker`
-  only clears the lease if that id still matches, so a late release from an
-  expired lease can't free a *newer* holder's worker.
-- **Single-flight backstop** — even if a lease race ever slipped through, the
-  worker itself returns `POOL_BUSY` for a second concurrent `review_code`, so the
-  one-at-a-time invariant holds at the source.
+- **No double lease.** The manager is single-threaded and `leaseFree()` is
+  fully synchronous (there is no `await` between picking a worker and marking
+  it busy), so two concurrent `acquire_worker` calls can never receive the
+  same peer.
+- **Grace eviction.** Discovery never drops a leased worker on a transient
+  miss, and it drops a free one only after `SAM_GRACE_MISSES` consecutive
+  misses. A slow, busy worker is not evicted and handed out again in the
+  middle of a review.
+- **Fencing tokens.** `acquire_worker` returns a `lease_id`. `release_worker`
+  clears the lease only if that id still matches, so a late release from an
+  expired lease cannot free a worker that belongs to a newer holder.
+- **Single-flight guard.** Even if a lease race got through, the worker
+  itself returns `POOL_BUSY` for a second concurrent `review_code`, so the
+  one-at-a-time rule holds at the source.
 
-## Lease enforcement (workers trust the manager, not the caller)
+## Lease enforcement
 
-Workers don't hand out reviews to anyone who can reach them. On `acquire_worker`
-the manager **mints a short-lived HMAC token** bound to that worker and lease
-expiry; the orchestrator forwards it in the `review_code` arguments, and the
-worker **verifies it offline** (shared secret, no call back to the manager). Any
-`review_code` without a valid, unexpired token gets `NO_LEASE`. Both sides
-default to a hardcoded dev secret (`sam-dev-pool-secret`) so it enforces out of
-the box; set a matching `SAM_POOL_SECRET` on the manager and every worker to
-override it. Mismatched or one-sided secrets **fail closed** — every call returns
+Workers trust the manager and not the caller. On `acquire_worker` the
+manager creates a short-lived HMAC token bound to that worker and to the
+lease expiry. The orchestrator forwards the token in the `review_code`
+arguments, and the worker verifies it offline (shared secret, no call back to
+the manager). Any `review_code` without a valid, unexpired token gets
+`NO_LEASE`. Both sides default to a hardcoded development secret
+(`sam-dev-pool-secret`), so enforcement works out of the box. Set a matching
+`SAM_POOL_SECRET` on the manager and on every worker to override it.
+Mismatched or one-sided secrets fail closed, and every call returns
 `NO_LEASE`.
 
 ## What you can do with it
 
-- **Parallel batch work** — fan a directory of files (or tasks) across N warm
-  workers and collect results as they land, bounded by pool size rather than
-  serialised.
-- **Elastic capacity** — scale a worker deployment up or down mid-job; the
-  manager picks a new worker up on its next discovery pass and starts leasing it,
-  and drains one that disappears without corrupting in-flight leases.
-- **A reusable pattern** — swap `code-reviewer` for any expensive-to-warm tool
-  (test runner, sandbox, embedder, browser). The manager is generic; it pools
-  whatever `SAM_POOL_SERVICE` names.
+- **Parallel batch work.** Spread a directory of files (or tasks) across N
+  warm workers and collect results as they arrive. The limit is the pool
+  size, and the work is not serialised.
+- **Elastic capacity.** Scale a worker deployment up or down in the middle of
+  a job. The manager picks up a new worker on its next discovery pass and
+  starts leasing it, and it drains a worker that disappears without
+  corrupting in-flight leases.
+- **A reusable pattern.** Swap `code-reviewer` for any tool that is expensive
+  to warm up (test runner, sandbox, embedder, browser). The manager is
+  generic. It pools whatever `SAM_POOL_SERVICE` names.
 
 ## Try it on kind
 
@@ -102,9 +109,9 @@ brings up the whole pool with one command.
 
 ### 1. Set an LLM key for the reviewer image
 
-The reviewer workers shell out to an LLM, so set your API key on the API-key
-`ENV` line in `development/examples/code-reviewer-pool/reviewer/Dockerfile`
-before building (a free key is fine for the demo).
+The reviewer workers call an LLM, so set your API key on the API-key `ENV`
+line in `development/examples/code-reviewer-pool/reviewer/Dockerfile` before
+building. A free key is enough for the demo.
 
 ### 2. Bring the mesh up and deploy the pool
 
@@ -113,9 +120,9 @@ make build            # builds ./bin/sam-node (once)
 make kind-up          # control plane + router (no sam-nodes yet)
 ```
 
-Then build the two images and deploy the pool as `charts/sam-node` releases —
-three reviewer replicas (each replica enrolls as its own mesh node, so the
-pool is three same-named `code-reviewer` services) and one manager:
+Then build the two images and deploy the pool as `charts/sam-node` releases:
+three reviewer replicas and one manager. Each replica enrolls as its own
+mesh node, so the pool is three `code-reviewer` services with the same name.
 
 ```bash
 docker build -t reviewer:local development/examples/code-reviewer-pool/reviewer
@@ -133,19 +140,19 @@ helm --kube-context kind-sam-kind -n sam-kind install manager charts/sam-node \
 ### 3. Start a local orchestrator node
 
 ```bash
-make kind-local-node  # local sam-node enrolled in the mesh — LEAVE RUNNING
+make kind-local-node  # a local sam-node enrolled in the mesh; leave it running
 ```
 
-`kind-local-node` runs in the foreground in its own shell and exposes the mesh
-MCP tools at **`http://127.0.0.1:9099/mcp`** (bearer token `devtoken`) — no
-`kubectl port-forward` needed. This local node is your orchestrator's entry
-point into the mesh.
+`kind-local-node` runs in the foreground in its own shell and exposes the
+mesh MCP tools at `http://127.0.0.1:9099/mcp` (token `devtoken`). No
+`kubectl port-forward` is needed. This local node is the entry point into
+the mesh for your orchestrator.
 
 ### 4. Point your harness at the local node
 
-Add the local node as an MCP server in whatever harness you drive the mesh from.
-The specifics differ per harness (some use a JSON/TOML config file, others a UI),
-but the settings are always the same:
+Add the local node as an MCP server in the harness you use to drive the
+mesh. The details differ per harness (some use a JSON or TOML config file,
+others a UI), but the settings are always the same:
 
 - **Transport:** HTTP (Streamable HTTP / `http`)
 - **URL:** `http://127.0.0.1:9099/mcp`
@@ -166,20 +173,20 @@ Cursor, and others) would add:
 }
 ```
 
-Consult your harness's MCP documentation for its exact config format. Once
-connected, the mesh exposes `acquire_worker`, `release_worker`, `list_workers`,
-`find_remote_tools`, and `call_remote_tool` as tools your agent (or program) can
-call.
+Check the MCP documentation of your harness for its exact config format.
+Once connected, the mesh exposes `acquire_worker`, `release_worker`,
+`list_workers`, `find_remote_tools` and `call_remote_tool` as tools that your
+agent (or program) can call.
 
 ### 5. Drive the pool
 
-Have your orchestrator run, per file, in parallel:
+Have your orchestrator run these steps per file, in parallel:
 
-1. `acquire_worker` → returns `{peer_id, tool, lease_id, token}`.
-2. `call_remote_tool(peer_id, review_code, {code, token})` — forward the `token`
-   in the tool arguments (the pool requires it).
-3. `release_worker(peer_id, lease_id)` — pass the `lease_id` back so a stale
-   release can't free a newer holder.
+1. `acquire_worker` returns `{peer_id, tool, lease_id, token}`.
+2. `call_remote_tool(peer_id, review_code, {code, token})`. Forward the
+   `token` in the tool arguments, because the pool requires it.
+3. `release_worker(peer_id, lease_id)`. Pass the `lease_id` back, so that a
+   stale release cannot free a worker that belongs to a newer holder.
 
 A natural prompt for an agent harness:
 
@@ -188,13 +195,14 @@ A natural prompt for an agent harness:
 > `review_code` with the file contents (forwarding the token), and release it
 > (pass the `lease_id` back). Run them in parallel.
 
-You'll watch the reviews come back concurrently, bounded by the number of workers
-in the pool.
+The reviews come back concurrently, limited by the number of workers in the
+pool.
 
-### 6. Elasticity beat (add a worker mid-job)
+### 6. Elasticity (add a worker in the middle of a job)
 
-Scale the reviewer pool down, start a larger job, then scale it back up — the
-manager picks the new worker up on its next discovery pass and starts leasing it:
+Scale the reviewer pool down, start a larger job, then scale it back up. The
+manager picks up the new worker on its next discovery pass and starts
+leasing it:
 
 ```bash
 kubectl --context kind-sam-kind -n sam-kind scale deploy/reviewers-sam-node --replicas=2

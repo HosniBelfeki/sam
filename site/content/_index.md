@@ -1,9 +1,13 @@
 ---
 title: SAM
-description: Sovereign Agent Mesh - A zero-config, zero-trust decentralized mesh network built for autonomous AI agents.
+description: A private, zero-trust network for AI agents to publish, discover and call tools and models across machines.
 ---
-SAM (Sovereign Agent Mesh) provides a secure, zero-trust P2P network specifically designed for AI agents to discover, share, and invoke tools across machines.
+SAM is a private network for AI agents. A node runs beside an agent, publishes
+the tools and models it offers, finds what other nodes offer, and calls them
+over authenticated peer-to-peer connections, through relays when the machines
+cannot reach each other directly.
 
-Think of it as a private, zero-trust overlay network tailored for agent-to-agent communication.
-
-**Secure by Default**: You do not join a mesh automatically, and your tools are never exposed by default. SAM relies on a Zero-Trust architecture, meaning you are 100% isolated until you explicitly join a mesh and allow access. You can use our public testnet for "Easy Mode" testing, or run completely in "DIY Mode" by hosting your own control plane.
+Nothing is reachable by default: a node exposes no services until told to, and
+no node may call a service the mesh policy has not granted. Identity comes from
+your identity provider, and the control plane that turns it into mesh
+credentials is one you can run yourself.

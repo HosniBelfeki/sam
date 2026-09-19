@@ -1,4 +1,4 @@
-# Sovereign Agent Mesh (SAM) Roadmap
+# SAM Roadmap
 
 ## Phase 1: Alpha
 
@@ -11,7 +11,7 @@ The Alpha phase is focused on laying the foundational architecture, finalizing A
 
   * Establish P2P routing and base node lifecycle.
   * Deploy community developer testnets.
-  * Draft initial sovereignty architectural documentation.
+  * Draft the initial architecture documentation.
   * Integrate baseline network services: MCP, A2A, Inference.
 
 * **Exit Criteria:**
@@ -35,7 +35,7 @@ The Beta phase iterates on functional completeness based on real-world deploymen
 
 * **Exit Criteria:**
 
-  * All planned sovereignty features are implemented and passing integration tests.
+  * All planned data-residency and control features are implemented and passing integration tests.
   * API and Datalog schemas are frozen.
 
 ## Phase 3: The Audit Freeze (Release Candidates)
@@ -44,24 +44,24 @@ The Beta phase iterates on functional completeness based on real-world deploymen
 **Status:** Feature Frozen / Undergoing Audit
 
 During this phase, **no new features are merged**.
-The codebase is strictly locked down to undergo rigorous external validation to ensure it meets our security and sovereignty guarantees.
+The codebase is strictly locked down to undergo rigorous external validation to ensure it meets our security and data-residency guarantees.
 
 * **Core Objectives:**
 
   * **Security Audit:** Comprehensive third-party penetration testing, code review, and cryptography validation (focusing on Biscuit tokens and Ed25519 key handling).
-  * **Sovereignty & Compliance Audit:** Validation against strict digital sovereignty frameworks (e.g., GDPR data residency, EU AI Act traceability, CSF SEAL-3).
+  * **Compliance Audit:** Validation against data-residency and traceability frameworks (e.g., GDPR data residency, EU AI Act traceability, CSF SEAL-3).
 
 * **Exit Criteria:**
 
   * All critical and high-severity security vulnerabilities are remediated.
-  * External auditors officially sign off on the cryptographic and architectural sovereignty claims.
+  * External auditors officially sign off on the cryptographic and architectural claims.
 
 ## Phase 4: Production Stable
 
 **Versions:** `v1.0.0` and beyond
 **Status:** Mission-Critical Ready
 
-The framework is certified for enterprise, sovereign, and cross-border deployments.
+The framework is certified for enterprise, regulated, and cross-border deployments.
 
 * **Core Objectives:**
 

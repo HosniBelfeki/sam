@@ -1,6 +1,6 @@
 ---
 name: sam-mesh
-description: "Use when local tools cannot provide a needed capability and a SAM (Sovereign Agent Mesh) network can: inspect mesh state, discover reachable services/tools, describe and call namespaced remote MCP tools, and reach OpenAI-compatible inference models hosted by mesh peers. Also use to set up, join, or reconnect a sam-node when its MCP tools are not callable yet."
+description: "Use when local tools cannot provide a needed capability and a SAM agent mesh can: inspect mesh state, discover reachable services/tools, describe and call namespaced remote MCP tools, and reach OpenAI-compatible inference models hosted by mesh peers. Also use to set up, join, or reconnect a sam-node when its MCP tools are not callable yet."
 ---
 
 # SAM Agent Skill

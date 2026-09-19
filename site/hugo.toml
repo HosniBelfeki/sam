@@ -21,54 +21,55 @@ contentDir = "content"
   [markup.goldmark.renderer]
     unsafe = true
 
-# Enable Docsy's navigation structure
-sectionPagesMenu = "main"
-
 [module]
   [[module.imports]]
     path = "github.com/google/docsy"
   [[module.imports]]
     path = "github.com/google/docsy/dependencies"
 
+# Top navigation. The section _index.md files carry no menu entries of their
+# own; everything is listed here so the order is in one place.
 [menu]
   [[menu.main]]
     identifier = "docs"
-    name = "Overview"
-    title = "Overview"
+    name = "Docs"
+    title = "Documentation"
     url = "/docs/"
     weight = 1
 
   [[menu.main]]
-    identifier = "quickstart"
-    name = "Quick Start"
-    title = "Quick Start"
-    url = "/docs/quickstart/"
+    identifier = "getting-started"
+    name = "Getting started"
+    url = "/docs/getting-started/"
     weight = 2
 
   [[menu.main]]
-    identifier = "user"
-    name = "User Guides"
-    title = "User Guides"
-    url = "/docs/user/"
+    identifier = "concepts"
+    name = "Concepts"
+    url = "/docs/concepts/"
     weight = 3
 
   [[menu.main]]
-    identifier = "integrations"
-    name = "Agent Integrations"
-    title = "Agent Integrations"
-    url = "/docs/integrations/"
+    identifier = "guides"
+    name = "Guides"
+    url = "/docs/guides/"
     weight = 4
 
   [[menu.main]]
-    identifier = "development"
-    name = "Developer Guides"
-    title = "Developer Guides"
-    url = "/docs/development/"
+    identifier = "reference"
+    name = "Reference"
+    url = "/docs/reference/"
     weight = 5
+
+  [[menu.main]]
+    identifier = "preview"
+    name = "Preview"
+    url = "/docs/preview/"
+    weight = 6
 
 [params]
   github_repo = "https://github.com/google/sam"
-  github_subdir = "docs"
+  github_subdir = "site"
   github_branch = "main"
 
   [params.ui]

@@ -1,7 +1,7 @@
 name: Sam-One Cloud Run Sandbox
 
 # On-demand sam-one deployments on Cloud Run (see
-# site/content/docs/user/cloud-run-deployment.md for the manual version).
+# site/content/docs/guides/cloud-run.md for the manual version).
 # Deploys are gated by the 'sam-one-sandbox' GitHub Environment: required
 # reviewers approve each run before GCP credentials are minted.
 #
