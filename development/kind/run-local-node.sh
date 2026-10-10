@@ -52,8 +52,7 @@ export AGENTMESH_API_TOKEN=devtoken
 # ARGS is documented above as the way to pass extra args (e.g. to host a
 # service); word-split it here so it actually takes effect, alongside any
 # args passed positionally to this script.
-# shellcheck disable=SC2206
-EXTRA_ARGS=(${ARGS:-})
+read -r -a EXTRA_ARGS <<< "${ARGS:-}"
 
 # Plaintext to the kind LoadBalancer IP: the docker bridge on this machine is
 # the trust boundary here, and the admin token above travelled the same hop.
