@@ -1125,8 +1125,9 @@ func (n *AgentMeshNode) redialRouter(ctx context.Context, router peer.ID) {
 			n.mu.Unlock()
 			// A drop between the handshake and the line above found this
 			// redial still running and started none. Checked only now that
-			// a new drop starts its own redial, so neither is lost.
-			if readmitted && !n.isAuthenticatedAndConnected(router) {
+			// a new drop starts its own redial, so neither is lost. A node
+			// that is stopping closes its connections and redials nothing.
+			if readmitted && ctx.Err() == nil && !n.isAuthenticatedAndConnected(router) {
 				logger.Warnf("[AuthN] Router %s dropped again as it re-admitted this node; redialing", router)
 				n.redialRouter(ctx, router)
 			}
