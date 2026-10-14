@@ -1111,16 +1111,25 @@ func (n *AgentMeshNode) redialRouter(ctx context.Context, router peer.ID) {
 	}
 	if n.redialing[router] {
 		n.mu.Unlock()
+		logger.Debugf("[AuthN] Router %s dropped while a redial of it is running; that redial checks the session before it ends", router)
 		return
 	}
 	n.redialing[router] = true
 	n.mu.Unlock()
 
 	go func() {
+		readmitted := false
 		defer func() {
 			n.mu.Lock()
 			delete(n.redialing, router)
 			n.mu.Unlock()
+			// A drop between the handshake and the line above found this
+			// redial still running and started none. Checked only now that
+			// a new drop starts its own redial, so neither is lost.
+			if readmitted && !n.isAuthenticatedAndConnected(router) {
+				logger.Warnf("[AuthN] Router %s dropped again as it re-admitted this node; redialing", router)
+				n.redialRouter(ctx, router)
+			}
 		}()
 		biscuitBytes, err := n.loadIdentityForAuth()
 		if err != nil {
@@ -1151,6 +1160,7 @@ func (n *AgentMeshNode) redialRouter(ctx context.Context, router peer.ID) {
 				logger.Infof("[AuthN] Router %s re-admitted this node on redial %d", router, attempt)
 				// A router that restarted lost this node's records.
 				n.triggerReprovide()
+				readmitted = true
 				return
 			}
 			if errors.Is(err, ErrFatalAuth) {
