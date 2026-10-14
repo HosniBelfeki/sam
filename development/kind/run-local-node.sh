@@ -2,7 +2,8 @@
 # Enroll a locally-built ./bin/agentmesh-node into the kind mesh the way a real external node joins:
 # a bootstrap token over the control plane's gateway address, peer traffic through the router's
 # node-IP multiaddrs. Extra args pass through, e.g. to host a service:
-#   ARGS="--config my-node.yaml"
+#   make kind-local-node ARGS="--config my-node.yaml"
+#   ./development/kind/run-local-node.sh --config my-node.yaml
 set -euo pipefail
 
 CLUSTER="agentmesh-kind"
@@ -49,10 +50,6 @@ cleanup() { [[ -n "${NODE_PID:-}" ]] && kill "${NODE_PID}" 2>/dev/null || true; 
 trap cleanup EXIT INT TERM
 
 export AGENTMESH_API_TOKEN=devtoken
-# ARGS is documented above as the way to pass extra args (e.g. to host a
-# service); word-split it here so it actually takes effect, alongside any
-# args passed positionally to this script.
-read -r -a EXTRA_ARGS <<< "${ARGS:-}"
 
 # Plaintext to the kind LoadBalancer IP: the docker bridge on this machine is
 # the trust boundary here, and the admin token above travelled the same hop.
@@ -65,7 +62,6 @@ read -r -a EXTRA_ARGS <<< "${ARGS:-}"
   --discovery-interval 200ms \
   --router-connect-timeout 10s \
   --data-dir "${DATA_DIR}" \
-  "${EXTRA_ARGS[@]}" \
   "$@" &
 NODE_PID=$!
 wait "${NODE_PID}"
