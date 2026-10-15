@@ -1118,18 +1118,12 @@ func (n *AgentMeshNode) redialRouter(ctx context.Context, router peer.ID) {
 	n.mu.Unlock()
 
 	go func() {
-		readmitted := false
+		released := false
 		defer func() {
-			n.mu.Lock()
-			delete(n.redialing, router)
-			n.mu.Unlock()
-			// A drop between the handshake and the line above found this
-			// redial still running and started none. Checked only now that
-			// a new drop starts its own redial, so neither is lost. A node
-			// that is stopping closes its connections and redials nothing.
-			if readmitted && ctx.Err() == nil && !n.isAuthenticatedAndConnected(router) {
-				logger.Warnf("[AuthN] Router %s dropped again as it re-admitted this node; redialing", router)
-				n.redialRouter(ctx, router)
+			if !released {
+				n.mu.Lock()
+				delete(n.redialing, router)
+				n.mu.Unlock()
 			}
 		}()
 		biscuitBytes, err := n.loadIdentityForAuth()
@@ -1161,8 +1155,14 @@ func (n *AgentMeshNode) redialRouter(ctx context.Context, router peer.ID) {
 				logger.Infof("[AuthN] Router %s re-admitted this node on redial %d", router, attempt)
 				// A router that restarted lost this node's records.
 				n.triggerReprovide()
-				readmitted = true
-				return
+				if n.releaseRedialIfUp(router) {
+					released = true
+					return
+				}
+				// A drop since the handshake found this redial's mark and
+				// left the session to it.
+				logger.Warnf("[AuthN] Router %s dropped again as it re-admitted this node; redialing", router)
+				continue
 			}
 			if errors.Is(err, ErrFatalAuth) {
 				logger.Warnf("[AuthN] Router %s refused this node's credential on redial: %v", router, err)
@@ -1179,6 +1179,22 @@ func (n *AgentMeshNode) redialRouter(ctx context.Context, router peer.ID) {
 		n.detach(router)
 		n.shun(router, n.config.RouterShunDuration)
 	}()
+}
+
+// releaseRedialIfUp ends a redial of router that has just re-admitted this
+// node: it clears the redial's in-flight mark only while the session is
+// still up, and reports whether it did. It holds n.mu, as the disconnect
+// handler does to clear the session, so a drop either came first and is
+// seen here, and the redial goes on, or comes after, finds no mark and
+// starts a redial of its own.
+func (n *AgentMeshNode) releaseRedialIfUp(router peer.ID) bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if !n.authenticatedRouters[router] || n.Host.Network().Connectedness(router) != network.Connected {
+		return false
+	}
+	delete(n.redialing, router)
+	return true
 }
 
 func (n *AgentMeshNode) loadIdentityForAuth() ([]byte, error) {
