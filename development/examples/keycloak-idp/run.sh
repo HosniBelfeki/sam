@@ -20,6 +20,8 @@
 #   ./run.sh down   stop everything and delete the generated tokens
 
 set -euo pipefail
+# The components run as a non-root user and read the files written below.
+umask 022
 # Git Bash on Windows rewrites arguments that look like paths; the container
 # paths below are meant literally.
 export MSYS_NO_PATHCONV=1
@@ -134,22 +136,28 @@ call_calc() {
 
 echo "== Generating test-only tokens in ${RUN_DIR}/"
 mkdir -p "${RUN_DIR}"
-chmod 755 "${RUN_DIR}"
 random_token >"${RUN_DIR}/admin.token"
 printf 'Authorization: Bearer %s\n' "$(cat "${RUN_DIR}/admin.token")" >"${RUN_DIR}/admin.header"
 for name in provider-api gateway-api member-api; do
   random_token >"${RUN_DIR}/${name}.token"
 done
 printf 'X-Mesh-Authentication: Bearer %s\n' "$(cat "${RUN_DIR}/gateway-api.token")" >"${RUN_DIR}/gateway-own.header"
-# The components run as a non-root user and read these files.
-chmod 644 "${RUN_DIR}"/*
 
 echo "== Starting Keycloak, the control plane and the calc MCP server"
 "${COMPOSE[@]}" up -d --build keycloak control-plane calc
+control_plane_ready=false
 for _ in $(seq 1 60); do
-  [[ "$(http -o /dev/null -w '%{http_code}' http://control-plane:8080/info || true)" == 200 ]] && break
+  if [[ "$(http -o /dev/null -w '%{http_code}' http://control-plane:8080/info || true)" == 200 ]]; then
+    control_plane_ready=true
+    break
+  fi
   sleep 2
 done
+if [[ "${control_plane_ready}" == false ]]; then
+  echo "the control plane did not answer /info within 120s" >&2
+  "${COMPOSE[@]}" logs --tail 20 control-plane >&2
+  exit 1
+fi
 
 echo "== Loading the mesh policy (calc-user bound to group:devs)"
 expect "load policy.json" 200 "$(admin POST /policies -H 'Content-Type: application/json' \
@@ -159,7 +167,6 @@ echo "== Starting the router, the calc provider and the shared node"
 mint mesh:role:router router
 mint mesh:role:node provider
 mint mesh:role:node gateway
-chmod 644 "${RUN_DIR}"/*
 "${COMPOSE[@]}" up -d router provider gateway
 wait_log provider 'Registered and announced SERVICE_TYPE_MCP/calc'
 wait_log gateway 'Agent Mesh Node Online'
@@ -171,7 +178,6 @@ id_token alice agentmesh mesh
 id_token bob agentmesh mesh
 id_token alice other-app mesh
 id_token alice agentmesh elsewhere
-chmod 644 "${RUN_DIR}"/*
 
 echo
 echo "== Enrollment of a node with the user's own ID token"
@@ -193,7 +199,6 @@ echo "== Moving calc-user from group:devs to group:ops"
 id_token alice agentmesh mesh
 issued_at=$(date +%s)
 cp "${RUN_DIR}/alice.agentmesh.mesh.header" "${RUN_DIR}/alice-before.header"
-chmod 644 "${RUN_DIR}"/*
 expect "alice, new token, before the change" 200 "$(call_calc alice-before.header)"
 expect "load policy-calc-to-ops.json" 200 "$(admin POST /policies -H 'Content-Type: application/json' \
   --data-binary @/example/policy-calc-to-ops.json -o /dev/null -w '%{http_code}')"
@@ -201,14 +206,15 @@ expect "load policy-calc-to-ops.json" 200 "$(admin POST /policies -H 'Content-Ty
 sleep 15
 id_token alice agentmesh mesh
 id_token bob agentmesh mesh
-chmod 644 "${RUN_DIR}"/*
 expect "bob, new token (grant added)" 200 "$(call_calc bob.agentmesh.mesh.header)"
 expect "alice, new token (grant removed)" 403 "$(call_calc alice.agentmesh.mesh.header)"
 expect "alice, token exchanged before the change, not yet expired" 200 "$(call_calc alice-before.header)"
 
 wait_for=$((issued_at + 65 - $(date +%s)))
-echo "   waiting ${wait_for}s for that token to pass its exp (60s lifetime in this realm)"
-sleep "$((wait_for > 0 ? wait_for : 0))"
+if ((wait_for > 0)); then
+  echo "   waiting ${wait_for}s for that token to pass its exp (60s lifetime in this realm)"
+  sleep "${wait_for}"
+fi
 expect "alice, the same token after its exp" 403 "$(call_calc alice-before.header)"
 
 echo
