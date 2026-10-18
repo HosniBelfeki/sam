@@ -1039,6 +1039,7 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request) {
 	// mesh:role:node — a mesh that wants open enrollment says so by binding it
 	// to mesh:system:authenticated, instead of getting it by omission.
 	if !resolvedMap[req.RequestedRole] {
+		logger.Warnw("Rejected enrollment for a role not bound to the identity", "peer_id", canonical, "requested_role", req.RequestedRole, "identity", oidcIdentityKey(claims), "resolved_roles", resolvedRoles)
 		http.Error(w, fmt.Sprintf("requested role %q is not bound to this identity; bind it in mesh policy (to mesh:system:authenticated to open enrollment to every authenticated identity)", req.RequestedRole), http.StatusForbidden)
 		return
 	}
