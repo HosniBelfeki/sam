@@ -1,7 +1,7 @@
 {
   "realm": "mesh",
   "enabled": true,
-  "accessTokenLifespan": 60,
+  "accessTokenLifespan": 120,
   "groups": [{ "name": "devs" }, { "name": "ops" }],
   "clients": [
     {
