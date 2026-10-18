@@ -210,9 +210,9 @@ expect "bob, new token (grant added)" 200 "$(call_calc bob.agentmesh.mesh.header
 expect "alice, new token (grant removed)" 403 "$(call_calc alice.agentmesh.mesh.header)"
 expect "alice, token exchanged before the change, not yet expired" 200 "$(call_calc alice-before.header)"
 
-wait_for=$((issued_at + 65 - $(date +%s)))
+wait_for=$((issued_at + 125 - $(date +%s)))
 if ((wait_for > 0)); then
-  echo "   waiting ${wait_for}s for that token to pass its exp (60s lifetime in this realm)"
+  echo "   waiting ${wait_for}s for that token to pass its exp (120s lifetime in this realm)"
   sleep "${wait_for}"
 fi
 expect "alice, the same token after its exp" 403 "$(call_calc alice-before.header)"

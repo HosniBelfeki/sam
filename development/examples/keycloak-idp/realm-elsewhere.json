@@ -1,7 +1,7 @@
 {
   "realm": "elsewhere",
   "enabled": true,
-  "accessTokenLifespan": 60,
+  "accessTokenLifespan": 120,
   "clients": [
     {
       "clientId": "agentmesh",
