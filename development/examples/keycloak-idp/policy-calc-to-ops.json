@@ -1,0 +1,10 @@
+{
+  "roles": [
+    { "name": "mesh:role:node", "allowed_targets": ["*"], "allowed_publish": ["mcp://*"] },
+    { "name": "calc-user", "allowed_services": ["mcp://calc"], "allowed_targets": ["*"] }
+  ],
+  "bindings": [
+    { "role": "mesh:role:node", "members": ["group:devs"] },
+    { "role": "calc-user", "members": ["group:ops"] }
+  ]
+}
