@@ -44,8 +44,12 @@ func TestRegisterLogsARoleNotBoundToTheIdentity(t *testing.T) {
 	issuer, mintToken := startCustomMockOIDC(t)
 	srv, store, baseURL := setupTestServer(t, issuer)
 	t.Cleanup(func() {
-		_ = srv.Close()
-		_ = store.Close()
+		if err := srv.Close(); err != nil {
+			t.Errorf("closing the server: %v", err)
+		}
+		if err := store.Close(); err != nil {
+			t.Errorf("closing the store: %v", err)
+		}
 	})
 
 	// Only group admins may enroll a node; the caller is in no group.
@@ -85,8 +89,12 @@ func TestRegisterLogsARoleNotBoundToTheIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("POST /register: %v", err)
 	}
-	_, _ = io.ReadAll(resp.Body)
-	_ = resp.Body.Close()
+	if _, err := io.ReadAll(resp.Body); err != nil {
+		t.Fatalf("reading the /register response: %v", err)
+	}
+	if err := resp.Body.Close(); err != nil {
+		t.Fatalf("closing the /register response: %v", err)
+	}
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusForbidden)
 	}
