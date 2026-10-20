@@ -93,7 +93,9 @@ replica count.
    and asks only the routers it holds. It connects to another router only
    to reach a peer behind that router.
 6. Refreshes its own credential before it expires, like a node, at the
-   pass that finds less than a fifth of its lifetime left.
+   pass that finds less than 4.8 hours left. The threshold is a fifth of
+   the default lifetime and does not follow the control plane's
+   `--biscuit-ttl`.
 7. Every 5 seconds, compares the members it holds, the peers that passed
    the handshake, with `--high-watermark`. At the mark it picks members at
    random, as many as take it back to `--low-watermark`, and sends each a
