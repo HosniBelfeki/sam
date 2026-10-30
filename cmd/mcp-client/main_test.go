@@ -142,6 +142,9 @@ func TestIsTerminalNonTTY(t *testing.T) {
 }
 
 func TestMCPClientCLIGetMeshInfoPrettyAndPiped(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	compact := `{"peer_id":"12D3KooWNode1","connected_peers":["12D3KooWRouter"],"attached_routers":["12D3KooWRouter"],"router_peer_id":"12D3KooWRouter","local_api_socket":"/tmp/node1.sock"}`
 
 	srv := mcp.NewServer(&mcp.Implementation{Name: "test-node", Version: "0.0.1"}, nil)
